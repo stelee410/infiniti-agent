@@ -1,0 +1,138 @@
+import { existsSync } from 'fs'
+import { mkdir, readFile, writeFile, chmod } from 'fs/promises'
+import { constants } from 'fs'
+import { INFINITI_AGENT_DIR, CONFIG_PATH } from '../paths.js'
+import type { InfinitiConfig, McpServerConfig } from './types.js'
+import { isLlmProvider } from './types.js'
+import { PROVIDER_DEFAULTS } from './defaults.js'
+
+export class ConfigError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'ConfigError'
+  }
+}
+
+export async function ensureInfinitiDir(): Promise<void> {
+  await mkdir(INFINITI_AGENT_DIR, { recursive: true, mode: 0o700 })
+}
+
+export function configExistsSync(): boolean {
+  return existsSync(CONFIG_PATH)
+}
+
+export async function loadConfig(): Promise<InfinitiConfig> {
+  let raw: string
+  try {
+    raw = await readFile(CONFIG_PATH, 'utf8')
+  } catch (e: unknown) {
+    const err = e as NodeJS.ErrnoException
+    if (err.code === 'ENOENT') {
+      throw new ConfigError(
+        '尚未配置。请运行: infiniti-agent init',
+      )
+    }
+    throw e
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    throw new ConfigError('config.json 不是合法 JSON')
+  }
+  if (!parsed || typeof parsed !== 'object') {
+    throw new ConfigError('config.json 格式无效')
+  }
+  const o = parsed as Record<string, unknown>
+  if (o.version !== 1) {
+    throw new ConfigError('不支持的 config version，请使用 version: 1')
+  }
+  const llm = o.llm as Record<string, unknown> | undefined
+  if (!llm || typeof llm !== 'object') {
+    throw new ConfigError('缺少 llm 配置块')
+  }
+  const provider = llm.provider
+  const baseUrl = llm.baseUrl
+  const model = llm.model
+  const apiKey = llm.apiKey
+  if (typeof provider !== 'string' || !isLlmProvider(provider)) {
+    throw new ConfigError('llm.provider 必须是 anthropic | openai | gemini')
+  }
+  if (typeof baseUrl !== 'string' || !baseUrl.trim()) {
+    throw new ConfigError('llm.baseUrl 无效')
+  }
+  if (typeof model !== 'string' || !model.trim()) {
+    throw new ConfigError('llm.model 无效')
+  }
+  if (typeof apiKey !== 'string' || !apiKey.trim()) {
+    throw new ConfigError('llm.apiKey 无效')
+  }
+
+  const skills = o.skills as Record<string, unknown> | undefined
+  const mcp = o.mcp as Record<string, unknown> | undefined
+
+  return {
+    version: 1,
+    llm: {
+      provider,
+      baseUrl: baseUrl.trim(),
+      model: model.trim(),
+      apiKey: apiKey.trim(),
+    },
+    skills:
+      skills && typeof skills === 'object'
+        ? {
+            directories: Array.isArray(skills.directories)
+              ? skills.directories.filter((x): x is string => typeof x === 'string')
+              : undefined,
+          }
+        : undefined,
+    mcp:
+      mcp && typeof mcp === 'object' && mcp.servers && typeof mcp.servers === 'object'
+        ? {
+            servers: mcp.servers as Record<string, McpServerConfig>,
+          }
+        : undefined,
+  }
+}
+
+export async function saveConfig(partial: {
+  provider: InfinitiConfig['llm']['provider']
+  baseUrl: string
+  model: string
+  apiKey: string
+}): Promise<void> {
+  await ensureInfinitiDir()
+  const defaults = PROVIDER_DEFAULTS[partial.provider]
+  let existing: InfinitiConfig | null = null
+  try {
+    existing = await loadConfig()
+  } catch {
+    existing = null
+  }
+  const cfg: InfinitiConfig = {
+    version: 1,
+    llm: {
+      provider: partial.provider,
+      baseUrl: partial.baseUrl.trim() || defaults.baseUrl,
+      model: partial.model.trim() || defaults.model,
+      apiKey: partial.apiKey.trim(),
+    },
+    skills: existing?.skills ?? {
+      directories: ['~/.infiniti-agent/skills'],
+    },
+    mcp: existing?.mcp ?? {
+      servers: {},
+    },
+  }
+  await writeFile(
+    CONFIG_PATH,
+    `${JSON.stringify(cfg, null, 2)}\n`,
+    'utf8',
+  )
+  try {
+    await chmod(CONFIG_PATH, constants.S_IRUSR | constants.S_IWUSR)
+  } catch {
+    /* Windows 等环境可能不支持 chmod */
+  }
+}
