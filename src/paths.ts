@@ -6,6 +6,7 @@ export const CONFIG_PATH = join(INFINITI_AGENT_DIR, 'config.json')
 export const MEMORY_PATH = join(INFINITI_AGENT_DIR, 'memory.md')
 export const SKILLS_DIR = join(INFINITI_AGENT_DIR, 'skills')
 export const SESSION_PATH = join(INFINITI_AGENT_DIR, 'session.json')
+export const ERROR_LOG_PATH = join(INFINITI_AGENT_DIR, 'error.log')
 
 export function expandUserPath(p: string): string {
   if (p.startsWith('~/') || p === '~') {

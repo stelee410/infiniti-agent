@@ -14,6 +14,7 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/cli.tsx",
+    "dev:cli": "tsx src/cli.tsx --cli",
     "start": "node dist/cli.js"
   },
   "engines": {

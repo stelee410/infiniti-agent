@@ -10,6 +10,7 @@ import { McpManager } from './mcp/manager.js'
 import { installSkillFromGit, installSkillFromPath } from './skills/install.js'
 import { loadSkillsFromDirs } from './skills/loader.js'
 import { SKILLS_DIR, expandUserPath } from './paths.js'
+import { runCliPrompt } from './runCliPrompt.js'
 
 async function runChatTui(): Promise<void> {
   if (!configExistsSync()) {
@@ -37,14 +38,38 @@ async function runChatTui(): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  if (process.argv.slice(2).length === 0) {
+  const argv = process.argv.slice(2)
+  const cliIdx = argv.indexOf('--cli')
+  if (cliIdx !== -1) {
+    const prompt = argv.slice(cliIdx + 1).join(' ').trim()
+    if (!prompt) {
+      console.error('用法: infiniti-agent --cli <prompt>（多词可不加引号，或整段用引号包裹）')
+      process.exit(2)
+    }
+    if (!configExistsSync()) {
+      console.error('尚未配置。请先运行: infiniti-agent init')
+      process.exit(2)
+    }
+    try {
+      const cfg = await loadConfig()
+      await runCliPrompt(cfg, prompt)
+    } catch (e) {
+      console.error((e as Error).message)
+      process.exit(2)
+    }
+    return
+  }
+
+  if (argv.length === 0) {
     process.argv.push('chat')
   }
 
   const program = new Command()
   program
     .name('infiniti-agent')
-    .description('LinkYun Infiniti Agent — React + Ink TUI')
+    .description(
+      'LinkYun Infiniti Agent — React + Ink TUI。非交互一轮：infiniti-agent --cli <prompt>',
+    )
     .version('0.0.1')
 
   program
