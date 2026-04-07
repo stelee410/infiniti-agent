@@ -4,11 +4,13 @@
 
 ## 安装
 
+npm 上的**包名**为 `linkyun-infiniti-agent`（避免与保留/冲突短名 `infiniti-agent` 导致发布 E404）；安装后**命令行仍为** `infiniti-agent`。
+
 ```bash
-npm install -g infiniti-agent
+npm install -g linkyun-infiniti-agent
 ```
 
-安装后可用命令：`infiniti-agent`（与包内 `bin` 同名）。
+安装后可用命令：`infiniti-agent`（由 `package.json` 的 `bin` 字段注册）。
 
 ## 首次配置
 
@@ -51,11 +53,20 @@ npm run dev -- --cli 你好
 ```bash
 npm run build
 npm publish --dry-run   # 检查包内容
-npm login
-npm publish             # 首次会创建包；之后升版本号再发
+npm login               # 或确认 token 含「发布」权限，非只读
+npm publish
+# 若账号开启 2FA：npm publish --otp=xxxxxx
 ```
 
-全局安装：`npm install -g infiniti-agent`，需已配置 npm 账号且包名未被占用。
+### 若出现 `E404` / `PUT ... Not found`
+
+npm 常把**无发布权限、Token 只读、未登录**误报成 404。请依次检查：
+
+1. `npm whoami` 能显示用户名；`npm config get registry` 为 `https://registry.npmjs.org/`（注意末尾 `/`）。
+2. 在 [npm Access Tokens](https://www.npmjs.com/settings/~/tokens) 使用**具备 Publish 权限**的 Classic Token，或重新 `npm login`。
+3. 开启 2FA 时发布必须带 `--otp`。
+
+包名使用 `linkyun-infiniti-agent` 可降低与 npm 策略下短名冲突的概率；全局命令仍为 `infiniti-agent`。
 
 ## 协议
 
