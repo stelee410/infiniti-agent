@@ -63,6 +63,27 @@ const COMMAND_ITEMS: SlashItem[] = [
     desc: '显示斜杠命令说明',
     insert: '/help ',
   },
+  {
+    id: '/undo',
+    kind: 'command',
+    label: '/undo',
+    desc: '撤销最近一次 write_file/str_replace（内存栈）',
+    insert: '/undo ',
+  },
+  {
+    id: '/approve-all',
+    kind: 'command',
+    label: '/approve-all',
+    desc: '切换：是否自动批准敏感工具（改文件/bash/HTTP）',
+    insert: '/approve-all ',
+  },
+  {
+    id: '/compact',
+    kind: 'command',
+    label: '/compact',
+    desc: '压缩较早会话为摘要（保留尾部消息与工具链）',
+    insert: '/compact ',
+  },
 ]
 
 /** 合并斜杠命令、内置工具、MCP 工具（供 / 补全） */

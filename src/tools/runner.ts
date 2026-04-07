@@ -1,12 +1,22 @@
 import { spawn } from 'child_process'
 import { appendMemoryEntry } from '../memory/store.js'
 import type { BuiltinToolName } from './definitions.js'
+import type { EditHistory } from '../session/editHistory.js'
+import {
+  toolGlobFiles,
+  toolGrepFiles,
+  toolListDirectory,
+  toolReadFile,
+  toolStrReplace,
+  toolWriteFile,
+} from './repoTools.js'
 
 const MAX_HTTP_BODY_READ = 512 * 1024
 const MAX_BASH_OUT = 512 * 1024
 
 export type ToolRunContext = {
   sessionCwd: string
+  editHistory?: EditHistory
 }
 
 function truncate(s: string, max: number): string {
@@ -223,6 +233,29 @@ export async function runBuiltinTool(
       body,
     })
     return JSON.stringify({ ok: true, message: '已写入长期记忆文件' })
+  }
+
+  if (name === 'read_file') {
+    return toolReadFile(ctx.sessionCwd, args)
+  }
+  if (name === 'list_directory') {
+    return toolListDirectory(ctx.sessionCwd, args)
+  }
+  if (name === 'glob_files') {
+    return toolGlobFiles(ctx.sessionCwd, args)
+  }
+  if (name === 'grep_files') {
+    return toolGrepFiles(ctx.sessionCwd, args)
+  }
+  if (name === 'write_file') {
+    return toolWriteFile(ctx.sessionCwd, args, {
+      editHistory: ctx.editHistory,
+    })
+  }
+  if (name === 'str_replace') {
+    return toolStrReplace(ctx.sessionCwd, args, {
+      editHistory: ctx.editHistory,
+    })
   }
 
   return JSON.stringify({ ok: false, error: '未知内置工具' })

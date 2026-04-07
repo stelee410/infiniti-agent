@@ -2,7 +2,11 @@ import { existsSync } from 'fs'
 import { mkdir, readFile, writeFile, chmod } from 'fs/promises'
 import { constants } from 'fs'
 import { INFINITI_AGENT_DIR, CONFIG_PATH } from '../paths.js'
-import type { InfinitiConfig, McpServerConfig } from './types.js'
+import type {
+  CompactionConfig,
+  InfinitiConfig,
+  McpServerConfig,
+} from './types.js'
 import { isLlmProvider } from './types.js'
 import { PROVIDER_DEFAULTS } from './defaults.js'
 
@@ -70,6 +74,7 @@ export async function loadConfig(): Promise<InfinitiConfig> {
 
   const skills = o.skills as Record<string, unknown> | undefined
   const mcp = o.mcp as Record<string, unknown> | undefined
+  const compaction = parseCompactionConfig(o.compaction)
 
   return {
     version: 1,
@@ -93,7 +98,29 @@ export async function loadConfig(): Promise<InfinitiConfig> {
             servers: mcp.servers as Record<string, McpServerConfig>,
           }
         : undefined,
+    ...(compaction ? { compaction } : {}),
   }
+}
+
+function parseCompactionConfig(raw: unknown): CompactionConfig | undefined {
+  if (!raw || typeof raw !== 'object') {
+    return undefined
+  }
+  const c = raw as Record<string, unknown>
+  const out: CompactionConfig = {}
+  if (typeof c.autoThresholdTokens === 'number' && c.autoThresholdTokens >= 0) {
+    out.autoThresholdTokens = Math.floor(c.autoThresholdTokens)
+  }
+  if (typeof c.minTailMessages === 'number' && c.minTailMessages >= 1) {
+    out.minTailMessages = Math.floor(c.minTailMessages)
+  }
+  if (typeof c.maxToolSnippetChars === 'number' && c.maxToolSnippetChars >= 200) {
+    out.maxToolSnippetChars = Math.floor(c.maxToolSnippetChars)
+  }
+  if (typeof c.preCompactHook === 'string' && c.preCompactHook.trim()) {
+    out.preCompactHook = c.preCompactHook.trim()
+  }
+  return Object.keys(out).length ? out : undefined
 }
 
 export async function saveConfig(partial: {
@@ -124,6 +151,7 @@ export async function saveConfig(partial: {
     mcp: existing?.mcp ?? {
       servers: {},
     },
+    ...(existing?.compaction ? { compaction: existing.compaction } : {}),
   }
   await writeFile(
     CONFIG_PATH,

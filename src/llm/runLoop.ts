@@ -8,6 +8,11 @@ import { runBuiltinTool } from '../tools/runner.js'
 import type { AgentToolSpec } from '../mcp/manager.js'
 import type { PersistedMessage } from './persisted.js'
 import type { McpManager } from '../mcp/manager.js'
+import type { EditHistory } from '../session/editHistory.js'
+import {
+  CONFIRMABLE_BUILTIN_TOOLS,
+  formatToolConfirmDetail,
+} from './formatToolConfirm.js'
 
 const MAX_TOOL_STEPS = 48
 
@@ -47,6 +52,10 @@ export type RunLoopOptions = {
   cwd: string
   mcp: McpManager
   stream?: StreamCallbacks
+  /** 对 write_file / str_replace / bash / http_request 等在执行前请求用户确认（dry_run 跳过） */
+  confirmTool?: (info: { name: string; detail: string }) => Promise<boolean>
+  /** 成功写入后压栈，供 TUI /undo 恢复 */
+  editHistory?: EditHistory
 }
 
 export async function runToolLoop(opts: RunLoopOptions): Promise<{
@@ -64,9 +73,31 @@ export async function runToolLoop(opts: RunLoopOptions): Promise<{
   const builtin = new Set<string>(BUILTIN_TOOLS.map((t) => t.name))
 
   const dispatch = async (name: string, argsJson: string): Promise<string> => {
+    let args: Record<string, unknown>
+    try {
+      args = JSON.parse(argsJson) as Record<string, unknown>
+    } catch {
+      return JSON.stringify({ ok: false, error: '工具参数不是合法 JSON' })
+    }
+
+    const skipConfirm = args.dry_run === true
+    if (
+      builtin.has(name) &&
+      CONFIRMABLE_BUILTIN_TOOLS.has(name) &&
+      !skipConfirm &&
+      opts.confirmTool
+    ) {
+      const detail = await formatToolConfirmDetail(name, args, opts.cwd)
+      const approved = await opts.confirmTool({ name, detail })
+      if (!approved) {
+        return JSON.stringify({ ok: false, error: '用户拒绝了工具执行' })
+      }
+    }
+
     if (builtin.has(name)) {
       return runBuiltinTool(name as BuiltinToolName, argsJson, {
         sessionCwd: opts.cwd,
+        editHistory: opts.editHistory,
       })
     }
     return opts.mcp.call(name, argsJson)
