@@ -53,13 +53,19 @@ export function ChatApp({ config: initialConfig, mcp }: Props): React.ReactEleme
   const editHistoryRef = useRef(new EditHistory())
   const [slashIndex, setSlashIndex] = useState(0)
   const [approveAllTools, setApproveAllTools] = useState(false)
+  /** 单个工具的会话级白名单（按 A 加入） */
+  const [toolWhitelist, setToolWhitelist] = useState<Set<string>>(new Set())
   const [toolGate, setToolGate] = useState<null | {
     name: string
     detail: string
-    resolve: (ok: boolean) => void
+    resolve: (answer: 'yes' | 'no' | 'always') => void
   }>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [compacting, setCompacting] = useState(false)
+  /** 比泛化的「请求中」更细：等首包 / 执行工具 / SSE 中 */
+  const [busySubtext, setBusySubtext] = useState<string | null>(null)
+  const [busyDiag, setBusyDiag] = useState({ elapsed: 0, stall: 0 })
+  const lastStreamDeltaAtRef = useRef<number | null>(null)
 
   const slashItems = useMemo(
     () => buildSlashItems(mcp),
@@ -80,6 +86,23 @@ export function ChatApp({ config: initialConfig, mcp }: Props): React.ReactEleme
   useEffect(() => {
     setSlashIndex(0)
   }, [input])
+
+  useEffect(() => {
+    if (!busy) {
+      setBusyDiag({ elapsed: 0, stall: 0 })
+      return
+    }
+    const start = Date.now()
+    lastStreamDeltaAtRef.current = null
+    setBusyDiag({ elapsed: 0, stall: 0 })
+    const id = setInterval(() => {
+      const elapsed = Math.floor((Date.now() - start) / 1000)
+      const last = lastStreamDeltaAtRef.current
+      const stall = last ? Math.floor((Date.now() - last) / 1000) : 0
+      setBusyDiag({ elapsed, stall })
+    }, 1000)
+    return () => clearInterval(id)
+  }, [busy])
 
   useInput(
     (_ch, key) => {
@@ -134,18 +157,23 @@ export function ChatApp({ config: initialConfig, mcp }: Props): React.ReactEleme
 
   const confirmTool = useCallback(
     async (info: { name: string; detail: string }) => {
-      if (approveAllTools) {
+      if (approveAllTools || toolWhitelist.has(info.name)) {
         return true
       }
-      return new Promise<boolean>((resolve) => {
+      const answer = await new Promise<'yes' | 'no' | 'always'>((resolve) => {
         setToolGate({
           name: info.name,
           detail: info.detail,
           resolve,
         })
       })
+      if (answer === 'always') {
+        setToolWhitelist((prev) => new Set(prev).add(info.name))
+        return true
+      }
+      return answer === 'yes'
     },
-    [approveAllTools],
+    [approveAllTools, toolWhitelist],
   )
 
   useEffect(() => {
@@ -253,7 +281,7 @@ export function ChatApp({ config: initialConfig, mcp }: Props): React.ReactEleme
       }
       if (raw === '/help') {
         setError(
-          '输入 / 可补全：斜杠命令与全部工具（↑↓ Tab）。命令: /exit /clear /reload /memory /undo /approve-all /compact — 改文件与 bash/HTTP 默认需确认（可 /approve-all）。/compact 压缩较早历史；自动压缩见 config compaction.autoThresholdTokens。其余发给模型（SSE）',
+          '输入 / 可补全：斜杠命令与全部工具（↑↓ Tab）。命令: /exit /clear /reload /memory /undo /compact /permission [on|off] — 改文件/bash/HTTP 默认需确认（Y 允许 · A 本次会话始终允许该工具 · N 拒绝）；/permission on 放行所有，/permission off 恢复确认并清空白名单，/permission 查看当前状态。/compact 压缩较早历史。卡死排查：INFINITI_AGENT_DEBUG=1。',
         )
         setInput('')
         return
@@ -296,17 +324,30 @@ export function ChatApp({ config: initialConfig, mcp }: Props): React.ReactEleme
         setInput('')
         return
       }
-      if (raw === '/approve-all') {
-        setApproveAllTools((v) => {
-          const next = !v
-          setNotice(
-            next
-              ? '已开启：本会话内敏感工具将自动批准'
-              : '已关闭：改文件 / bash / http_request 将逐项确认',
-          )
-          setTimeout(() => setNotice(null), 5000)
-          return next
-        })
+      if (raw === '/approve-all' || raw === '/permission on') {
+        setApproveAllTools(true)
+        setNotice('已开启：本会话内所有敏感工具将自动批准')
+        setTimeout(() => setNotice(null), 5000)
+        setInput('')
+        return
+      }
+      if (raw === '/permission off') {
+        setApproveAllTools(false)
+        setToolWhitelist(new Set())
+        setNotice('已关闭：改文件 / bash / http_request 将逐项确认（工具白名单已清空）')
+        setTimeout(() => setNotice(null), 5000)
+        setInput('')
+        return
+      }
+      if (raw === '/permission') {
+        const wl = [...toolWhitelist]
+        const status = approveAllTools
+          ? '全部放行（/permission off 关闭）'
+          : wl.length
+            ? `逐项确认，已放行: ${wl.join(', ')}`
+            : '逐项确认（无白名单）'
+        setNotice(`权限模式: ${status}`)
+        setTimeout(() => setNotice(null), 8000)
         setInput('')
         return
       }
@@ -337,6 +378,7 @@ export function ChatApp({ config: initialConfig, mcp }: Props): React.ReactEleme
 
       setBusy(true)
       setError(null)
+      setBusySubtext('等待模型响应（首包/跨境 API 可能较慢）…')
       resetStream()
       const userLine = raw
 
@@ -387,10 +429,26 @@ export function ChatApp({ config: initialConfig, mcp }: Props): React.ReactEleme
           mcp,
           confirmTool,
           editHistory: editHistoryRef.current,
+          onToolDispatch: (name) => {
+            setBusySubtext(`执行工具：${name}…`)
+          },
           stream: {
-            onStreamReset: resetStream,
+            onStreamReset: () => {
+              resetStream()
+              lastStreamDeltaAtRef.current = null
+              setBusySubtext('等待模型响应（多轮工具之间会重新请求）…')
+            },
             onTextDelta: (_delta, full) => {
+              lastStreamDeltaAtRef.current = Date.now()
+              setBusySubtext(
+                'SSE 流式中（久无新字时：可能在生成 tool 调用或网络慢）…',
+              )
               flushStream(full)
+            },
+            onToolUseStart: (toolName) => {
+              setBusySubtext(
+                `模型正在生成 ${toolName} 调用参数（SSE 仍在传输中）…`,
+              )
             },
           },
         })
@@ -399,6 +457,7 @@ export function ChatApp({ config: initialConfig, mcp }: Props): React.ReactEleme
       } catch (e: unknown) {
         setError(formatChatError(e))
       } finally {
+        setBusySubtext(null)
         resetStream()
         setBusy(false)
       }
@@ -420,9 +479,13 @@ export function ChatApp({ config: initialConfig, mcp }: Props): React.ReactEleme
 
   const visibleCount = Math.max(4, rows - 14)
   const visible = messages.slice(-visibleCount)
-  const meta = `${config.llm.provider} · ${config.llm.model}${
-    approveAllTools ? ' · 自动批准' : ''
-  }`
+  const wlNames = [...toolWhitelist]
+  const permLabel = approveAllTools
+    ? ' · 全部放行'
+    : wlNames.length
+      ? ` · 放行: ${wlNames.join(',')}`
+      : ''
+  const meta = `${config.llm.provider} · ${config.llm.model}${permLabel}`
 
   return (
     <Box flexDirection="column" width="100%" paddingX={1}>
@@ -462,19 +525,6 @@ export function ChatApp({ config: initialConfig, mcp }: Props): React.ReactEleme
         <Box marginY={1} borderStyle="round" borderColor="red" paddingX={1}>
           <Text color="red">{error}</Text>
         </Box>
-      ) : null}
-
-      {toolGate ? (
-        <ToolConfirmDialog
-          name={toolGate.name}
-          detail={toolGate.detail}
-          onAnswer={(ok) => {
-            setToolGate((g) => {
-              g?.resolve(ok)
-              return null
-            })
-          }}
-        />
       ) : null}
 
       <Box
@@ -518,9 +568,29 @@ export function ChatApp({ config: initialConfig, mcp }: Props): React.ReactEleme
           <Text color="yellow">
             {compacting
               ? '◆ 正在压缩会话历史（非流式）…'
-              : '◆ 请求中（Anthropic/OpenAI/Gemini 均走流式 SSE）…'}
+              : `◆ ${
+                  busySubtext ??
+                  '请求中（Anthropic/OpenAI/Gemini 均走流式 SSE）…'
+                }${busyDiag.elapsed > 0 ? ` · 已 ${busyDiag.elapsed}s` : ''}${
+                  busyDiag.stall >= 12 && lastStreamDeltaAtRef.current != null
+                    ? ` · ${busyDiag.stall}s 无新字`
+                    : ''
+                }`}
           </Text>
         </Box>
+      ) : null}
+
+      {toolGate ? (
+        <ToolConfirmDialog
+          name={toolGate.name}
+          detail={toolGate.detail}
+          onAnswer={(answer) => {
+            setToolGate((g) => {
+              g?.resolve(answer)
+              return null
+            })
+          }}
+        />
       ) : null}
 
       {slashMenuOpen ? (
@@ -557,16 +627,20 @@ function ToolConfirmDialog({
 }: {
   name: string
   detail: string
-  onAnswer: (ok: boolean) => void
+  onAnswer: (answer: 'yes' | 'no' | 'always') => void
 }): React.ReactElement {
   useInput(
     (input, key) => {
       if (input === 'y' || input === 'Y') {
-        onAnswer(true)
+        onAnswer('yes')
+        return
+      }
+      if (input === 'a' || input === 'A') {
+        onAnswer('always')
         return
       }
       if (input === 'n' || input === 'N' || key.escape) {
-        onAnswer(false)
+        onAnswer('no')
       }
     },
     { isActive: true },
@@ -592,7 +666,7 @@ function ToolConfirmDialog({
       <Text bold color="yellow">
         确认工具 · {name}
       </Text>
-      <Text dimColor>Y 允许 · N / Esc 拒绝</Text>
+      <Text dimColor>Y 允许 · A 本次会话始终允许此工具 · N / Esc 拒绝</Text>
       <Box flexDirection="column" marginTop={1}>
         <Text dimColor wrap="wrap">
           {slice.join('\n')}

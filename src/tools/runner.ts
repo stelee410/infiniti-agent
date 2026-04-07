@@ -14,6 +14,12 @@ import {
 const MAX_HTTP_BODY_READ = 512 * 1024
 const MAX_BASH_OUT = 512 * 1024
 
+/** 与 ref/WebFetchTool 类似：部分站点会拒绝空 UA 或 Node 默认 UA */
+const HTTP_DEFAULT_HEADERS: Record<string, string> = {
+  Accept: 'text/markdown, text/html, application/json, text/plain, */*;q=0.8',
+  'User-Agent': `infiniti-agent/0.1.1 (Node.js ${process.version}; builtin http_request)`,
+}
+
 export type ToolRunContext = {
   sessionCwd: string
   editHistory?: EditHistory
@@ -57,16 +63,30 @@ async function runHttpRequest(args: {
     })
   }
 
+  /** ref/WebFetchTool/utils.ts 主请求 60s；此处默认略放宽以便大页面 */
   const timeoutMs = Math.min(
     120_000,
-    Math.max(1000, args.timeoutMs ?? 30_000),
+    Math.max(1000, args.timeoutMs ?? 60_000),
   )
   const ac = new AbortController()
-  const t = setTimeout(() => ac.abort(), timeoutMs)
+  const deadline = Date.now() + timeoutMs
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const armTimer = (): void => {
+    if (timer) {
+      clearTimeout(timer)
+    }
+    const ms = Math.max(1, deadline - Date.now())
+    timer = setTimeout(() => ac.abort(), ms)
+  }
+  armTimer()
+  const headers: Record<string, string> = {
+    ...HTTP_DEFAULT_HEADERS,
+    ...(args.headers ?? {}),
+  }
   try {
     const res = await fetch(url, {
       method,
-      headers: args.headers,
+      headers,
       body:
         args.body && !['GET', 'HEAD'].includes(method)
           ? args.body
@@ -74,7 +94,13 @@ async function runHttpRequest(args: {
       signal: ac.signal,
     })
     const ct = res.headers.get('content-type') ?? ''
+    // 单一截止时间覆盖「首包 + 读 body」，语义接近 ref 里 axios 的整段 timeout
+    armTimer()
     const buf = await res.arrayBuffer()
+    if (timer) {
+      clearTimeout(timer)
+      timer = undefined
+    }
     const slice = buf.byteLength > MAX_HTTP_BODY_READ
       ? buf.slice(0, MAX_HTTP_BODY_READ)
       : buf
@@ -95,10 +121,15 @@ async function runHttpRequest(args: {
     const err = e as Error
     return JSON.stringify({
       ok: false,
-      error: err.name === 'AbortError' ? '请求超时' : err.message,
+      error:
+        err.name === 'AbortError'
+          ? '请求超时（含连接与读 body，可用 timeoutMs 调整）'
+          : err.message,
     })
   } finally {
-    clearTimeout(t)
+    if (timer) {
+      clearTimeout(timer)
+    }
   }
 }
 

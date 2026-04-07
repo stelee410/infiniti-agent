@@ -13,6 +13,7 @@ import {
   CONFIRMABLE_BUILTIN_TOOLS,
   formatToolConfirmDetail,
 } from './formatToolConfirm.js'
+import { agentDebug } from '../utils/agentDebug.js'
 
 const MAX_TOOL_STEPS = 48
 
@@ -43,6 +44,8 @@ export type StreamCallbacks = {
   onTextDelta: (delta: string, fullText: string) => void
   /** 新一轮 API 请求前清空 UI 缓冲区（含工具轮次之间） */
   onStreamReset?: () => void
+  /** 模型开始生成 tool_use block（还在 SSE 中，尚未结束） */
+  onToolUseStart?: (toolName: string) => void
 }
 
 export type RunLoopOptions = {
@@ -56,11 +59,14 @@ export type RunLoopOptions = {
   confirmTool?: (info: { name: string; detail: string }) => Promise<boolean>
   /** 成功写入后压栈，供 TUI /undo 恢复 */
   editHistory?: EditHistory
+  /** 用户确认通过后、实际执行工具前（便于 TUI 区分「等模型」与「跑工具」） */
+  onToolDispatch?: (name: string) => void
 }
 
 export async function runToolLoop(opts: RunLoopOptions): Promise<{
   messages: PersistedMessage[]
 }> {
+  agentDebug('runToolLoop start', opts.config.llm.provider, opts.config.llm.model)
   const tools: AgentToolSpec[] = [
     ...BUILTIN_TOOLS.map((t) => ({
       name: t.name,
@@ -87,12 +93,16 @@ export async function runToolLoop(opts: RunLoopOptions): Promise<{
       !skipConfirm &&
       opts.confirmTool
     ) {
+      agentDebug('awaiting user confirm for tool', name)
       const detail = await formatToolConfirmDetail(name, args, opts.cwd)
       const approved = await opts.confirmTool({ name, detail })
       if (!approved) {
         return JSON.stringify({ ok: false, error: '用户拒绝了工具执行' })
       }
     }
+
+    agentDebug('run tool', name)
+    opts.onToolDispatch?.(name)
 
     if (builtin.has(name)) {
       return runBuiltinTool(name as BuiltinToolName, argsJson, {
@@ -204,6 +214,7 @@ async function runAnthropic(
   const working: PersistedMessage[] = [...opts.messages]
 
   for (let step = 0; step < MAX_TOOL_STEPS; step++) {
+    agentDebug('anthropic step', step, 'request stream')
     opts.stream?.onStreamReset?.()
     const stream = client.messages.stream({
       model: opts.config.llm.model,
@@ -216,6 +227,12 @@ async function runAnthropic(
       stream.on('text', (delta, snapshot) => {
         opts.stream!.onTextDelta(delta, snapshot)
       })
+      stream.on('contentBlock', (block) => {
+        if (block.type === 'tool_use') {
+          agentDebug('anthropic SSE tool_use block start', block.name)
+          opts.stream!.onToolUseStart?.(block.name)
+        }
+      })
     }
     const final = await withDeadline(
       stream.finalMessage(),
@@ -223,6 +240,13 @@ async function runAnthropic(
       'Anthropic',
     )
     const msg = final as unknown as Anthropic.Messages.Message
+    agentDebug(
+      'anthropic step',
+      step,
+      'finalMessage',
+      'blocks',
+      msg.content.map((b) => b.type).join(','),
+    )
 
     const textParts: string[] = []
     const toolUses: { id: string; name: string; input: Record<string, unknown> }[] =
@@ -334,6 +358,7 @@ async function runOpenAI(
   const working: PersistedMessage[] = [...opts.messages]
 
   for (let step = 0; step < MAX_TOOL_STEPS; step++) {
+    agentDebug('openai step', step, 'request stream')
     opts.stream?.onStreamReset?.()
     const streamResp = await client.chat.completions.create({
       model: opts.config.llm.model,
@@ -394,6 +419,13 @@ async function runOpenAI(
       .sort((a, b) => a[0] - b[0])
       .map(([, v]) => v)
     const fnCalls = sorted.filter((v) => v.id && v.name)
+    agentDebug(
+      'openai step',
+      step,
+      'stream done',
+      'toolCalls',
+      fnCalls.map((c) => c.name).join(',') || '(none)',
+    )
 
     if (!fnCalls.length) {
       working.push({
@@ -524,6 +556,7 @@ async function runGemini(
   const working: PersistedMessage[] = [...opts.messages]
 
   for (let step = 0; step < MAX_TOOL_STEPS; step++) {
+    agentDebug('gemini step', step, 'request stream')
     opts.stream?.onStreamReset?.()
     const streamResult = await model.generateContentStream({
       contents: toGeminiContents(working) as never,
@@ -569,6 +602,13 @@ async function runGemini(
     }
 
     const mergedText = textChunks.join('').trim() || null
+    agentDebug(
+      'gemini step',
+      step,
+      'response',
+      'tools',
+      calls.map((c) => c.name).join(',') || '(none)',
+    )
 
     if (!calls.length) {
       working.push({ role: 'assistant', content: mergedText })

@@ -184,7 +184,7 @@ export const BUILTIN_TOOLS: Array<{
         },
         timeoutMs: {
           type: 'integer',
-          description: '超时毫秒，默认 30000，最大 120000',
+          description: '整段超时毫秒（连接+读 body），默认 60000，最大 120000',
         },
       },
       required: ['method', 'url'],
