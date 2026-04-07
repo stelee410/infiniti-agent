@@ -1,22 +1,32 @@
 {
   "name": "infiniti-agent",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "LinkYun Infiniti Agent — long-running CLI agent (Node.js, React + Ink TUI)",
   "type": "module",
   "files": [
     "dist",
     "SOUL.md",
-    "INFINITI.md"
+    "INFINITI.md",
+    "docs"
   ],
   "bin": {
-    "infiniti-agent": "./dist/cli.js"
+    "infiniti-agent": "dist/cli.js"
   },
   "scripts": {
     "build": "tsc",
+    "prepublishOnly": "npm run build",
     "dev": "tsx src/cli.tsx",
     "dev:cli": "tsx src/cli.tsx --cli",
     "start": "node dist/cli.js"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/stelee410/infiniti-agent.git"
+  },
+  "bugs": {
+    "url": "https://github.com/stelee410/infiniti-agent/issues"
+  },
+  "homepage": "https://github.com/stelee410/infiniti-agent#readme",
   "engines": {
     "node": ">=20"
   },
