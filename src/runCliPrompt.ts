@@ -83,6 +83,9 @@ export async function runCliPrompt(
         onTextDelta: (delta) => {
           process.stdout.write(delta)
         },
+        onThinkingDelta: () => {
+          // CLI 模式下静默忽略 thinking 增量（避免干扰 stdout 管道输出）
+        },
       },
     })
     await saveSession(cwd, out)

@@ -66,6 +66,7 @@ export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions
   const [busySubtext, setBusySubtext] = useState<string | null>(null)
   const [busyDiag, setBusyDiag] = useState({ elapsed: 0, stall: 0 })
   const lastStreamDeltaAtRef = useRef<number | null>(null)
+  const [thinkingText, setThinkingText] = useState('')
 
   const slashItems = useMemo(
     () => buildSlashItems(mcp),
@@ -372,6 +373,7 @@ export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions
       setError(null)
       setBusySubtext('等待模型响应（首包/跨境 API 可能较慢）…')
       resetStream()
+      setThinkingText('')
       const userLine = raw
 
       let baseMessages = messages
@@ -427,6 +429,7 @@ export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions
           stream: {
             onStreamReset: () => {
               resetStream()
+              setThinkingText('')
               lastStreamDeltaAtRef.current = null
               setBusySubtext('等待模型响应（多轮工具之间会重新请求）…')
             },
@@ -441,6 +444,11 @@ export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions
               setBusySubtext(
                 `模型正在生成 ${toolName} 调用参数（SSE 仍在传输中）…`,
               )
+            },
+            onThinkingDelta: (_delta, full) => {
+              lastStreamDeltaAtRef.current = Date.now()
+              setBusySubtext('模型正在深度思考…')
+              setThinkingText(full)
             },
           },
         })
@@ -477,7 +485,11 @@ export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions
     : wlNames.length
       ? ` · 放行: ${wlNames.join(',')}`
       : ''
-  const meta = `${config.llm.provider} · ${config.llm.model}${permLabel}`
+  const thinkLabel =
+    config.llm.provider === 'anthropic' && (config.thinking?.mode ?? 'adaptive') !== 'disabled'
+      ? ` · think:${config.thinking?.mode ?? 'adaptive'}`
+      : ''
+  const meta = `${config.llm.provider} · ${config.llm.model}${thinkLabel}${permLabel}`
 
   return (
     <Box flexDirection="column" width="100%" paddingX={1}>
@@ -531,6 +543,25 @@ export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions
         {visible.map((m, i) => (
           <MessageLine key={`${i}-${m.role}`} m={m} />
         ))}
+        {thinkingText && !streamText ? (
+          <Box
+            flexDirection="column"
+            marginTop={1}
+            borderStyle="single"
+            borderLeft
+            borderLeftColor="yellow"
+            paddingLeft={1}
+          >
+            <Text bold color="yellow">
+              💭 Thinking…
+            </Text>
+            <Text dimColor wrap="wrap">
+              {thinkingText.length > 600
+                ? `…${thinkingText.slice(-600)}`
+                : thinkingText}
+            </Text>
+          </Box>
+        ) : null}
         {streamText ? (
           <Box
             flexDirection="column"
@@ -572,6 +603,13 @@ export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions
         </Box>
       ) : null}
 
+      {slashMenuOpen ? (
+        <SlashCompletePanel
+          items={slashFiltered}
+          selectedIndex={slashIndex}
+        />
+      ) : null}
+
       {toolGate ? (
         <ToolConfirmDialog
           name={toolGate.name}
@@ -582,13 +620,6 @@ export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions
               return null
             })
           }}
-        />
-      ) : null}
-
-      {slashMenuOpen ? (
-        <SlashCompletePanel
-          items={slashFiltered}
-          selectedIndex={slashIndex}
         />
       ) : null}
 

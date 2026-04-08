@@ -11,6 +11,7 @@ import { installSkillFromGit, installSkillFromPath } from './skills/install.js'
 import { loadSkillsFromDirs } from './skills/loader.js'
 import { SKILLS_DIR, expandUserPath } from './paths.js'
 import { runCliPrompt } from './runCliPrompt.js'
+import { readPackageVersion } from './packageRoot.js'
 
 async function runChatTui(opts: { skipPermissions?: boolean } = {}): Promise<void> {
   if (!configExistsSync()) {
@@ -80,7 +81,7 @@ async function main(): Promise<void> {
     .description(
       'LinkYun Infiniti Agent — React + Ink TUI。非交互一轮：infiniti-agent --cli <prompt>。加 --dangerously-skip-permissions 跳过工具确认。',
     )
-    .version('0.0.1')
+    .version(readPackageVersion())
 
   program
     .command('init')

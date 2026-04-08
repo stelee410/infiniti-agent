@@ -13,6 +13,21 @@ export type McpServerConfig = {
  * MCP 示例（可手动编辑，init 会保留已有 mcp/skills 段）：
  * `"mcp": { "servers": { "fs": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"] } } }`
  */
+/**
+ * Extended thinking 模式：
+ * - 'adaptive'  — 模型自行决定思考深度（推荐，Claude 4.6+ 支持）
+ * - 'enabled'   — 固定 budget_tokens 上限
+ * - 'disabled'  — 完全禁用
+ * - undefined   — 等同 'adaptive'（默认值）
+ */
+export type ThinkingMode = 'adaptive' | 'enabled' | 'disabled'
+
+export type ThinkingConfig = {
+  mode?: ThinkingMode
+  /** mode='enabled' 时的思考 token 预算，≥1024 且 < max_tokens；默认 10000 */
+  budgetTokens?: number
+}
+
 export type CompactionConfig = {
   /**
    * 估算 token 达到或超过此值时，在用户发话触发主循环前自动压缩历史（0 或未设置表示关闭）。
@@ -45,6 +60,7 @@ export type InfinitiConfig = {
     servers?: Record<string, McpServerConfig>
   }
   compaction?: CompactionConfig
+  thinking?: ThinkingConfig
 }
 
 export function isLlmProvider(v: string): v is LlmProvider {

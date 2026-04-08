@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import OpenAI from 'openai'
 import { GoogleGenerativeAI } from '@google/generative-ai'
-import type { InfinitiConfig } from '../config/types.js'
+import type { InfinitiConfig, ThinkingConfig } from '../config/types.js'
 import { BUILTIN_TOOLS } from '../tools/definitions.js'
 import type { BuiltinToolName } from '../tools/definitions.js'
 import { runBuiltinTool } from '../tools/runner.js'
@@ -46,6 +46,8 @@ export type StreamCallbacks = {
   onStreamReset?: () => void
   /** 模型开始生成 tool_use block（还在 SSE 中，尚未结束） */
   onToolUseStart?: (toolName: string) => void
+  /** Extended thinking：思考过程增量回调 */
+  onThinkingDelta?: (delta: string, fullThinking: string) => void
 }
 
 export type RunLoopOptions = {
@@ -194,6 +196,21 @@ function toAnthropicMessages(
   return out
 }
 
+function resolveAnthropicThinking(
+  cfg: ThinkingConfig | undefined,
+): Anthropic.Messages.ThinkingConfigParam | undefined {
+  const mode = cfg?.mode ?? 'adaptive'
+  if (mode === 'disabled') return undefined
+  if (mode === 'enabled') {
+    const budget = Math.max(1024, cfg?.budgetTokens ?? 10_000)
+    return { type: 'enabled', budget_tokens: budget }
+  }
+  return { type: 'adaptive' }
+}
+
+const THINKING_MAX_TOKENS = 16_000
+const DEFAULT_MAX_TOKENS = 8192
+
 async function runAnthropic(
   opts: RunLoopOptions,
   tools: AgentToolSpec[],
@@ -211,6 +228,10 @@ async function runAnthropic(
     input_schema: t.parameters as Anthropic.Messages.Tool['input_schema'],
   }))
 
+  const thinking = resolveAnthropicThinking(opts.config.thinking)
+  const maxTokens = thinking ? THINKING_MAX_TOKENS : DEFAULT_MAX_TOKENS
+  agentDebug('anthropic thinking config', thinking?.type ?? 'none', 'max_tokens', maxTokens)
+
   const working: PersistedMessage[] = [...opts.messages]
 
   for (let step = 0; step < MAX_TOOL_STEPS; step++) {
@@ -218,16 +239,17 @@ async function runAnthropic(
     opts.stream?.onStreamReset?.()
     const stream = client.messages.stream({
       model: opts.config.llm.model,
-      max_tokens: 8192,
+      max_tokens: maxTokens,
       system: opts.system,
       messages: toAnthropicMessages(working),
       tools: anthropicTools,
+      ...(thinking && { thinking }),
     })
     if (opts.stream) {
+      let thinkingAcc = ''
       stream.on('text', (delta, snapshot) => {
         opts.stream!.onTextDelta(delta, snapshot)
       })
-      // 用原始 SSE 事件检测 tool_use 开始（contentBlock 事件在 block 全部完成后才触发，太晚）
       stream.on('streamEvent', (event) => {
         if (
           event.type === 'content_block_start' &&
@@ -235,6 +257,19 @@ async function runAnthropic(
         ) {
           agentDebug('anthropic SSE tool_use block start', event.content_block.name)
           opts.stream!.onToolUseStart?.(event.content_block.name)
+        }
+        if (
+          event.type === 'content_block_delta' &&
+          event.delta.type === 'thinking_delta'
+        ) {
+          thinkingAcc += event.delta.thinking
+          opts.stream!.onThinkingDelta?.(event.delta.thinking, thinkingAcc)
+        }
+        if (
+          event.type === 'content_block_start' &&
+          event.content_block.type === 'thinking'
+        ) {
+          thinkingAcc = ''
         }
       })
     }
@@ -267,6 +302,8 @@ async function runAnthropic(
           input: (block.input ?? {}) as Record<string, unknown>,
         })
       }
+      // thinking / redacted_thinking blocks are intentionally skipped
+      // from persisted messages — they are surfaced via stream callbacks only
     }
 
     const mergedText = textParts.join('\n').trim() || null
