@@ -9,6 +9,11 @@ import type { AgentToolSpec } from '../mcp/manager.js'
 import type { PersistedMessage } from './persisted.js'
 import type { McpManager } from '../mcp/manager.js'
 import type { EditHistory } from '../session/editHistory.js'
+import {
+  CONFIRMABLE_BUILTIN_TOOLS,
+  formatToolConfirmDetail,
+} from './formatToolConfirm.js'
+import { evaluateToolSafety } from './toolGateAgent.js'
 import { agentDebug } from '../utils/agentDebug.js'
 
 const MAX_TOOL_STEPS = 48
@@ -53,6 +58,8 @@ export type RunLoopOptions = {
   cwd: string
   mcp: McpManager
   stream?: StreamCallbacks
+  /** 跳过所有安全评估（--dangerously-skip-permissions） */
+  skipPermissions?: boolean
   editHistory?: EditHistory
   onToolDispatch?: (name: string) => void
 }
@@ -74,6 +81,38 @@ export async function runToolLoop(opts: RunLoopOptions): Promise<{
 
   const dispatch = async (name: string, argsJson: string): Promise<string> => {
     agentDebug('dispatch tool', name)
+
+    if (!opts.skipPermissions) {
+      let args: Record<string, unknown>
+      try { args = JSON.parse(argsJson) as Record<string, unknown> } catch { args = {} }
+      if (args.dry_run !== true) {
+        const detail = CONFIRMABLE_BUILTIN_TOOLS.has(name)
+          ? await formatToolConfirmDetail(name, args, opts.cwd)
+          : `${name}(${JSON.stringify(args).slice(0, 2000)})`
+
+        const gate = await evaluateToolSafety(opts.config, name, detail, opts.messages)
+
+        if (gate.decision === 'deny') {
+          return JSON.stringify({
+            status: 'blocked',
+            denied: true,
+            reason: gate.reason,
+            tool: name,
+            instruction: '此操作被安全评估拒绝，不可执行。',
+          })
+        }
+        if (gate.decision === 'ask') {
+          return JSON.stringify({
+            status: 'blocked',
+            reason: gate.reason,
+            tool: name,
+            detail: detail.slice(0, 2000),
+            instruction: '此操作需要用户确认。请将详情告知用户，获得明确确认后重试。',
+          })
+        }
+      }
+    }
+
     if (builtin.has(name)) {
       return runBuiltinTool(name as BuiltinToolName, argsJson, {
         sessionCwd: opts.cwd,

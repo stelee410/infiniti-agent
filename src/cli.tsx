@@ -13,7 +13,12 @@ import { SKILLS_DIR, expandUserPath } from './paths.js'
 import { runCliPrompt } from './runCliPrompt.js'
 import { readPackageVersion } from './packageRoot.js'
 
-async function runChatTui(opts: { skipPermissions?: boolean } = {}): Promise<void> {
+function applyThinkingOverride(cfg: Awaited<ReturnType<typeof loadConfig>>, disable: boolean): Awaited<ReturnType<typeof loadConfig>> {
+  if (!disable) return cfg
+  return { ...cfg, thinking: { ...cfg.thinking, mode: 'disabled' as const } }
+}
+
+async function runChatTui(opts: { skipPermissions?: boolean; disableThinking?: boolean } = {}): Promise<void> {
   if (!configExistsSync()) {
     const { waitUntilExit } = render(<InitWizard />)
     await waitUntilExit()
@@ -21,7 +26,7 @@ async function runChatTui(opts: { skipPermissions?: boolean } = {}): Promise<voi
   }
   let cfg
   try {
-    cfg = await loadConfig()
+    cfg = applyThinkingOverride(await loadConfig(), opts.disableThinking ?? false)
   } catch (e) {
     console.error((e as Error).message)
     const { waitUntilExit } = render(<InitWizard />)
@@ -42,19 +47,33 @@ async function runChatTui(opts: { skipPermissions?: boolean } = {}): Promise<voi
 }
 
 async function main(): Promise<void> {
+  if (process.argv.includes('--debug')) {
+    const idx = process.argv.indexOf('--debug')
+    process.argv.splice(idx, 1)
+    process.env.INFINITI_AGENT_DEBUG = '1'
+    console.error('[debug] 调试模式已启用，meta-agent / 工具调度等详细日志将输出到 stderr')
+  }
+
   const skipPermissions = process.argv.includes('--dangerously-skip-permissions')
   if (skipPermissions) {
     const idx = process.argv.indexOf('--dangerously-skip-permissions')
     process.argv.splice(idx, 1)
     console.error('⚠ --dangerously-skip-permissions: 所有工具确认将被跳过')
   }
+
+  const disableThinking = process.argv.includes('--disable-thinking')
+  if (disableThinking) {
+    const idx = process.argv.indexOf('--disable-thinking')
+    process.argv.splice(idx, 1)
+  }
   const argv = process.argv.slice(2)
 
+  // 兼容旧写法 --cli
   const cliIdx = argv.indexOf('--cli')
   if (cliIdx !== -1) {
     const prompt = argv.slice(cliIdx + 1).join(' ').trim()
     if (!prompt) {
-      console.error('用法: infiniti-agent --cli <prompt>（多词可不加引号，或整段用引号包裹）')
+      console.error('用法: infiniti-agent cli <prompt>（多词无需引号）')
       process.exit(2)
     }
     if (!configExistsSync()) {
@@ -62,7 +81,7 @@ async function main(): Promise<void> {
       process.exit(2)
     }
     try {
-      const cfg = await loadConfig()
+      const cfg = applyThinkingOverride(await loadConfig(), disableThinking)
       await runCliPrompt(cfg, prompt)
     } catch (e) {
       console.error((e as Error).message)
@@ -79,7 +98,7 @@ async function main(): Promise<void> {
   program
     .name('infiniti-agent')
     .description(
-      'LinkYun Infiniti Agent — React + Ink TUI。非交互一轮：infiniti-agent --cli <prompt>。加 --dangerously-skip-permissions 跳过工具确认。',
+      'LinkYun Infiniti Agent — React + Ink TUI。非交互一轮：infiniti-agent cli <prompt>。加 --disable-thinking 禁用深度思考。加 --dangerously-skip-permissions 跳过安全评估。加 --debug 输出 meta-agent 日志到 stderr。',
     )
     .version(readPackageVersion())
 
@@ -95,7 +114,30 @@ async function main(): Promise<void> {
     .command('chat')
     .description('进入对话界面（无参数时默认）')
     .action(async () => {
-      await runChatTui({ skipPermissions })
+      await runChatTui({ skipPermissions, disableThinking })
+    })
+
+  program
+    .command('cli')
+    .description('非交互执行一轮（多词无需引号）')
+    .argument('<prompt...>', 'prompt 内容')
+    .action(async (promptParts: string[]) => {
+      const prompt = promptParts.join(' ').trim()
+      if (!prompt) {
+        console.error('用法: infiniti-agent cli <prompt>')
+        process.exit(2)
+      }
+      if (!configExistsSync()) {
+        console.error('尚未配置。请先运行: infiniti-agent init')
+        process.exit(2)
+      }
+      try {
+        const cfg = applyThinkingOverride(await loadConfig(), disableThinking)
+        await runCliPrompt(cfg, prompt)
+      } catch (e) {
+        console.error((e as Error).message)
+        process.exit(2)
+      }
     })
 
   const skill = program.command('skill').description('第三方 Skills')

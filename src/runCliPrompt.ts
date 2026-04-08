@@ -46,17 +46,16 @@ export async function runCliPrompt(
   const editHistory = new EditHistory()
 
   let exitCode = 0
-  let cwd = process.cwd()
+  const cwd = process.cwd()
   let messages: PersistedMessage[] = []
 
   try {
     await mcp.start(config)
 
     try {
-      const s = await loadSession()
+      const s = await loadSession(cwd)
       if (s?.messages?.length) {
         messages = s.messages
-        cwd = s.cwd || cwd
       }
     } catch (e: unknown) {
       throw e
@@ -82,9 +81,7 @@ export async function runCliPrompt(
         onTextDelta: (delta) => {
           process.stdout.write(delta)
         },
-        onThinkingDelta: () => {
-          // CLI 模式下静默忽略 thinking 增量（避免干扰 stdout 管道输出）
-        },
+        onThinkingDelta: () => {},
       },
     })
     await saveSession(cwd, out)

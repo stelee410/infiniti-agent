@@ -53,8 +53,8 @@ export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions
   const streamTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const editHistoryRef = useRef(new EditHistory())
   const [slashIndex, setSlashIndex] = useState(0)
-  /** 单个工具的会话级白名单（按 A 加入） */
-  const [toolWhitelist, setToolWhitelist] = useState<Set<string>>(new Set())
+  const busyRef = useRef(false)
+  busyRef.current = busy
   const [notice, setNotice] = useState<string | null>(null)
   const [compacting, setCompacting] = useState(false)
   /** 比泛化的「请求中」更细：等首包 / 执行工具 / SSE 中 */
@@ -155,10 +155,9 @@ export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions
   useEffect(() => {
     void (async () => {
       try {
-        const s = await loadSession()
+        const s = await loadSession(cwd)
         if (s?.messages?.length) {
           setMessages(s.messages)
-          setCwd(s.cwd || process.cwd())
         }
       } finally {
         setSessionReady(true)
@@ -241,6 +240,8 @@ export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions
         return
       }
 
+      if (busyRef.current) return
+
       if (raw === '/exit' || raw === '/quit') {
         await saveSession(cwd, messages)
         exit()
@@ -308,12 +309,9 @@ export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions
         return
       }
       if (raw === '/permission') {
-        const wl = [...toolWhitelist]
         const mode = dangerouslySkipPermissions
           ? '全部跳过（--dangerously-skip-permissions）'
-          : wl.length
-            ? `逐项确认，已放行: ${wl.join(', ')}`
-            : '逐项确认（确认时按 A 可将工具加入白名单）'
+          : 'meta-agent 自动评估（规则引擎 + LLM 兜底，blocked 走对话确认）'
         setNotice(`权限模式: ${mode}`)
         setTimeout(() => setNotice(null), 8000)
         setInput('')
@@ -396,6 +394,7 @@ export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions
           messages: nextMsgs,
           cwd,
           mcp,
+          skipPermissions: dangerouslySkipPermissions,
           editHistory: editHistoryRef.current,
           onToolDispatch: (name) => {
             setBusySubtext(`执行工具：${name}…`)
@@ -457,12 +456,9 @@ export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions
 
   const visibleCount = Math.max(4, rows - 14)
   const visible = messages.slice(-visibleCount)
-  const wlNames = [...toolWhitelist]
   const permLabel = dangerouslySkipPermissions
-    ? ' · ⚠ 跳过确认'
-    : wlNames.length
-      ? ` · 放行: ${wlNames.join(',')}`
-      : ''
+    ? ' · ⚠ 跳过安全评估'
+    : ''
   const thinkLabel =
     config.llm.provider === 'anthropic' && (config.thinking?.mode ?? 'adaptive') !== 'disabled'
       ? ` · think:${config.thinking?.mode ?? 'adaptive'}`
@@ -595,9 +591,7 @@ export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions
           focus={!busy && sessionReady}
           onChange={setInput}
           onSubmit={(v) => {
-            if (!busy) {
-              void handleSubmit(v)
-            }
+            void handleSubmit(v)
           }}
           placeholder="输入…"
         />
