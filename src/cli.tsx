@@ -12,7 +12,7 @@ import { loadSkillsFromDirs } from './skills/loader.js'
 import { SKILLS_DIR, expandUserPath } from './paths.js'
 import { runCliPrompt } from './runCliPrompt.js'
 
-async function runChatTui(): Promise<void> {
+async function runChatTui(opts: { skipPermissions?: boolean } = {}): Promise<void> {
   if (!configExistsSync()) {
     const { waitUntilExit } = render(<InitWizard />)
     await waitUntilExit()
@@ -30,7 +30,10 @@ async function runChatTui(): Promise<void> {
   const mcp = new McpManager()
   try {
     await mcp.start(cfg)
-    const { waitUntilExit } = render(<ChatWithSplash config={cfg} mcp={mcp} />)
+    const skipPerm = opts.skipPermissions ?? false
+    const { waitUntilExit } = render(
+      <ChatWithSplash config={cfg} mcp={mcp} dangerouslySkipPermissions={skipPerm} />,
+    )
     await waitUntilExit()
   } finally {
     await mcp.stop()
@@ -38,7 +41,14 @@ async function runChatTui(): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  const skipPermissions = process.argv.includes('--dangerously-skip-permissions')
+  if (skipPermissions) {
+    const idx = process.argv.indexOf('--dangerously-skip-permissions')
+    process.argv.splice(idx, 1)
+    console.error('⚠ --dangerously-skip-permissions: 所有工具确认将被跳过')
+  }
   const argv = process.argv.slice(2)
+
   const cliIdx = argv.indexOf('--cli')
   if (cliIdx !== -1) {
     const prompt = argv.slice(cliIdx + 1).join(' ').trim()
@@ -68,7 +78,7 @@ async function main(): Promise<void> {
   program
     .name('infiniti-agent')
     .description(
-      'LinkYun Infiniti Agent — React + Ink TUI。非交互一轮：infiniti-agent --cli <prompt>',
+      'LinkYun Infiniti Agent — React + Ink TUI。非交互一轮：infiniti-agent --cli <prompt>。加 --dangerously-skip-permissions 跳过工具确认。',
     )
     .version('0.0.1')
 
@@ -84,7 +94,7 @@ async function main(): Promise<void> {
     .command('chat')
     .description('进入对话界面（无参数时默认）')
     .action(async () => {
-      await runChatTui()
+      await runChatTui({ skipPermissions })
     })
 
   const skill = program.command('skill').description('第三方 Skills')

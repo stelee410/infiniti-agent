@@ -22,17 +22,22 @@ async function tryRead(path: string): Promise<string | null> {
 }
 
 /**
- * 加载人格与项目说明：优先当前工作目录，其次内置包内文件。
- * INFINITI.md 中可引用 SOUL.md；二者正文经 buildAgentSystemPrompt 与内置「代码质量」「工具约定」一并注入系统提示。
+ * 加载人格与项目说明。
+ * soul 优先级：cwd/SOUL.md → cwd/AGENTS.md → cwd/AGENT.md → PACKAGE_ROOT/SOUL.md → 内置 fallback
+ * infiniti 优先级：cwd/INFINITI.md → cwd/CLAUDE.md → cwd/.claude/CLAUDE.md → PACKAGE_ROOT/INFINITI.md → ''
  */
 export async function loadAgentPromptDocs(cwd: string): Promise<AgentPromptDocs> {
   const soul =
     (await tryRead(join(cwd, 'SOUL.md'))) ??
+    (await tryRead(join(cwd, 'AGENTS.md'))) ??
+    (await tryRead(join(cwd, 'AGENT.md'))) ??
     (await tryRead(join(PACKAGE_ROOT, 'SOUL.md'))) ??
     FALLBACK_SOUL
 
   const infiniti =
     (await tryRead(join(cwd, 'INFINITI.md'))) ??
+    (await tryRead(join(cwd, 'CLAUDE.md'))) ??
+    (await tryRead(join(cwd, '.claude', 'CLAUDE.md'))) ??
     (await tryRead(join(PACKAGE_ROOT, 'INFINITI.md'))) ??
     ''
 
@@ -54,9 +59,18 @@ export function formatSystemFromDocs(docs: AgentPromptDocs): string {
   return blocks.join('\n\n')
 }
 
+const IDENTITY_SECTION = `## 身份
+
+You are **Infiniti Agent** (by LinkYun).
+- Your persona and principles live in **SOUL.md**; if absent, the system will load **AGENTS.md** or **AGENT.md** as fallback.
+- Project-specific instructions live in **INFINITI.md**; if absent, the system will load **CLAUDE.md** (including .claude/CLAUDE.md) as fallback.
+- You may read and edit any of these files (SOUL.md, INFINITI.md, CLAUDE.md, AGENT.md, AGENTS.md) as the user requests.
+- The current working directory (where the user launched the CLI) is used to locate these files.`
+
 /** SOUL/INFINITI 文档 + 内置代码质量约定 + 内置工具与 TUI 约定（与实现同步） */
 export function buildAgentSystemPrompt(docs: AgentPromptDocs): string {
   return [
+    IDENTITY_SECTION,
     formatSystemFromDocs(docs),
     BUILTIN_CODE_QUALITY_SECTION,
     BUILTIN_TOOL_AND_BOUNDARIES_SECTION,

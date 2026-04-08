@@ -71,31 +71,10 @@ const COMMAND_ITEMS: SlashItem[] = [
     insert: '/undo ',
   },
   {
-    id: '/approve-all',
-    kind: 'command',
-    label: '/approve-all',
-    desc: '同 /permission on：放行所有敏感工具',
-    insert: '/approve-all ',
-  },
-  {
-    id: '/permission on',
-    kind: 'command',
-    label: '/permission on',
-    desc: '放行所有敏感工具（不再弹确认）',
-    insert: '/permission on ',
-  },
-  {
-    id: '/permission off',
-    kind: 'command',
-    label: '/permission off',
-    desc: '恢复逐项确认，清空工具白名单',
-    insert: '/permission off ',
-  },
-  {
     id: '/permission',
     kind: 'command',
     label: '/permission',
-    desc: '查看当前权限模式与白名单',
+    desc: '查看当前权限模式与白名单（启动加 --dangerously-skip-permissions 可跳过全部确认）',
     insert: '/permission ',
   },
   {

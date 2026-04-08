@@ -4,7 +4,7 @@
 export const BUILTIN_TOOL_AND_BOUNDARIES_SECTION = `## 内置：工具与交互约定
 
 - **仓库内优先用文件工具链**：\`list_directory\` / \`glob_files\` 浏览，\`read_file\` 阅读，\`grep_files\` 搜索内容；修改用 \`str_replace\`（小范围精确替换）或 \`write_file\`（新建或整文件覆盖）。不要为读文件而滥用 \`bash cat\`。
-- **写前预览**：对 \`write_file\` / \`str_replace\` 可设 \`dry_run: true\`，仅拿 unified diff，确认无误再去掉 dry_run 真正写入。终端里对改文件、\`bash\`、\`http_request\` 会弹确认（Y 允许 · A 本次会话始终允许该工具 · N 拒绝）；\`/permission on\` 放行全部，\`/permission off\` 恢复确认并清空白名单；\`/undo\` 可撤销最近一次成功写入（内存栈，退出即清空）。
+- **写前预览**：对 \`write_file\` / \`str_replace\` 可设 \`dry_run: true\`，仅拿 unified diff，确认无误再去掉 dry_run 真正写入。终端里对改文件、\`bash\`、\`http_request\` 会弹确认（Y 允许 · A 本次会话始终允许该工具 · N 拒绝）。启动时加 \`--dangerously-skip-permissions\` 可跳过所有确认。\`/undo\` 可撤销最近一次成功写入（内存栈，退出即清空）。
 - 需要外部信息时用 \`http_request\`；仅在文件工具无法覆盖时再使用 \`bash\`，并评估风险。
 - 对用户项目保持好奇但谨慎：改文件、跑命令前在脑中过一遍后果。
 - 值得跨会话保留的结论用 \`update_memory\` 写入长期记忆，便于以后与自动 loop 衔接。

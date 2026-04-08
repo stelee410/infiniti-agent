@@ -31,12 +31,13 @@ import {
 type Props = {
   config: InfinitiConfig
   mcp: McpManager
+  dangerouslySkipPermissions?: boolean
 }
 
 const STREAM_DEBOUNCE_MS = 48
 const SLASH_MENU_MAX_ROWS = 10
 
-export function ChatApp({ config: initialConfig, mcp }: Props): React.ReactElement {
+export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions }: Props): React.ReactElement {
   const { exit } = useApp()
   const rows = process.stdout.rows ?? 24
   const [config, setConfig] = useState(initialConfig)
@@ -52,7 +53,6 @@ export function ChatApp({ config: initialConfig, mcp }: Props): React.ReactEleme
   const streamTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const editHistoryRef = useRef(new EditHistory())
   const [slashIndex, setSlashIndex] = useState(0)
-  const [approveAllTools, setApproveAllTools] = useState(false)
   /** 单个工具的会话级白名单（按 A 加入） */
   const [toolWhitelist, setToolWhitelist] = useState<Set<string>>(new Set())
   const [toolGate, setToolGate] = useState<null | {
@@ -157,7 +157,7 @@ export function ChatApp({ config: initialConfig, mcp }: Props): React.ReactEleme
 
   const confirmTool = useCallback(
     async (info: { name: string; detail: string }) => {
-      if (approveAllTools || toolWhitelist.has(info.name)) {
+      if (dangerouslySkipPermissions || toolWhitelist.has(info.name)) {
         return true
       }
       const answer = await new Promise<'yes' | 'no' | 'always'>((resolve) => {
@@ -173,7 +173,7 @@ export function ChatApp({ config: initialConfig, mcp }: Props): React.ReactEleme
       }
       return answer === 'yes'
     },
-    [approveAllTools, toolWhitelist],
+    [dangerouslySkipPermissions, toolWhitelist],
   )
 
   useEffect(() => {
@@ -205,7 +205,14 @@ export function ChatApp({ config: initialConfig, mcp }: Props): React.ReactEleme
   }, [])
 
   useEffect(() => {
-    const paths = [join(cwd, 'SOUL.md'), join(cwd, 'INFINITI.md')]
+    const paths = [
+      join(cwd, 'SOUL.md'),
+      join(cwd, 'INFINITI.md'),
+      join(cwd, 'CLAUDE.md'),
+      join(cwd, '.claude', 'CLAUDE.md'),
+      join(cwd, 'AGENT.md'),
+      join(cwd, 'AGENTS.md'),
+    ]
     const w = chokidar.watch(paths, {
       ignoreInitial: true,
       persistent: true,
@@ -281,7 +288,7 @@ export function ChatApp({ config: initialConfig, mcp }: Props): React.ReactEleme
       }
       if (raw === '/help') {
         setError(
-          '输入 / 可补全：斜杠命令与全部工具（↑↓ Tab）。命令: /exit /clear /reload /memory /undo /compact /permission [on|off] — 改文件/bash/HTTP 默认需确认（Y 允许 · A 本次会话始终允许该工具 · N 拒绝）；/permission on 放行所有，/permission off 恢复确认并清空白名单，/permission 查看当前状态。/compact 压缩较早历史。卡死排查：INFINITI_AGENT_DEBUG=1。',
+          '输入 / 可补全：斜杠命令与全部工具（↑↓ Tab）。命令: /exit /clear /reload /memory /undo /compact /permission — 改文件/bash/HTTP 默认需确认（Y 允许 · A 本次会话始终允许该工具 · N 拒绝）；启动时加 --dangerously-skip-permissions 可跳过所有确认。/permission 查看当前状态。/compact 压缩较早历史。卡死排查：INFINITI_AGENT_DEBUG=1。',
         )
         setInput('')
         return
@@ -324,29 +331,14 @@ export function ChatApp({ config: initialConfig, mcp }: Props): React.ReactEleme
         setInput('')
         return
       }
-      if (raw === '/approve-all' || raw === '/permission on') {
-        setApproveAllTools(true)
-        setNotice('已开启：本会话内所有敏感工具将自动批准')
-        setTimeout(() => setNotice(null), 5000)
-        setInput('')
-        return
-      }
-      if (raw === '/permission off') {
-        setApproveAllTools(false)
-        setToolWhitelist(new Set())
-        setNotice('已关闭：改文件 / bash / http_request 将逐项确认（工具白名单已清空）')
-        setTimeout(() => setNotice(null), 5000)
-        setInput('')
-        return
-      }
       if (raw === '/permission') {
         const wl = [...toolWhitelist]
-        const status = approveAllTools
-          ? '全部放行（/permission off 关闭）'
+        const mode = dangerouslySkipPermissions
+          ? '全部跳过（--dangerously-skip-permissions）'
           : wl.length
             ? `逐项确认，已放行: ${wl.join(', ')}`
-            : '逐项确认（无白名单）'
-        setNotice(`权限模式: ${status}`)
+            : '逐项确认（确认时按 A 可将工具加入白名单）'
+        setNotice(`权限模式: ${mode}`)
         setTimeout(() => setNotice(null), 8000)
         setInput('')
         return
@@ -480,8 +472,8 @@ export function ChatApp({ config: initialConfig, mcp }: Props): React.ReactEleme
   const visibleCount = Math.max(4, rows - 14)
   const visible = messages.slice(-visibleCount)
   const wlNames = [...toolWhitelist]
-  const permLabel = approveAllTools
-    ? ' · 全部放行'
+  const permLabel = dangerouslySkipPermissions
+    ? ' · ⚠ 跳过确认'
     : wlNames.length
       ? ` · 放行: ${wlNames.join(',')}`
       : ''
@@ -512,7 +504,7 @@ export function ChatApp({ config: initialConfig, mcp }: Props): React.ReactEleme
       </Box>
 
       <Text dimColor>
-        输入 / 补全命令与工具 · ↑↓ Tab · SOUL/INFINITI/Skills 热重载
+        输入 / 补全命令与工具 · ↑↓ Tab · SOUL/INFINITI/CLAUDE/AGENT 热重载
       </Text>
 
       {notice ? (

@@ -23,6 +23,18 @@ const MAX_GREP_FILES = 250
 const MAX_GREP_MATCHES = 120
 const MAX_GREP_FILE_BYTES = 512 * 1024
 
+/**
+ * 兼容层：不再拦截 CLAUDE.md / AGENT.md 等路径，直接原样返回。
+ * 保留函数签名以避免调用方报错。
+ */
+export function rewriteAgentPath(rel: string): { rel: string; rewritten: boolean } {
+  return { rel, rewritten: false }
+}
+
+export function rewriteContentForAgent(content: string): string {
+  return content
+}
+
 function jsonOk(data: Record<string, unknown>): string {
   return JSON.stringify({ ok: true, ...data })
 }
@@ -260,8 +272,10 @@ export async function toolWriteFile(
   args: Record<string, unknown>,
   meta?: FileEditMeta,
 ): Promise<string> {
-  const rel = String(args.path ?? '')
-  const content = args.content != null ? String(args.content) : ''
+  const rw = rewriteAgentPath(String(args.path ?? ''))
+  const rel = rw.rel
+  const rawContent = args.content != null ? String(args.content) : ''
+  const content = rw.rewritten ? rewriteContentForAgent(rawContent) : rawContent
   const dryRun = args.dry_run === true
   if (Buffer.byteLength(content, 'utf8') > MAX_WRITE_BYTES) {
     return jsonErr(`内容超过上限 ${MAX_WRITE_BYTES} bytes`)
@@ -296,6 +310,7 @@ export async function toolWriteFile(
       dry_run: true,
       path: rel,
       diff: truncateDiffText(patch),
+      ...(rw.rewritten ? { rewritten_from: String(args.path ?? '') } : {}),
     })
   }
 
@@ -305,7 +320,11 @@ export async function toolWriteFile(
     if (meta?.editHistory) {
       meta.editHistory.push({ relPath: rel, previous })
     }
-    return jsonOk({ path: rel, bytes: Buffer.byteLength(content, 'utf8') })
+    return jsonOk({
+      path: rel,
+      bytes: Buffer.byteLength(content, 'utf8'),
+      ...(rw.rewritten ? { rewritten_from: String(args.path ?? '') } : {}),
+    })
   } catch (e: unknown) {
     return jsonErr(e instanceof Error ? e.message : String(e), {
       path: rel,
@@ -373,9 +392,11 @@ export async function toolStrReplace(
   args: Record<string, unknown>,
   meta?: FileEditMeta,
 ): Promise<string> {
-  const rel = String(args.path ?? '')
+  const rw = rewriteAgentPath(String(args.path ?? ''))
+  const rel = rw.rel
   const oldStr = args.old_string != null ? String(args.old_string) : ''
-  const newStr = args.new_string != null ? String(args.new_string) : ''
+  const rawNewStr = args.new_string != null ? String(args.new_string) : ''
+  const newStr = rw.rewritten ? rewriteContentForAgent(rawNewStr) : rawNewStr
   const dryRun = args.dry_run === true
   const replaceAll = args.replace_all === true
   let abs: string
@@ -416,6 +437,7 @@ export async function toolStrReplace(
       path: rel,
       replacements: pr.count,
       bytes: Buffer.byteLength(pr.next, 'utf8'),
+      ...(rw.rewritten ? { rewritten_from: String(args.path ?? '') } : {}),
     })
   } catch (e: unknown) {
     const err = e as NodeJS.ErrnoException

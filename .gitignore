@@ -2,3 +2,9 @@ node_modules/
 dist/
 *.log
 .DS_Store
+
+# 兼容文件由用户在工作目录自行维护，不纳入本仓库
+AGENT.md
+AGENTS.md
+CLAUDE.md
+.claude/

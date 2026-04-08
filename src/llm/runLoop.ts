@@ -227,10 +227,14 @@ async function runAnthropic(
       stream.on('text', (delta, snapshot) => {
         opts.stream!.onTextDelta(delta, snapshot)
       })
-      stream.on('contentBlock', (block) => {
-        if (block.type === 'tool_use') {
-          agentDebug('anthropic SSE tool_use block start', block.name)
-          opts.stream!.onToolUseStart?.(block.name)
+      // 用原始 SSE 事件检测 tool_use 开始（contentBlock 事件在 block 全部完成后才触发，太晚）
+      stream.on('streamEvent', (event) => {
+        if (
+          event.type === 'content_block_start' &&
+          event.content_block.type === 'tool_use'
+        ) {
+          agentDebug('anthropic SSE tool_use block start', event.content_block.name)
+          opts.stream!.onToolUseStart?.(event.content_block.name)
         }
       })
     }
