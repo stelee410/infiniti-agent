@@ -142,26 +142,35 @@ async function main(): Promise<void> {
 
   const skill = program.command('skill').description('第三方 Skills')
 
+  const installSkillAction = async (source: string) => {
+    await ensureInfinitiDir()
+    const s = source.trim()
+    let dest: string
+    if (/^https?:\/\//i.test(s) || s.startsWith('git@')) {
+      dest = await installSkillFromGit(s)
+    } else if (/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(s)) {
+      dest = await installSkillFromGit(`https://github.com/${s}.git`)
+    } else {
+      const p = expandUserPath(s)
+      if (!existsSync(p)) {
+        console.error('路径不存在。请提供 owner/repo、git URL 或本地路径。')
+        process.exitCode = 1
+        return
+      }
+      dest = await installSkillFromPath(p)
+    }
+    console.log(dest)
+  }
+
   skill
     .command('install <source>')
-    .description('从 git URL 或本地路径安装到 ~/.infiniti-agent/skills/<name>')
-    .action(async (source: string) => {
-      await ensureInfinitiDir()
-      const s = source.trim()
-      let dest: string
-      if (/^https?:\/\//i.test(s) || s.startsWith('git@')) {
-        dest = await installSkillFromGit(s)
-      } else {
-        const p = expandUserPath(s)
-        if (!existsSync(p)) {
-          console.error('路径不存在。请提供可读的本地目录或 git URL。')
-          process.exitCode = 1
-          return
-        }
-        dest = await installSkillFromPath(p)
-      }
-      console.log(dest)
-    })
+    .description('安装 Skill（支持 owner/repo、git URL、本地路径）')
+    .action(installSkillAction)
+
+  skill
+    .command('add <source>')
+    .description('install 的别名')
+    .action(installSkillAction)
 
   skill
     .command('list')
