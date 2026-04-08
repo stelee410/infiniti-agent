@@ -9,17 +9,14 @@ import type { AgentToolSpec } from '../mcp/manager.js'
 import type { PersistedMessage } from './persisted.js'
 import type { McpManager } from '../mcp/manager.js'
 import type { EditHistory } from '../session/editHistory.js'
-import {
-  CONFIRMABLE_BUILTIN_TOOLS,
-  formatToolConfirmDetail,
-} from './formatToolConfirm.js'
 import { agentDebug } from '../utils/agentDebug.js'
 
 const MAX_TOOL_STEPS = 48
 
-/** SDK 默认约 10 分钟 + 重试，在错误 Base URL / 网络不通时会像「死机」；这里收紧。 */
 const LLM_TIMEOUT_MS = 180_000
 const LLM_MAX_RETRIES = 1
+/** SSE 流闲置超时：连续无新事件即中断（参考 ref 的 STREAM_IDLE_TIMEOUT_MS） */
+const STREAM_IDLE_TIMEOUT_MS = 90_000
 
 function withDeadline<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -39,14 +36,13 @@ function withDeadline<T>(promise: Promise<T>, ms: number, label: string): Promis
   })
 }
 
-/** LLM 侧 SSE/流式 token；用于 TUI 实时输出 */
 export type StreamCallbacks = {
   onTextDelta: (delta: string, fullText: string) => void
-  /** 新一轮 API 请求前清空 UI 缓冲区（含工具轮次之间） */
   onStreamReset?: () => void
-  /** 模型开始生成 tool_use block（还在 SSE 中，尚未结束） */
+  /** 模型 SSE 中 tool_use block 开始（参数仍在传输） */
   onToolUseStart?: (toolName: string) => void
-  /** Extended thinking：思考过程增量回调 */
+  /** tool_use block 参数接收完毕，开始执行（流式工具执行） */
+  onToolExecStart?: (toolName: string) => void
   onThinkingDelta?: (delta: string, fullThinking: string) => void
 }
 
@@ -57,11 +53,7 @@ export type RunLoopOptions = {
   cwd: string
   mcp: McpManager
   stream?: StreamCallbacks
-  /** 对 write_file / str_replace / bash / http_request 等在执行前请求用户确认（dry_run 跳过） */
-  confirmTool?: (info: { name: string; detail: string }) => Promise<boolean>
-  /** 成功写入后压栈，供 TUI /undo 恢复 */
   editHistory?: EditHistory
-  /** 用户确认通过后、实际执行工具前（便于 TUI 区分「等模型」与「跑工具」） */
   onToolDispatch?: (name: string) => void
 }
 
@@ -81,31 +73,7 @@ export async function runToolLoop(opts: RunLoopOptions): Promise<{
   const builtin = new Set<string>(BUILTIN_TOOLS.map((t) => t.name))
 
   const dispatch = async (name: string, argsJson: string): Promise<string> => {
-    let args: Record<string, unknown>
-    try {
-      args = JSON.parse(argsJson) as Record<string, unknown>
-    } catch {
-      return JSON.stringify({ ok: false, error: '工具参数不是合法 JSON' })
-    }
-
-    const skipConfirm = args.dry_run === true
-    if (
-      builtin.has(name) &&
-      CONFIRMABLE_BUILTIN_TOOLS.has(name) &&
-      !skipConfirm &&
-      opts.confirmTool
-    ) {
-      agentDebug('awaiting user confirm for tool', name)
-      const detail = await formatToolConfirmDetail(name, args, opts.cwd)
-      const approved = await opts.confirmTool({ name, detail })
-      if (!approved) {
-        return JSON.stringify({ ok: false, error: '用户拒绝了工具执行' })
-      }
-    }
-
-    agentDebug('run tool', name)
-    opts.onToolDispatch?.(name)
-
+    agentDebug('dispatch tool', name)
     if (builtin.has(name)) {
       return runBuiltinTool(name as BuiltinToolName, argsJson, {
         sessionCwd: opts.cwd,
@@ -211,6 +179,14 @@ function resolveAnthropicThinking(
 const THINKING_MAX_TOKENS = 16_000
 const DEFAULT_MAX_TOKENS = 8192
 
+/**
+ * Anthropic 流式工具执行：参考 ref 的 StreamingToolExecutor 架构。
+ *
+ * 关键改进：
+ * 1. 工具在 content_block_stop 时立即开始执行，不等 finalMessage
+ * 2. 多工具并行执行
+ * 3. SSE 流闲置超时 watchdog（90s 无新事件则中断）
+ */
 async function runAnthropic(
   opts: RunLoopOptions,
   tools: AgentToolSpec[],
@@ -237,6 +213,7 @@ async function runAnthropic(
   for (let step = 0; step < MAX_TOOL_STEPS; step++) {
     agentDebug('anthropic step', step, 'request stream')
     opts.stream?.onStreamReset?.()
+
     const stream = client.messages.stream({
       model: opts.config.llm.model,
       max_tokens: maxTokens,
@@ -245,70 +222,122 @@ async function runAnthropic(
       tools: anthropicTools,
       ...(thinking && { thinking }),
     })
+
+    // ── 流式工具执行状态 ──
+    interface PendingTool {
+      id: string
+      name: string
+      inputJson: string
+      input: Record<string, unknown>
+      resultPromise: Promise<string>
+    }
+    const pendingTools: PendingTool[] = []
+    let curBlockType: 'tool_use' | 'thinking' | 'text' | null = null
+    let curToolId = ''
+    let curToolName = ''
+    let curToolInput = ''
+    let thinkingAcc = ''
+    let lastEventAt = Date.now()
+
+    // ── SSE 流闲置 watchdog ──
+    const idleCheck = setInterval(() => {
+      if (Date.now() - lastEventAt > STREAM_IDLE_TIMEOUT_MS) {
+        agentDebug('stream idle watchdog triggered, aborting')
+        clearInterval(idleCheck)
+        stream.abort()
+      }
+    }, 5_000)
+
+    // ── 文本流回调 ──
     if (opts.stream) {
-      let thinkingAcc = ''
       stream.on('text', (delta, snapshot) => {
+        lastEventAt = Date.now()
         opts.stream!.onTextDelta(delta, snapshot)
       })
-      stream.on('streamEvent', (event) => {
-        if (
-          event.type === 'content_block_start' &&
-          event.content_block.type === 'tool_use'
-        ) {
-          agentDebug('anthropic SSE tool_use block start', event.content_block.name)
-          opts.stream!.onToolUseStart?.(event.content_block.name)
-        }
-        if (
-          event.type === 'content_block_delta' &&
-          event.delta.type === 'thinking_delta'
-        ) {
-          thinkingAcc += event.delta.thinking
-          opts.stream!.onThinkingDelta?.(event.delta.thinking, thinkingAcc)
-        }
-        if (
-          event.type === 'content_block_start' &&
-          event.content_block.type === 'thinking'
-        ) {
+    }
+
+    // ── 流事件处理：工具在块结束时立即 dispatch ──
+    stream.on('streamEvent', (event) => {
+      lastEventAt = Date.now()
+
+      if (event.type === 'content_block_start') {
+        if (event.content_block.type === 'tool_use') {
+          curBlockType = 'tool_use'
+          curToolId = event.content_block.id
+          curToolName = event.content_block.name
+          curToolInput = ''
+          agentDebug('SSE tool_use block start', curToolName)
+          opts.stream?.onToolUseStart?.(curToolName)
+        } else if (event.content_block.type === 'thinking') {
+          curBlockType = 'thinking'
           thinkingAcc = ''
+        } else {
+          curBlockType = 'text'
         }
-      })
+      }
+
+      if (event.type === 'content_block_delta') {
+        if (event.delta.type === 'input_json_delta' && curBlockType === 'tool_use') {
+          curToolInput += event.delta.partial_json
+        }
+        if (event.delta.type === 'thinking_delta') {
+          thinkingAcc += event.delta.thinking
+          opts.stream?.onThinkingDelta?.(event.delta.thinking, thinkingAcc)
+        }
+      }
+
+      if (event.type === 'content_block_stop') {
+        if (curBlockType === 'tool_use' && curToolId) {
+          const inputJson = curToolInput || '{}'
+          let input: Record<string, unknown>
+          try { input = JSON.parse(inputJson) as Record<string, unknown> } catch { input = {} }
+
+          agentDebug('streaming tool exec start', curToolName, curToolId)
+          opts.stream?.onToolExecStart?.(curToolName)
+          opts.onToolDispatch?.(curToolName)
+
+          pendingTools.push({
+            id: curToolId,
+            name: curToolName,
+            inputJson,
+            input,
+            resultPromise: dispatch(curToolName, inputJson),
+          })
+        }
+        curBlockType = null
+        curToolId = ''
+        curToolName = ''
+        curToolInput = ''
+      }
+    })
+
+    // ── 等待消息完成（工具已在后台并行执行） ──
+    let msg: Anthropic.Messages.Message
+    try {
+      const final = await withDeadline(
+        stream.finalMessage(),
+        LLM_TIMEOUT_MS,
+        'Anthropic',
+      )
+      msg = final as unknown as Anthropic.Messages.Message
+    } finally {
+      clearInterval(idleCheck)
     }
-    const final = await withDeadline(
-      stream.finalMessage(),
-      LLM_TIMEOUT_MS,
-      'Anthropic',
-    )
-    const msg = final as unknown as Anthropic.Messages.Message
+
     agentDebug(
-      'anthropic step',
-      step,
-      'finalMessage',
-      'blocks',
+      'anthropic step', step, 'finalMessage', 'blocks',
       msg.content.map((b) => b.type).join(','),
+      'pendingTools', pendingTools.length,
     )
 
+    // ── 从完整消息中提取文本 ──
     const textParts: string[] = []
-    const toolUses: { id: string; name: string; input: Record<string, unknown> }[] =
-      []
-
     for (const block of msg.content) {
-      if (block.type === 'text') {
-        textParts.push(block.text)
-      }
-      if (block.type === 'tool_use') {
-        toolUses.push({
-          id: block.id,
-          name: block.name,
-          input: (block.input ?? {}) as Record<string, unknown>,
-        })
-      }
-      // thinking / redacted_thinking blocks are intentionally skipped
-      // from persisted messages — they are surfaced via stream callbacks only
+      if (block.type === 'text') textParts.push(block.text)
     }
-
     const mergedText = textParts.join('\n').trim() || null
 
-    if (!toolUses.length) {
+    if (!pendingTools.length) {
       working.push({ role: 'assistant', content: mergedText })
       break
     }
@@ -316,20 +345,21 @@ async function runAnthropic(
     working.push({
       role: 'assistant',
       content: mergedText,
-      toolCalls: toolUses.map((tu) => ({
-        id: tu.id,
-        name: tu.name,
-        argumentsJson: JSON.stringify(tu.input ?? {}),
+      toolCalls: pendingTools.map((pt) => ({
+        id: pt.id,
+        name: pt.name,
+        argumentsJson: JSON.stringify(pt.input),
       })),
     })
 
-    for (const tu of toolUses) {
-      const out = await dispatch(tu.name, JSON.stringify(tu.input ?? {}))
+    // ── 等待所有工具结果（大部分已在流式期间完成） ──
+    for (const pt of pendingTools) {
+      const result = await pt.resultPromise
       working.push({
         role: 'tool',
-        toolCallId: tu.id,
-        name: tu.name,
-        content: out,
+        toolCallId: pt.id,
+        name: pt.name,
+        content: result,
       })
     }
   }

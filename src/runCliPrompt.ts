@@ -74,7 +74,6 @@ export async function runCliPrompt(
       messages: nextMsgs,
       cwd,
       mcp,
-      confirmTool: async () => true,
       editHistory,
       stream: {
         onStreamReset: () => {

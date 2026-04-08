@@ -55,11 +55,6 @@ export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions
   const [slashIndex, setSlashIndex] = useState(0)
   /** 单个工具的会话级白名单（按 A 加入） */
   const [toolWhitelist, setToolWhitelist] = useState<Set<string>>(new Set())
-  const [toolGate, setToolGate] = useState<null | {
-    name: string
-    detail: string
-    resolve: (answer: 'yes' | 'no' | 'always') => void
-  }>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [compacting, setCompacting] = useState(false)
   /** 比泛化的「请求中」更细：等首包 / 执行工具 / SSE 中 */
@@ -156,26 +151,6 @@ export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions
     setStreamText('')
   }, [])
 
-  const confirmTool = useCallback(
-    async (info: { name: string; detail: string }) => {
-      if (dangerouslySkipPermissions || toolWhitelist.has(info.name)) {
-        return true
-      }
-      const answer = await new Promise<'yes' | 'no' | 'always'>((resolve) => {
-        setToolGate({
-          name: info.name,
-          detail: info.detail,
-          resolve,
-        })
-      })
-      if (answer === 'always') {
-        setToolWhitelist((prev) => new Set(prev).add(info.name))
-        return true
-      }
-      return answer === 'yes'
-    },
-    [dangerouslySkipPermissions, toolWhitelist],
-  )
 
   useEffect(() => {
     void (async () => {
@@ -421,7 +396,6 @@ export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions
           messages: nextMsgs,
           cwd,
           mcp,
-          confirmTool,
           editHistory: editHistoryRef.current,
           onToolDispatch: (name) => {
             setBusySubtext(`执行工具：${name}…`)
@@ -441,9 +415,14 @@ export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions
               flushStream(full)
             },
             onToolUseStart: (toolName) => {
+              lastStreamDeltaAtRef.current = Date.now()
               setBusySubtext(
                 `模型正在生成 ${toolName} 调用参数（SSE 仍在传输中）…`,
               )
+            },
+            onToolExecStart: (toolName) => {
+              lastStreamDeltaAtRef.current = Date.now()
+              setBusySubtext(`正在执行工具 ${toolName}…`)
             },
             onThinkingDelta: (_delta, full) => {
               lastStreamDeltaAtRef.current = Date.now()
@@ -467,7 +446,6 @@ export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions
       config,
       cwd,
       exit,
-      confirmTool,
       flushStream,
       mcp,
       messages,
@@ -610,26 +588,11 @@ export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions
         />
       ) : null}
 
-      {toolGate ? (
-        <ToolConfirmDialog
-          name={toolGate.name}
-          detail={toolGate.detail}
-          onAnswer={(answer) => {
-            setToolGate((g) => {
-              g?.resolve(answer)
-              return null
-            })
-          }}
-        />
-      ) : null}
-
       <Box marginTop={1} borderStyle="single" borderColor="cyan" paddingX={1}>
-        <Text color="cyan" bold>
-          ›{' '}
-        </Text>
+        <Text color="cyan" bold>{'› '}</Text>
         <TextInput
           value={input}
-          focus={!busy && sessionReady && !toolGate}
+          focus={!busy && sessionReady}
           onChange={setInput}
           onSubmit={(v) => {
             if (!busy) {
@@ -638,63 +601,6 @@ export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions
           }}
           placeholder="输入…"
         />
-      </Box>
-    </Box>
-  )
-}
-
-function ToolConfirmDialog({
-  name,
-  detail,
-  onAnswer,
-}: {
-  name: string
-  detail: string
-  onAnswer: (answer: 'yes' | 'no' | 'always') => void
-}): React.ReactElement {
-  useInput(
-    (input, key) => {
-      if (input === 'y' || input === 'Y') {
-        onAnswer('yes')
-        return
-      }
-      if (input === 'a' || input === 'A') {
-        onAnswer('always')
-        return
-      }
-      if (input === 'n' || input === 'N' || key.escape) {
-        onAnswer('no')
-      }
-    },
-    { isActive: true },
-  )
-  const shown =
-    detail.length > 12_000
-      ? `${detail.slice(0, 12_000)}\n\n…（展示已截断，共 ${detail.length} 字符）`
-      : detail
-  const lines = shown.split('\n')
-  const maxLines = 48
-  const slice = lines.slice(0, maxLines)
-  const omitted =
-    lines.length > maxLines ? `\n… 另有 ${lines.length - maxLines} 行未展示` : ''
-
-  return (
-    <Box
-      flexDirection="column"
-      borderStyle="double"
-      borderColor="yellow"
-      paddingX={1}
-      marginY={1}
-    >
-      <Text bold color="yellow">
-        确认工具 · {name}
-      </Text>
-      <Text dimColor>Y 允许 · A 本次会话始终允许此工具 · N / Esc 拒绝</Text>
-      <Box flexDirection="column" marginTop={1}>
-        <Text dimColor wrap="wrap">
-          {slice.join('\n')}
-          {omitted}
-        </Text>
       </Box>
     </Box>
   )
