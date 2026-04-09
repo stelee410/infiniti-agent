@@ -1,7 +1,8 @@
 import { existsSync } from 'fs'
 import { mkdir, readFile, writeFile, chmod } from 'fs/promises'
+import { dirname } from 'path'
 import { constants } from 'fs'
-import { INFINITI_AGENT_DIR, CONFIG_PATH } from '../paths.js'
+import { GLOBAL_AGENT_DIR, GLOBAL_CONFIG_PATH, localConfigPath, localAgentDir } from '../paths.js'
 import type {
   CompactionConfig,
   InfinitiConfig,
@@ -17,18 +18,31 @@ export class ConfigError extends Error {
   }
 }
 
-export async function ensureInfinitiDir(): Promise<void> {
-  await mkdir(INFINITI_AGENT_DIR, { recursive: true, mode: 0o700 })
+export async function ensureLocalAgentDir(cwd: string): Promise<void> {
+  await mkdir(localAgentDir(cwd), { recursive: true })
 }
 
-export function configExistsSync(): boolean {
-  return existsSync(CONFIG_PATH)
+export async function ensureGlobalDir(): Promise<void> {
+  await mkdir(GLOBAL_AGENT_DIR, { recursive: true, mode: 0o700 })
 }
 
-export async function loadConfig(): Promise<InfinitiConfig> {
+/** 本地 .infiniti-agent/config.json 优先，全局 ~/.infiniti-agent/config.json fallback */
+export function configExistsSync(cwd?: string): boolean {
+  if (cwd && existsSync(localConfigPath(cwd))) return true
+  return existsSync(GLOBAL_CONFIG_PATH)
+}
+
+/** 解析出实际使用的 config 文件路径 */
+function resolveConfigPath(cwd?: string): string {
+  if (cwd && existsSync(localConfigPath(cwd))) return localConfigPath(cwd)
+  return GLOBAL_CONFIG_PATH
+}
+
+export async function loadConfig(cwd?: string): Promise<InfinitiConfig> {
+  const cfgPath = resolveConfigPath(cwd)
   let raw: string
   try {
-    raw = await readFile(CONFIG_PATH, 'utf8')
+    raw = await readFile(cfgPath, 'utf8')
   } catch (e: unknown) {
     const err = e as NodeJS.ErrnoException
     if (err.code === 'ENOENT') {
@@ -129,7 +143,7 @@ export async function saveConfig(partial: {
   model: string
   apiKey: string
 }): Promise<void> {
-  await ensureInfinitiDir()
+  await ensureGlobalDir()
   const defaults = PROVIDER_DEFAULTS[partial.provider]
   let existing: InfinitiConfig | null = null
   try {
@@ -145,21 +159,16 @@ export async function saveConfig(partial: {
       model: partial.model.trim() || defaults.model,
       apiKey: partial.apiKey.trim(),
     },
-    skills: existing?.skills ?? {
-      directories: ['~/.infiniti-agent/skills'],
-    },
     mcp: existing?.mcp ?? {
       servers: {},
     },
     ...(existing?.compaction ? { compaction: existing.compaction } : {}),
   }
-  await writeFile(
-    CONFIG_PATH,
-    `${JSON.stringify(cfg, null, 2)}\n`,
-    'utf8',
-  )
+  const target = GLOBAL_CONFIG_PATH
+  await mkdir(dirname(target), { recursive: true })
+  await writeFile(target, `${JSON.stringify(cfg, null, 2)}\n`, 'utf8')
   try {
-    await chmod(CONFIG_PATH, constants.S_IRUSR | constants.S_IWUSR)
+    await chmod(target, constants.S_IRUSR | constants.S_IWUSR)
   } catch {
     /* Windows 等环境可能不支持 chmod */
   }

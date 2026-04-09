@@ -1,5 +1,6 @@
-import { appendFile } from 'node:fs/promises'
-import { ensureInfinitiDir } from './config/io.js'
+import { appendFile, mkdir } from 'node:fs/promises'
+import { dirname } from 'node:path'
+import { ensureLocalAgentDir } from './config/io.js'
 import type { InfinitiConfig } from './config/types.js'
 import { readMemoryForPrompt } from './memory/store.js'
 import { McpManager } from './mcp/manager.js'
@@ -8,18 +9,18 @@ import { runToolLoop } from './llm/runLoop.js'
 import type { PersistedMessage } from './llm/persisted.js'
 import { loadSession, saveSession } from './session/file.js'
 import { EditHistory } from './session/editHistory.js'
-import { loadSkillsForConfig, skillsToSystemBlock } from './skills/loader.js'
-import { ERROR_LOG_PATH } from './paths.js'
+import { loadSkillsForCwd, skillsToSystemBlock } from './skills/loader.js'
+import { localErrorLogPath } from './paths.js'
 import { formatChatError } from './utils/formatError.js'
 
 async function buildCliSystem(config: InfinitiConfig, cwd: string): Promise<string> {
-  const mem = await readMemoryForPrompt()
-  const skills = await loadSkillsForConfig(config)
+  const mem = await readMemoryForPrompt(cwd)
+  const skills = await loadSkillsForCwd(cwd)
   const docs = await loadAgentPromptDocs(cwd)
   const skillBlock = skillsToSystemBlock(skills)
   const parts = [buildAgentSystemPrompt(docs)]
   if (mem.trim()) {
-    parts.push(`## 长期记忆（来自 ~/.infiniti-agent/memory.md）\n\n${mem}`)
+    parts.push(`## 长期记忆（来自 .infiniti-agent/memory.md）\n\n${mem}`)
   }
   if (skillBlock.trim()) {
     parts.push(skillBlock)
@@ -27,12 +28,14 @@ async function buildCliSystem(config: InfinitiConfig, cwd: string): Promise<stri
   return parts.join('\n\n')
 }
 
-async function appendCliErrorLog(e: unknown): Promise<void> {
-  await ensureInfinitiDir()
+async function appendCliErrorLog(cwd: string, e: unknown): Promise<void> {
+  await ensureLocalAgentDir(cwd)
+  const logPath = localErrorLogPath(cwd)
+  await mkdir(dirname(logPath), { recursive: true })
   const msg = formatChatError(e)
   const stack = e instanceof Error && e.stack ? `\n${e.stack}` : ''
-  const line = `[${new Date().toISOString()}] --cli\n${msg}${stack}\n\n`
-  await appendFile(ERROR_LOG_PATH, line, 'utf8')
+  const line = `[${new Date().toISOString()}] cli\n${msg}${stack}\n\n`
+  await appendFile(logPath, line, 'utf8')
 }
 
 /**
@@ -87,11 +90,11 @@ export async function runCliPrompt(
     await saveSession(cwd, out)
     process.stdout.write('\n')
   } catch (e: unknown) {
-    await appendCliErrorLog(e).catch(() => {
+    await appendCliErrorLog(cwd, e).catch(() => {
       /* 日志写入失败时仍尽量退出 */
     })
     console.error(
-      `执行失败：${formatChatError(e)}（完整信息已写入 ${ERROR_LOG_PATH}）`,
+      `执行失败：${formatChatError(e)}（完整信息已写入 ${localErrorLogPath(cwd)}）`,
     )
     exitCode = 1
   } finally {

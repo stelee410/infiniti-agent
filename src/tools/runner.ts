@@ -259,7 +259,7 @@ export async function runBuiltinTool(
     if (!body.trim()) {
       return JSON.stringify({ ok: false, error: 'body 不能为空' })
     }
-    await appendMemoryEntry({
+    await appendMemoryEntry(ctx.sessionCwd, {
       title: args.title != null ? String(args.title) : undefined,
       body,
     })

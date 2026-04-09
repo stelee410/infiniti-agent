@@ -1,11 +1,11 @@
 import { mkdir, readFile, writeFile } from 'fs/promises'
 import { dirname } from 'path'
-import { sessionPathForCwd } from '../paths.js'
+import { localSessionPath } from '../paths.js'
 import type { PersistedMessage } from '../llm/persisted.js'
 import type { SessionFileV1 } from '../llm/persisted.js'
 
 export async function loadSession(cwd: string): Promise<SessionFileV1 | null> {
-  const sessionPath = sessionPathForCwd(cwd)
+  const sessionPath = localSessionPath(cwd)
   try {
     const raw = await readFile(sessionPath, 'utf8')
     const parsed = JSON.parse(raw) as SessionFileV1
@@ -26,7 +26,7 @@ export async function saveSession(
   cwd: string,
   messages: PersistedMessage[],
 ): Promise<void> {
-  const sessionPath = sessionPathForCwd(cwd)
+  const sessionPath = localSessionPath(cwd)
   await mkdir(dirname(sessionPath), { recursive: true })
   const data: SessionFileV1 = {
     version: 1,

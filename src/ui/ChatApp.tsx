@@ -4,7 +4,7 @@ import { Box, Text, useApp, useInput } from 'ink'
 import TextInput from 'ink-text-input'
 import chokidar from 'chokidar'
 import type { InfinitiConfig } from '../config/types.js'
-import { loadSkillsForConfig, skillsToSystemBlock } from '../skills/loader.js'
+import { loadSkillsForCwd, skillsToSystemBlock } from '../skills/loader.js'
 import { readMemoryForPrompt } from '../memory/store.js'
 import {
   loadAgentPromptDocs,
@@ -16,7 +16,7 @@ import { estimateMessagesTokens } from '../llm/estimateTokens.js'
 import { runToolLoop } from '../llm/runLoop.js'
 import type { PersistedMessage } from '../llm/persisted.js'
 import { saveSession, loadSession } from '../session/file.js'
-import { SKILLS_DIR } from '../paths.js'
+import { localSkillsDir } from '../paths.js'
 import type { McpManager } from '../mcp/manager.js'
 import { loadConfig } from '../config/io.js'
 import { formatChatError } from '../utils/formatError.js'
@@ -166,7 +166,7 @@ export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions
   }, [])
 
   useEffect(() => {
-    const w = chokidar.watch(SKILLS_DIR, {
+    const w = chokidar.watch(localSkillsDir(cwd), {
       ignoreInitial: true,
       persistent: true,
     })
@@ -177,7 +177,7 @@ export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions
     return () => {
       void w.close()
     }
-  }, [])
+  }, [cwd])
 
   useEffect(() => {
     const paths = [
@@ -202,15 +202,15 @@ export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions
   }, [cwd])
 
   const buildSystem = useCallback(async (): Promise<string> => {
-    const mem = await readMemoryForPrompt()
-    const skills = await loadSkillsForConfig(config)
+    const mem = await readMemoryForPrompt(cwd)
+    const skills = await loadSkillsForCwd(cwd)
     void skillsEpoch
     void promptEpoch
     const docs = await loadAgentPromptDocs(cwd)
     const skillBlock = skillsToSystemBlock(skills)
     const parts = [buildAgentSystemPrompt(docs)]
     if (mem.trim()) {
-      parts.push(`## 长期记忆（来自 ~/.infiniti-agent/memory.md）\n\n${mem}`)
+      parts.push(`## 长期记忆（来自 .infiniti-agent/memory.md）\n\n${mem}`)
     }
     if (skillBlock.trim()) {
       parts.push(skillBlock)
@@ -220,7 +220,7 @@ export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions
 
   const reloadAll = useCallback(async () => {
     try {
-      const next = await loadConfig()
+      const next = await loadConfig(cwd)
       setConfig(next)
       await mcp.stop()
       await mcp.start(next)

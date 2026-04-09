@@ -1,7 +1,6 @@
 import { readdir, readFile, stat } from 'fs/promises'
 import { join } from 'path'
-import { SKILLS_DIR, expandUserPath } from '../paths.js'
-import type { InfinitiConfig } from '../config/types.js'
+import { localSkillsDir, expandUserPath } from '../paths.js'
 
 export type LoadedSkill = {
   id: string
@@ -59,14 +58,8 @@ export async function loadSkillsFromDirs(
   return out
 }
 
-export async function loadSkillsForConfig(
-  cfg: InfinitiConfig | null,
-): Promise<LoadedSkill[]> {
-  const dirs =
-    cfg?.skills?.directories?.length
-      ? cfg.skills.directories
-      : [SKILLS_DIR]
-  return loadSkillsFromDirs(dirs)
+export async function loadSkillsForCwd(cwd: string): Promise<LoadedSkill[]> {
+  return loadSkillsFromDirs([localSkillsDir(cwd)])
 }
 
 export function skillsToSystemBlock(skills: LoadedSkill[]): string {

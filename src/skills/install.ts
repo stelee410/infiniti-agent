@@ -1,8 +1,7 @@
 import { mkdir, cp, readdir, rm } from 'fs/promises'
 import { join, basename } from 'path'
 import { spawn } from 'child_process'
-import { SKILLS_DIR } from '../paths.js'
-import { ensureInfinitiDir } from '../config/io.js'
+import { localSkillsDir, localAgentDir } from '../paths.js'
 
 function runGit(args: string[], cwd?: string): Promise<number | null> {
   return new Promise((resolve, reject) => {
@@ -26,10 +25,10 @@ function inferNameFromGitUrl(url: string): string {
   }
 }
 
-export async function installSkillFromGit(url: string): Promise<string> {
-  await ensureInfinitiDir()
-  await mkdir(SKILLS_DIR, { recursive: true, mode: 0o700 })
-  const tmp = join(SKILLS_DIR, `.tmp-${Date.now()}`)
+export async function installSkillFromGit(cwd: string, url: string): Promise<string> {
+  const skillsDir = localSkillsDir(cwd)
+  await mkdir(skillsDir, { recursive: true })
+  const tmp = join(localAgentDir(cwd), `.tmp-${Date.now()}`)
   await mkdir(tmp, { recursive: true })
   const code = await runGit(['clone', '--depth', '1', url, 'repo'], tmp)
   if (code !== 0) {
@@ -40,7 +39,7 @@ export async function installSkillFromGit(url: string): Promise<string> {
   const entries = await readdir(repoDir, { withFileTypes: true })
   const hasSkillMd = entries.some((e) => e.isFile() && e.name === 'SKILL.md')
   const targetName = inferNameFromGitUrl(url)
-  const dest = join(SKILLS_DIR, targetName)
+  const dest = join(skillsDir, targetName)
   await cp(repoDir, dest, { recursive: true, force: true })
   await rm(tmp, { recursive: true, force: true }).catch(() => {})
   if (!hasSkillMd) {
@@ -49,12 +48,12 @@ export async function installSkillFromGit(url: string): Promise<string> {
   return dest
 }
 
-export async function installSkillFromPath(localPath: string): Promise<string> {
-  await ensureInfinitiDir()
-  await mkdir(SKILLS_DIR, { recursive: true, mode: 0o700 })
+export async function installSkillFromPath(cwd: string, localPath: string): Promise<string> {
+  const skillsDir = localSkillsDir(cwd)
+  await mkdir(skillsDir, { recursive: true })
   const src = localPath.trim()
   const name = basename(src).replace(/[^a-zA-Z0-9._-]+/g, '_') || 'skill'
-  const dest = join(SKILLS_DIR, name)
+  const dest = join(skillsDir, name)
   await cp(src, dest, { recursive: true, force: true })
   return dest
 }

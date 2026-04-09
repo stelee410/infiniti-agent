@@ -3,15 +3,28 @@ import React from 'react'
 import { render } from 'ink'
 import { Command } from 'commander'
 import { existsSync } from 'fs'
-import { configExistsSync, loadConfig, ensureInfinitiDir } from './config/io.js'
+import { cp, mkdir } from 'fs/promises'
+import { configExistsSync, loadConfig, ensureLocalAgentDir } from './config/io.js'
 import { InitWizard } from './ui/InitWizard.js'
 import { ChatWithSplash } from './ui/ChatWithSplash.js'
 import { McpManager } from './mcp/manager.js'
 import { installSkillFromGit, installSkillFromPath } from './skills/install.js'
-import { loadSkillsFromDirs } from './skills/loader.js'
-import { SKILLS_DIR, expandUserPath } from './paths.js'
+import { loadSkillsForCwd } from './skills/loader.js'
+import {
+  expandUserPath,
+  localAgentDir,
+  localSkillsDir,
+  GLOBAL_AGENT_DIR,
+  GLOBAL_CONFIG_PATH,
+  GLOBAL_SKILLS_DIR,
+  GLOBAL_MEMORY_PATH,
+  localConfigPath,
+  localMemoryPath,
+} from './paths.js'
 import { runCliPrompt } from './runCliPrompt.js'
 import { readPackageVersion } from './packageRoot.js'
+
+const cwd = process.cwd()
 
 function applyThinkingOverride(cfg: Awaited<ReturnType<typeof loadConfig>>, disable: boolean): Awaited<ReturnType<typeof loadConfig>> {
   if (!disable) return cfg
@@ -19,14 +32,14 @@ function applyThinkingOverride(cfg: Awaited<ReturnType<typeof loadConfig>>, disa
 }
 
 async function runChatTui(opts: { skipPermissions?: boolean; disableThinking?: boolean } = {}): Promise<void> {
-  if (!configExistsSync()) {
+  if (!configExistsSync(cwd)) {
     const { waitUntilExit } = render(<InitWizard />)
     await waitUntilExit()
     return
   }
   let cfg
   try {
-    cfg = applyThinkingOverride(await loadConfig(), opts.disableThinking ?? false)
+    cfg = applyThinkingOverride(await loadConfig(cwd), opts.disableThinking ?? false)
   } catch (e) {
     console.error((e as Error).message)
     const { waitUntilExit } = render(<InitWizard />)
@@ -76,12 +89,12 @@ async function main(): Promise<void> {
       console.error('用法: infiniti-agent cli <prompt>（多词无需引号）')
       process.exit(2)
     }
-    if (!configExistsSync()) {
-      console.error('尚未配置。请先运行: infiniti-agent init')
+    if (!configExistsSync(cwd)) {
+      console.error('尚未配置。请先运行: infiniti-agent init 或 infiniti-agent migrate')
       process.exit(2)
     }
     try {
-      const cfg = applyThinkingOverride(await loadConfig(), disableThinking)
+      const cfg = applyThinkingOverride(await loadConfig(cwd), disableThinking)
       await runCliPrompt(cfg, prompt)
     } catch (e) {
       console.error((e as Error).message)
@@ -98,16 +111,53 @@ async function main(): Promise<void> {
   program
     .name('infiniti-agent')
     .description(
-      'LinkYun Infiniti Agent — React + Ink TUI。非交互一轮：infiniti-agent cli <prompt>。加 --disable-thinking 禁用深度思考。加 --dangerously-skip-permissions 跳过安全评估。加 --debug 输出 meta-agent 日志到 stderr。',
+      'LinkYun Infiniti Agent — 项目级智能体框架。数据存储在当前目录 .infiniti-agent/ 下。首次使用请运行 infiniti-agent migrate 从全局配置初始化。',
     )
     .version(readPackageVersion())
 
   program
     .command('init')
-    .description('配置 LLM（provider / base URL / model / api key）')
+    .description('配置 LLM（provider / base URL / model / api key），写入全局 ~/.infiniti-agent/config.json')
     .action(async () => {
       const { waitUntilExit } = render(<InitWizard />)
       await waitUntilExit()
+    })
+
+  program
+    .command('migrate')
+    .description('将全局 ~/.infiniti-agent/ 配置复制到当前目录 .infiniti-agent/，实现项目级独立')
+    .action(async () => {
+      const localDir = localAgentDir(cwd)
+      await mkdir(localDir, { recursive: true })
+      let copied = 0
+
+      if (existsSync(GLOBAL_CONFIG_PATH) && !existsSync(localConfigPath(cwd))) {
+        await cp(GLOBAL_CONFIG_PATH, localConfigPath(cwd))
+        console.log(`✓ config.json → ${localConfigPath(cwd)}`)
+        copied++
+      }
+
+      if (existsSync(GLOBAL_MEMORY_PATH) && !existsSync(localMemoryPath(cwd))) {
+        await cp(GLOBAL_MEMORY_PATH, localMemoryPath(cwd))
+        console.log(`✓ memory.md → ${localMemoryPath(cwd)}`)
+        copied++
+      }
+
+      if (existsSync(GLOBAL_SKILLS_DIR)) {
+        const localSkills = localSkillsDir(cwd)
+        if (!existsSync(localSkills)) {
+          await cp(GLOBAL_SKILLS_DIR, localSkills, { recursive: true })
+          console.log(`✓ skills/ → ${localSkills}`)
+          copied++
+        }
+      }
+
+      if (copied === 0) {
+        console.log('无需迁移（本地已存在或全局无配置）。如需首次配置请运行: infiniti-agent init')
+      } else {
+        console.log(`\n已迁移 ${copied} 项到 ${localDir}`)
+        console.log('后续所有 session、memory、skills 均在此目录下独立运行。')
+      }
     })
 
   program
@@ -127,12 +177,12 @@ async function main(): Promise<void> {
         console.error('用法: infiniti-agent cli <prompt>')
         process.exit(2)
       }
-      if (!configExistsSync()) {
-        console.error('尚未配置。请先运行: infiniti-agent init')
+      if (!configExistsSync(cwd)) {
+        console.error('尚未配置。请先运行: infiniti-agent init 或 infiniti-agent migrate')
         process.exit(2)
       }
       try {
-        const cfg = applyThinkingOverride(await loadConfig(), disableThinking)
+        const cfg = applyThinkingOverride(await loadConfig(cwd), disableThinking)
         await runCliPrompt(cfg, prompt)
       } catch (e) {
         console.error((e as Error).message)
@@ -140,16 +190,16 @@ async function main(): Promise<void> {
       }
     })
 
-  const skill = program.command('skill').description('第三方 Skills')
+  const skill = program.command('skill').description('当前项目的 Skills（存储在 .infiniti-agent/skills/）')
 
   const installSkillAction = async (source: string) => {
-    await ensureInfinitiDir()
+    await ensureLocalAgentDir(cwd)
     const s = source.trim()
     let dest: string
     if (/^https?:\/\//i.test(s) || s.startsWith('git@')) {
-      dest = await installSkillFromGit(s)
+      dest = await installSkillFromGit(cwd, s)
     } else if (/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(s)) {
-      dest = await installSkillFromGit(`https://github.com/${s}.git`)
+      dest = await installSkillFromGit(cwd, `https://github.com/${s}.git`)
     } else {
       const p = expandUserPath(s)
       if (!existsSync(p)) {
@@ -157,7 +207,7 @@ async function main(): Promise<void> {
         process.exitCode = 1
         return
       }
-      dest = await installSkillFromPath(p)
+      dest = await installSkillFromPath(cwd, p)
     }
     console.log(dest)
   }
@@ -174,9 +224,9 @@ async function main(): Promise<void> {
 
   skill
     .command('list')
-    .description('列出 ~/.infiniti-agent/skills 下的 Skills（需含 SKILL.md）')
+    .description('列出当前项目已安装的 Skills')
     .action(async () => {
-      const skills = await loadSkillsFromDirs([SKILLS_DIR])
+      const skills = await loadSkillsForCwd(cwd)
       if (!skills.length) {
         console.log('(暂无)')
         return

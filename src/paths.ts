@@ -1,19 +1,38 @@
-import { createHash } from 'crypto'
 import { homedir } from 'os'
-import { basename, join } from 'path'
+import { join } from 'path'
 
-export const INFINITI_AGENT_DIR = join(homedir(), '.infiniti-agent')
-export const CONFIG_PATH = join(INFINITI_AGENT_DIR, 'config.json')
-export const MEMORY_PATH = join(INFINITI_AGENT_DIR, 'memory.md')
-export const SKILLS_DIR = join(INFINITI_AGENT_DIR, 'skills')
-export const SESSIONS_DIR = join(INFINITI_AGENT_DIR, 'sessions')
-export const ERROR_LOG_PATH = join(INFINITI_AGENT_DIR, 'error.log')
+/** 全局共享目录（config fallback、migrate 来源） */
+export const GLOBAL_AGENT_DIR = join(homedir(), '.infiniti-agent')
+export const GLOBAL_CONFIG_PATH = join(GLOBAL_AGENT_DIR, 'config.json')
+export const GLOBAL_SKILLS_DIR = join(GLOBAL_AGENT_DIR, 'skills')
+export const GLOBAL_MEMORY_PATH = join(GLOBAL_AGENT_DIR, 'memory.md')
 
-/** 按工作目录隔离的 session 文件路径 */
-export function sessionPathForCwd(cwd: string): string {
-  const hash = createHash('md5').update(cwd).digest('hex').slice(0, 8)
-  const name = basename(cwd).replace(/[^a-zA-Z0-9_-]/g, '_')
-  return join(SESSIONS_DIR, `${name}-${hash}.json`)
+/** 项目级本地目录名 */
+const LOCAL_DIR_NAME = '.infiniti-agent'
+
+/** 项目级 .infiniti-agent/ 根目录 */
+export function localAgentDir(cwd: string): string {
+  return join(cwd, LOCAL_DIR_NAME)
+}
+
+export function localConfigPath(cwd: string): string {
+  return join(cwd, LOCAL_DIR_NAME, 'config.json')
+}
+
+export function localSkillsDir(cwd: string): string {
+  return join(cwd, LOCAL_DIR_NAME, 'skills')
+}
+
+export function localSessionPath(cwd: string): string {
+  return join(cwd, LOCAL_DIR_NAME, 'session.json')
+}
+
+export function localMemoryPath(cwd: string): string {
+  return join(cwd, LOCAL_DIR_NAME, 'memory.md')
+}
+
+export function localErrorLogPath(cwd: string): string {
+  return join(cwd, LOCAL_DIR_NAME, 'error.log')
 }
 
 export function expandUserPath(p: string): string {
