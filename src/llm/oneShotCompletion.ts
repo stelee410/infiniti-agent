@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import OpenAI from 'openai'
 import { GoogleGenerativeAI } from '@google/generative-ai'
 import type { InfinitiConfig } from '../config/types.js'
+import { resolveLlmProfile } from '../config/types.js'
 
 const ONESHOT_TIMEOUT_MS = 120_000
 const ONESHOT_MAX_RETRIES = 1
@@ -33,25 +34,27 @@ export type OneShotParams = {
   system: string
   user: string
   maxOutTokens?: number
+  /** 指定使用哪个 LLM profile（不传则用 default） */
+  profile?: string
 }
 
-/** 无工具、无流式的单次补全（用于会话压缩摘要） */
+/** 无工具、无流式的单次补全（用于会话压缩、meta-agent 等） */
 export async function oneShotTextCompletion(
   opts: OneShotParams,
 ): Promise<string> {
   const maxOut = Math.min(8192, Math.max(256, opts.maxOutTokens ?? 4096))
-  const { config } = opts
+  const llm = resolveLlmProfile(opts.config, opts.profile)
 
-  if (config.llm.provider === 'anthropic') {
+  if (llm.provider === 'anthropic') {
     const client = new Anthropic({
-      apiKey: config.llm.apiKey,
-      baseURL: normalizeBaseUrl(config.llm.baseUrl),
+      apiKey: llm.apiKey,
+      baseURL: normalizeBaseUrl(llm.baseUrl),
       timeout: ONESHOT_TIMEOUT_MS,
       maxRetries: ONESHOT_MAX_RETRIES,
     })
     const msg = await withDeadline(
       client.messages.create({
-        model: config.llm.model,
+        model: llm.model,
         max_tokens: maxOut,
         system: opts.system,
         messages: [{ role: 'user', content: opts.user }],
@@ -68,16 +71,16 @@ export async function oneShotTextCompletion(
     return parts.join('\n').trim()
   }
 
-  if (config.llm.provider === 'openai') {
+  if (llm.provider === 'openai') {
     const client = new OpenAI({
-      apiKey: config.llm.apiKey,
-      baseURL: normalizeBaseUrl(config.llm.baseUrl),
+      apiKey: llm.apiKey,
+      baseURL: normalizeBaseUrl(llm.baseUrl),
       timeout: ONESHOT_TIMEOUT_MS,
       maxRetries: ONESHOT_MAX_RETRIES,
     })
     const res = await withDeadline(
       client.chat.completions.create({
-        model: config.llm.model,
+        model: llm.model,
         max_tokens: maxOut,
         messages: [
           { role: 'system', content: opts.system },
@@ -91,10 +94,10 @@ export async function oneShotTextCompletion(
     return typeof t === 'string' ? t.trim() : ''
   }
 
-  if (config.llm.provider === 'gemini') {
-    const genAI = new GoogleGenerativeAI(config.llm.apiKey)
+  if (llm.provider === 'gemini') {
+    const genAI = new GoogleGenerativeAI(llm.apiKey)
     const model = genAI.getGenerativeModel({
-      model: config.llm.model,
+      model: llm.model,
       systemInstruction: opts.system,
     })
     const result = await withDeadline(
@@ -105,6 +108,6 @@ export async function oneShotTextCompletion(
     return result.response.text().trim()
   }
 
-  const _: never = config.llm.provider
+  const _: never = llm.provider
   throw new Error(`未知 provider: ${String(_)}`)
 }

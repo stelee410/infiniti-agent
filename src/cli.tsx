@@ -4,7 +4,7 @@ import { render } from 'ink'
 import { Command } from 'commander'
 import { existsSync } from 'fs'
 import { cp, mkdir } from 'fs/promises'
-import { configExistsSync, loadConfig, ensureLocalAgentDir } from './config/io.js'
+import { configExistsSync, loadConfig, ensureLocalAgentDir, upgradeConfig } from './config/io.js'
 import { InitWizard } from './ui/InitWizard.js'
 import { ChatWithSplash } from './ui/ChatWithSplash.js'
 import { McpManager } from './mcp/manager.js'
@@ -157,6 +157,48 @@ async function main(): Promise<void> {
       } else {
         console.log(`\n已迁移 ${copied} 项到 ${localDir}`)
         console.log('后续所有 session、memory、skills 均在此目录下独立运行。')
+      }
+    })
+
+  program
+    .command('upgrade')
+    .description('升级 config.json 到最新格式（旧平铺 llm → profiles，移除废弃字段）')
+    .option('--global', '升级全局 ~/.infiniti-agent/config.json（默认升级当前目录的）')
+    .action(async (cmdOpts: { global?: boolean }) => {
+      const targets: string[] = []
+      const localCfg = localConfigPath(cwd)
+      const globalCfg = GLOBAL_CONFIG_PATH
+
+      if (cmdOpts.global) {
+        if (existsSync(globalCfg)) targets.push(globalCfg)
+        else {
+          console.log(`全局配置不存在: ${globalCfg}`)
+          return
+        }
+      } else {
+        if (existsSync(localCfg)) targets.push(localCfg)
+        if (existsSync(globalCfg)) targets.push(globalCfg)
+      }
+
+      if (!targets.length) {
+        console.log('未找到任何 config.json。请先运行: infiniti-agent init')
+        return
+      }
+
+      for (const target of targets) {
+        try {
+          const result = await upgradeConfig(target)
+          if (result.changed) {
+            console.log(`\n✓ 已升级: ${target}`)
+            for (const c of result.changes) {
+              console.log(`  - ${c}`)
+            }
+          } else {
+            console.log(`✓ ${target} — 已是最新格式，无需升级`)
+          }
+        } catch (e) {
+          console.error(`✗ ${target}: ${(e as Error).message}`)
+        }
       }
     })
 

@@ -124,6 +124,7 @@ async function llmEvaluate(
       system: GATE_SYSTEM,
       user: userPrompt,
       maxOutTokens: 256,
+      profile: 'gate',
     })
 
     agentDebug('[meta-agent] llm raw:', JSON.stringify(raw.slice(0, 300)))

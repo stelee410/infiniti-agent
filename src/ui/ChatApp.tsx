@@ -463,7 +463,9 @@ export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions
     config.llm.provider === 'anthropic' && (config.thinking?.mode ?? 'adaptive') !== 'disabled'
       ? ` · think:${config.thinking?.mode ?? 'adaptive'}`
       : ''
-  const meta = `${config.llm.provider} · ${config.llm.model}${thinkLabel}${permLabel}`
+  const profileCount = config.llm.profiles ? Object.keys(config.llm.profiles).length : 0
+  const profileLabel = profileCount > 1 ? ` · ${profileCount} profiles` : ''
+  const meta = `${config.llm.provider} · ${config.llm.model}${thinkLabel}${profileLabel}${permLabel}`
 
   return (
     <Box flexDirection="column" width="100%" paddingX={1}>

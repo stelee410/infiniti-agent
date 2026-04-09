@@ -1,7 +1,8 @@
 import Anthropic from '@anthropic-ai/sdk'
 import OpenAI from 'openai'
 import { GoogleGenerativeAI } from '@google/generative-ai'
-import type { InfinitiConfig, ThinkingConfig } from '../config/types.js'
+import type { InfinitiConfig, LlmProfile, ThinkingConfig } from '../config/types.js'
+import { resolveLlmProfile } from '../config/types.js'
 import { BUILTIN_TOOLS } from '../tools/definitions.js'
 import type { BuiltinToolName } from '../tools/definitions.js'
 import { runBuiltinTool } from '../tools/runner.js'
@@ -67,7 +68,8 @@ export type RunLoopOptions = {
 export async function runToolLoop(opts: RunLoopOptions): Promise<{
   messages: PersistedMessage[]
 }> {
-  agentDebug('runToolLoop start', opts.config.llm.provider, opts.config.llm.model)
+  const llm = resolveLlmProfile(opts.config)
+  agentDebug('runToolLoop start', llm.provider, llm.model)
   const tools: AgentToolSpec[] = [
     ...BUILTIN_TOOLS.map((t) => ({
       name: t.name,
@@ -122,15 +124,15 @@ export async function runToolLoop(opts: RunLoopOptions): Promise<{
     return opts.mcp.call(name, argsJson)
   }
 
-  switch (opts.config.llm.provider) {
+  switch (llm.provider) {
     case 'anthropic':
-      return runAnthropic(opts, tools, dispatch)
+      return runAnthropic(opts, llm, tools, dispatch)
     case 'openai':
-      return runOpenAI(opts, tools, dispatch)
+      return runOpenAI(opts, llm, tools, dispatch)
     case 'gemini':
-      return runGemini(opts, tools, dispatch)
+      return runGemini(opts, llm, tools, dispatch)
     default: {
-      const _: never = opts.config.llm.provider
+      const _: never = llm.provider
       throw new Error(`未知 provider: ${String(_)}`)
     }
   }
@@ -228,12 +230,13 @@ const DEFAULT_MAX_TOKENS = 8192
  */
 async function runAnthropic(
   opts: RunLoopOptions,
+  llm: LlmProfile,
   tools: AgentToolSpec[],
   dispatch: (name: string, argsJson: string) => Promise<string>,
 ): Promise<{ messages: PersistedMessage[] }> {
   const client = new Anthropic({
-    apiKey: opts.config.llm.apiKey,
-    baseURL: normalizeBaseUrl(opts.config.llm.baseUrl),
+    apiKey: llm.apiKey,
+    baseURL: normalizeBaseUrl(llm.baseUrl),
     timeout: LLM_TIMEOUT_MS,
     maxRetries: LLM_MAX_RETRIES,
   })
@@ -254,7 +257,7 @@ async function runAnthropic(
     opts.stream?.onStreamReset?.()
 
     const stream = client.messages.stream({
-      model: opts.config.llm.model,
+      model: llm.model,
       max_tokens: maxTokens,
       system: opts.system,
       messages: toAnthropicMessages(working),
@@ -446,12 +449,13 @@ function toOpenAIMessages(
 
 async function runOpenAI(
   opts: RunLoopOptions,
+  llm: LlmProfile,
   tools: AgentToolSpec[],
   dispatch: (name: string, argsJson: string) => Promise<string>,
 ): Promise<{ messages: PersistedMessage[] }> {
   const client = new OpenAI({
-    apiKey: opts.config.llm.apiKey,
-    baseURL: normalizeBaseUrl(opts.config.llm.baseUrl),
+    apiKey: llm.apiKey,
+    baseURL: normalizeBaseUrl(llm.baseUrl),
     timeout: LLM_TIMEOUT_MS,
     maxRetries: LLM_MAX_RETRIES,
   })
@@ -471,7 +475,7 @@ async function runOpenAI(
     agentDebug('openai step', step, 'request stream')
     opts.stream?.onStreamReset?.()
     const streamResp = await client.chat.completions.create({
-      model: opts.config.llm.model,
+      model: llm.model,
       messages: [
         { role: 'system', content: opts.system },
         ...toOpenAIMessages(working),
@@ -639,10 +643,11 @@ function toGeminiContents(messages: PersistedMessage[]): GeminiContent[] {
 
 async function runGemini(
   opts: RunLoopOptions,
+  llm: LlmProfile,
   tools: AgentToolSpec[],
   dispatch: (name: string, argsJson: string) => Promise<string>,
 ): Promise<{ messages: PersistedMessage[] }> {
-  const genAI = new GoogleGenerativeAI(opts.config.llm.apiKey)
+  const genAI = new GoogleGenerativeAI(llm.apiKey)
   const decls = tools.map((t) => ({
     name: t.name,
     description: t.description,
@@ -650,7 +655,7 @@ async function runGemini(
   }))
 
   const model = genAI.getGenerativeModel({
-    model: opts.config.llm.model,
+    model: llm.model,
     tools: [
       {
         functionDeclarations: decls as Parameters<

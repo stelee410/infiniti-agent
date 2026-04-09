@@ -7,12 +7,14 @@ export type McpServerConfig = {
   cwd?: string
 }
 
-/**
- * ~/.infiniti-agent/config.json
- *
- * MCP 示例（可手动编辑，init 会保留已有 mcp/skills 段）：
- * `"mcp": { "servers": { "fs": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"] } } }`
- */
+/** 单个 LLM 连接配置 */
+export type LlmProfile = {
+  provider: LlmProvider
+  baseUrl: string
+  model: string
+  apiKey: string
+}
+
 /**
  * Extended thinking 模式：
  * - 'adaptive'  — 模型自行决定思考深度（推荐，Claude 4.6+ 支持）
@@ -29,22 +31,31 @@ export type ThinkingConfig = {
 }
 
 export type CompactionConfig = {
-  /**
-   * 估算 token 达到或超过此值时，在用户发话触发主循环前自动压缩历史（0 或未设置表示关闭）。
-   * token 为粗估（约 4 字符 ≈ 1 token），仅统计 messages，不含 system。
-   */
   autoThresholdTokens?: number
-  /** 压缩后至少保留的尾部消息条数（保证工具链完整），默认 16 */
   minTailMessages?: number
-  /** 写入摘要请求时，单条 tool 输出最多保留字符数，默认 4000 */
   maxToolSnippetChars?: number
-  /**
-   * Pre-compact 可执行文件路径（可相对 cwd）。
-   * stdin：UTF-8 对话节选；stdout 非空时并入摘要提示（附加约束）。
-   */
   preCompactHook?: string
 }
 
+/**
+ * 多 LLM 配置：
+ *
+ * 新格式（推荐）——在 llm.profiles 中定义多个命名配置：
+ * ```json
+ * {
+ *   "llm": {
+ *     "default": "main",
+ *     "profiles": {
+ *       "main":  { "provider": "anthropic", "baseUrl": "...", "model": "claude-sonnet-4-20250514", "apiKey": "..." },
+ *       "fast":  { "provider": "openai",    "baseUrl": "...", "model": "gpt-4.1-mini",              "apiKey": "..." },
+ *       "gate":  { "provider": "gemini",    "baseUrl": "...", "model": "gemini-2.0-flash",          "apiKey": "..." }
+ *     }
+ *   }
+ * }
+ * ```
+ *
+ * 旧格式（兼容）——平铺 provider/baseUrl/model/apiKey，等同只有一个 "default" profile。
+ */
 export type InfinitiConfig = {
   version: 1
   llm: {
@@ -52,15 +63,36 @@ export type InfinitiConfig = {
     baseUrl: string
     model: string
     apiKey: string
-  }
-  skills?: {
-    directories?: string[]
+    /** 使用新多 profile 格式时，指定默认 profile 名 */
+    default?: string
+    /** 命名 LLM 配置集合 */
+    profiles?: Record<string, LlmProfile>
   }
   mcp?: {
     servers?: Record<string, McpServerConfig>
   }
   compaction?: CompactionConfig
   thinking?: ThinkingConfig
+}
+
+/**
+ * 按 profile 名解析 LLM 配置。
+ * - 不传 profileName 或传 undefined → 使用 llm.default 指向的 profile，若无则用顶层 llm 字段
+ * - 传入具体名称 → 从 profiles 中查找，找不到时 fallback 到顶层
+ */
+export function resolveLlmProfile(config: InfinitiConfig, profileName?: string): LlmProfile {
+  const profiles = config.llm.profiles
+  const name = profileName ?? config.llm.default
+
+  if (name && profiles?.[name]) {
+    return profiles[name]
+  }
+  return {
+    provider: config.llm.provider,
+    baseUrl: config.llm.baseUrl,
+    model: config.llm.model,
+    apiKey: config.llm.apiKey,
+  }
 }
 
 export function isLlmProvider(v: string): v is LlmProvider {

@@ -212,6 +212,7 @@ export async function compactSessionMessages(
     system: COMPACT_SUMMARY_SYSTEM,
     user: userParts.join('\n'),
     maxOutTokens: 4096,
+    profile: 'compact',
   })
   if (summary.length > MAX_SUMMARY_CHARS) {
     summary = `${summary.slice(0, MAX_SUMMARY_CHARS)}\n…（摘要已截断）`
