@@ -1,6 +1,6 @@
 {
   "name": "linkyun-infiniti-agent",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "LinkYun Infiniti Agent — long-running CLI agent (Node.js, React + Ink TUI)",
   "type": "module",
   "files": [
