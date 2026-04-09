@@ -1,72 +1,190 @@
 # Infiniti Agent
 
-终端里的多模型 Agent（Anthropic / OpenAI / Gemini），React + Ink TUI，支持 MCP、Skills、会话持久化与 `--cli` 非交互模式。
+项目级 AI 智能体框架。每个目录启动的 agent 都可以拥有独立的 skills、memory 和 session，天然支持多智能体协同。
 
-## 安装
+支持 Anthropic (Claude) / OpenAI / Gemini 等多模型，可配置多个 LLM profile 用于不同场景。
 
-npm 上的**包名**为 `linkyun-infiniti-agent`（避免与保留/冲突短名 `infiniti-agent` 导致发布 E404）；安装后**命令行仍为** `infiniti-agent`。
+## 快速开始
 
 ```bash
+# 安装
 npm install -g linkyun-infiniti-agent
-```
 
-安装后可用命令：`infiniti-agent`（由 `package.json` 的 `bin` 字段注册）。
-
-## 首次配置
-
-```bash
+# 首次配置（交互式，支持一次配置多个 LLM profile）
 infiniti-agent init
-```
 
-按提示填写 `~/.infiniti-agent/config.json`（provider、模型、API Key 等）。
+# 在项目目录初始化独立实例
+cd your-project
+infiniti-agent migrate
 
-## 使用
-
-```bash
-# 进入对话界面（默认）
+# 开始对话
 infiniti-agent
-# 或
-infiniti-agent chat
-
-# 非交互执行一轮（自动批准工具，stdout 输出，更新 session）
-infiniti-agent --cli "你的提示词"
-
-# 子命令
-infiniti-agent skill list
-infiniti-agent skill install <git-url|本地路径>
 ```
 
-开发本地仓库时，参数需通过 npm 传给脚本：
+## 命令一览
+
+| 命令 | 说明 |
+|------|------|
+| `infiniti-agent` | 进入交互对话（TUI） |
+| `infiniti-agent chat` | 同上 |
+| `infiniti-agent cli <prompt>` | 非交互执行一轮，结果输出到 stdout |
+| `infiniti-agent init` | 配置 LLM（写入全局 `~/.infiniti-agent/config.json`） |
+| `infiniti-agent migrate` | 将全局配置复制到当前目录 `.infiniti-agent/`，实现项目级独立 |
+| `infiniti-agent upgrade` | 升级旧版 config.json 到最新格式 |
+| `infiniti-agent skill add <source>` | 安装 Skill（支持 `owner/repo`、git URL、本地路径） |
+| `infiniti-agent skill list` | 列出当前项目已安装的 Skills |
+
+**常用选项：**
 
 ```bash
-npm run dev:cli -- 你好
-# 或
-npm run dev -- --cli 你好
+infiniti-agent cli 查询天气 --debug              # 输出调试日志到 stderr
+infiniti-agent cli 查询天气 --disable-thinking    # 禁用深度思考模式
+infiniti-agent --dangerously-skip-permissions      # 跳过工具安全评估
 ```
 
-## 数据目录
+## 项目级独立运行
 
-配置与状态默认在 `~/.infiniti-agent/`（`config.json`、`session.json`、`memory.md`、`error.log` 等）。
+每个目录下的 `.infiniti-agent/` 是该项目的独立数据空间：
 
-## 维护者发布到 npm
+```
+your-project/
+├── .infiniti-agent/
+│   ├── config.json      # 项目级配置（不存在则 fallback 到全局）
+│   ├── session.json     # 对话历史
+│   ├── memory.md        # 长期记忆
+│   ├── skills/          # 已安装的 Skills
+│   └── error.log        # 错误日志
+├── SOUL.md              # Agent 人格定义（可选）
+├── INFINITI.md           # 项目说明 / 指令（可选）
+└── ...
+```
+
+不同目录的 agent 完全隔离——可以各自安装不同的 skills，拥有不同的 memory 和对话历史。
+
+## 自定义 Agent 行为
+
+在项目根目录创建以下文件即可定制 agent：
+
+- **`SOUL.md`** — 定义 agent 的人格、角色和行为准则
+- **`INFINITI.md`** — 项目专属指令（也兼容 `CLAUDE.md`）
+
+示例 `SOUL.md`：
+
+```markdown
+你是一个专注于 Python 后端开发的助手。
+偏好使用 FastAPI 和 SQLAlchemy。
+回复简洁，优先给出可运行的代码。
+```
+
+## 多 LLM Profile
+
+在 `config.json` 中配置多个 LLM，用于不同场景：
+
+```json
+{
+  "version": 1,
+  "llm": {
+    "default": "main",
+    "profiles": {
+      "main":    { "provider": "anthropic", "baseUrl": "https://api.anthropic.com", "model": "claude-sonnet-4-20250514", "apiKey": "sk-..." },
+      "gate":    { "provider": "gemini",    "baseUrl": "https://generativelanguage.googleapis.com/v1beta", "model": "gemini-2.0-flash", "apiKey": "AIza..." },
+      "compact": { "provider": "openai",    "baseUrl": "https://api.openai.com/v1", "model": "gpt-4.1-mini", "apiKey": "sk-..." }
+    }
+  }
+}
+```
+
+| Profile | 用途 |
+|---------|------|
+| `main`（default） | 主对话模型 |
+| `gate` | 工具安全评估（meta-agent，可用便宜快速的模型） |
+| `compact` | 会话压缩摘要 |
+
+旧格式（平铺 provider/model/apiKey）仍完全兼容，运行 `infiniti-agent upgrade` 即可自动升级。
+
+## Skills
+
+Skills 是可插拔的能力扩展，本质是 `SKILL.md` 文件注入到系统提示中：
+
+```bash
+# 从 GitHub 安装
+infiniti-agent skill add owner/repo
+
+# 从本地路径安装
+infiniti-agent skill add ./my-skill
+
+# 查看已安装
+infiniti-agent skill list
+```
+
+你也可以直接在 `.infiniti-agent/skills/my-skill/SKILL.md` 中手写 skill。
+
+## 内置工具
+
+Agent 开箱即用以下工具（无需额外配置）：
+
+- `read_file` / `write_file` / `str_replace` — 文件读写与编辑
+- `list_directory` / `glob_files` / `grep_files` — 目录浏览与搜索
+- `bash` — 执行 shell 命令
+- `http_request` — HTTP 请求
+- `update_memory` — 写入长期记忆
+
+还可以通过 MCP 服务器扩展更多工具。
+
+## 无限循环运行示例
+
+最简单的自动化 agent——用 `cli` 模式 + shell 循环持续运行：
+
+```bash
+#!/bin/bash
+# loop-agent.sh — 每 60 秒执行一轮 agent 任务
+while true; do
+  infiniti-agent cli "检查 inbox/ 目录下的新文件，处理后移到 done/"
+  sleep 60
+done
+```
+
+或用 cron 定时触发：
+
+```bash
+# crontab -e
+*/5 * * * * cd /path/to/project && infiniti-agent cli "检查并处理待办任务"
+```
+
+配合 `SOUL.md` 定义角色 + Skills 扩展能力，每个目录都可以成为一个独立的自动化智能体。
+
+## 会话管理
+
+- 对话历史自动保存在 `.infiniti-agent/session.json`
+- 配置 `compaction.autoThresholdTokens` 可自动压缩过长的对话：
+
+```json
+{
+  "compaction": {
+    "autoThresholdTokens": 30000
+  }
+}
+```
+
+- TUI 中输入 `/clear` 清空当前会话，`/compact` 手动触发压缩
+
+## 开发
+
+```bash
+git clone https://github.com/stelee410/infiniti-agent.git
+cd infiniti-agent
+npm install
+npm run dev                          # 启动 TUI（开发模式）
+npm run dev -- cli 你好               # CLI 模式
+npm run build && npm link            # 全局安装本地版本
+```
+
+## 发布到 npm
 
 ```bash
 npm run build
-npm publish --dry-run   # 检查包内容
-npm login               # 或确认 token 含「发布」权限，非只读
-npm publish
-# 若账号开启 2FA：npm publish --otp=xxxxxx
+npm publish              # 包名: linkyun-infiniti-agent，命令: infiniti-agent
 ```
-
-### 若出现 `E404` / `PUT ... Not found`
-
-npm 常把**无发布权限、Token 只读、未登录**误报成 404。请依次检查：
-
-1. `npm whoami` 能显示用户名；`npm config get registry` 为 `https://registry.npmjs.org/`（注意末尾 `/`）。
-2. 在 [npm Access Tokens](https://www.npmjs.com/settings/~/tokens) 使用**具备 Publish 权限**的 Classic Token，或重新 `npm login`。
-3. 开启 2FA 时发布必须带 `--otp`。
-
-包名使用 `linkyun-infiniti-agent` 可降低与 npm 策略下短名冲突的概率；全局命令仍为 `infiniti-agent`。
 
 ## 协议
 
