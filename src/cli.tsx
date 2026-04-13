@@ -23,6 +23,7 @@ import {
 } from './paths.js'
 import { runCliPrompt } from './runCliPrompt.js'
 import { readPackageVersion } from './packageRoot.js'
+import { runLink } from './link.js'
 
 const cwd = process.cwd()
 
@@ -230,6 +231,13 @@ async function main(): Promise<void> {
         console.error((e as Error).message)
         process.exit(2)
       }
+    })
+
+  program
+    .command('link')
+    .description('从 SOUL.md 提取邮件配置，生成 mail-poller.sh 邮件轮询守护脚本')
+    .action(async () => {
+      await runLink(cwd)
     })
 
   const skill = program.command('skill').description('当前项目的 Skills（存储在 .infiniti-agent/skills/）')

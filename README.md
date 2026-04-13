@@ -31,6 +31,7 @@ infiniti-agent
 | `infiniti-agent init` | 配置 LLM（写入全局 `~/.infiniti-agent/config.json`） |
 | `infiniti-agent migrate` | 将全局配置复制到当前目录 `.infiniti-agent/`，实现项目级独立 |
 | `infiniti-agent upgrade` | 升级旧版 config.json 到最新格式 |
+| `infiniti-agent link` | 从 SOUL.md 提取邮件配置，生成 `mail-poller.sh` 邮件轮询守护脚本 |
 | `infiniti-agent skill add <source>` | 安装 Skill（支持 `owner/repo`、git URL、本地路径） |
 | `infiniti-agent skill list` | 列出当前项目已安装的 Skills |
 
@@ -131,9 +132,37 @@ Agent 开箱即用以下工具（无需额外配置）：
 
 还可以通过 MCP 服务器扩展更多工具。
 
+## 邮件轮询守护（link）
+
+`infiniti-agent link` 从当前目录的 `SOUL.md` 中自动提取邮件相关配置（Agent 地址、Agent ID、API Key），生成一个开箱即用的 `mail-poller.sh` 守护脚本。
+
+**前提：** `SOUL.md` 中需包含以下信息（格式不限，命令会自动识别）：
+
+- Agent 地址：`xxx@xxx.amp.linkyun.co`
+- Agent ID：UUID 格式（如 `30bc8485-c1af-4fad-b83b-5915c8673632`）
+- API Key：以 `amk_` 开头的密钥
+
+**使用方式：**
+
+```bash
+# 生成 mail-poller.sh
+infiniti-agent link
+
+# 前台运行（Ctrl-C 停止）
+./mail-poller.sh
+
+# 后台运行
+nohup ./mail-poller.sh &
+
+# 仅检查一次后退出
+./mail-poller.sh --once
+```
+
+脚本每 60 秒检查一次 Mail Broker 收件箱，发现未读邮件时自动调用 `infiniti-agent cli` 处理。运行日志写入 `mail-poller.log`，终端仅显示单行状态。
+
 ## 无限循环运行示例
 
-最简单的自动化 agent——用 `cli` 模式 + shell 循环持续运行：
+除了 `link` 生成的邮件轮询脚本，你也可以用最简单的方式让 agent 持续运行——`cli` 模式 + shell 循环：
 
 ```bash
 #!/bin/bash
