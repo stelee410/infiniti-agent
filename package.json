@@ -17,7 +17,9 @@
     "prepublishOnly": "npm run build",
     "dev": "tsx src/cli.tsx",
     "dev:cli": "tsx src/cli.tsx --cli",
-    "start": "node dist/cli.js"
+    "start": "node dist/cli.js",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "repository": {
     "type": "git",
@@ -56,6 +58,7 @@
     "@types/node": "^22.10.0",
     "@types/react": "^18.3.12",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "vitest": "^4.1.4"
   }
 }

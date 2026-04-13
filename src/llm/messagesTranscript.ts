@@ -12,12 +12,12 @@ export function messagesToCompactTranscript(
   messages: PersistedMessage[],
   maxToolSnippetChars: number,
 ): string {
-  const lines: string[] = []
+  const blocks: string[] = []
   let i = 0
   while (i < messages.length) {
     const m = messages[i]!
     if (m.role === 'user') {
-      lines.push(`### 用户\n${m.content}`)
+      blocks.push(`### 用户\n${m.content}`)
       i++
       continue
     }
@@ -33,7 +33,7 @@ export function messagesToCompactTranscript(
           )
         }
       }
-      lines.push(`### 助手\n${parts.join('\n') || '（无正文）'}`)
+      blocks.push(`### 助手\n${parts.join('\n') || '（无正文）'}`)
       i++
       continue
     }
@@ -44,10 +44,32 @@ export function messagesToCompactTranscript(
         block.push(`- ${t.name}: ${snip(t.content, maxToolSnippetChars)}`)
         i++
       }
-      lines.push(`### 工具结果\n${block.join('\n')}`)
+      blocks.push(`### 工具结果\n${block.join('\n')}`)
       continue
     }
     i++
   }
-  return lines.join('\n\n')
+  return blocks.join('\n\n')
+}
+
+/**
+ * 按消息边界截断转写文本，不会切断单条消息。
+ * 返回不超过 maxChars 的前缀，末尾追加截断提示。
+ */
+export function truncateTranscriptAtBoundary(
+  transcript: string,
+  maxChars: number,
+): string {
+  if (transcript.length <= maxChars) return transcript
+  const separator = '\n\n### '
+  let cutoff = 0
+  let pos = 0
+  while (pos < maxChars) {
+    const next = transcript.indexOf(separator, pos + 1)
+    if (next === -1 || next > maxChars) break
+    cutoff = next
+    pos = next + 1
+  }
+  if (cutoff === 0) cutoff = maxChars
+  return transcript.slice(0, cutoff) + '\n\n…（转写过长，已在消息边界处截断）'
 }

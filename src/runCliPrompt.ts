@@ -12,6 +12,9 @@ import { EditHistory } from './session/editHistory.js'
 import { loadSkillsForCwd, skillsToSystemBlock } from './skills/loader.js'
 import { localErrorLogPath } from './paths.js'
 import { formatChatError } from './utils/formatError.js'
+import { estimateMessagesTokens } from './llm/estimateTokens.js'
+import { resolvedCompactionSettings } from './llm/compactionSettings.js'
+import { compactSessionMessages } from './llm/compactSession.js'
 
 async function buildCliSystem(config: InfinitiConfig, cwd: string): Promise<string> {
   const mem = await readMemoryForPrompt(cwd)
@@ -62,6 +65,26 @@ export async function runCliPrompt(
       }
     } catch (e: unknown) {
       throw e
+    }
+
+    const compSettings = resolvedCompactionSettings(config)
+    if (
+      compSettings.autoThresholdTokens > 0 &&
+      estimateMessagesTokens(messages) >= compSettings.autoThresholdTokens
+    ) {
+      try {
+        messages = await compactSessionMessages({
+          config,
+          cwd,
+          messages,
+          minTailMessages: compSettings.minTailMessages,
+          maxToolSnippetChars: compSettings.maxToolSnippetChars,
+          preCompactHook: compSettings.preCompactHook,
+        })
+        await saveSession(cwd, messages)
+      } catch (e: unknown) {
+        console.error(`[cli] 自动压缩失败，使用原会话继续: ${formatChatError(e)}`)
+      }
     }
 
     const nextMsgs: PersistedMessage[] = [

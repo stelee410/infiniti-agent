@@ -1,11 +1,19 @@
 import type { PersistedMessage } from './persisted.js'
 
-/** 粗估 token（约 4 UTF-16 单元 ≈ 1 token），用于压缩阈值，不追求与计费一致 */
+// eslint-disable-next-line no-control-regex
+const RE_CJK = /[\u2E80-\u9FFF\uF900-\uFAFF]/g
+
+/**
+ * 粗估 token 数。英文约 4 字符/token，CJK 字符约 1.5 字符/token。
+ * 按 CJK 占比混合加权，使中文场景下的阈值触发更准确。
+ */
 export function estimateTextTokens(text: string): number {
   if (!text) {
     return 0
   }
-  return Math.ceil(text.length / 4)
+  const cjkCount = (text.match(RE_CJK) ?? []).length
+  const nonCjkCount = text.length - cjkCount
+  return Math.ceil(nonCjkCount / 4 + cjkCount / 1.5)
 }
 
 export function estimateMessagesTokens(messages: PersistedMessage[]): number {

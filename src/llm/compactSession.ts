@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
 import { isAbsolute, resolve } from 'node:path'
 import type { InfinitiConfig } from '../config/types.js'
-import { messagesToCompactTranscript } from './messagesTranscript.js'
+import { messagesToCompactTranscript, truncateTranscriptAtBoundary } from './messagesTranscript.js'
 import { oneShotTextCompletion } from './oneShotCompletion.js'
 import type { PersistedMessage } from './persisted.js'
 
@@ -18,7 +18,7 @@ const COMPACT_SUMMARY_SYSTEM = `你是对话压缩助手。输入是按时间线
 - 关键错误与修复方式
 - 用户明确约束或偏好
 
-不要寒暄。使用 Markdown 小标题与列表。控制在 4000 字以内。`
+不要寒暄。使用 Markdown 小标题与列表。控制在 8000 字以内。`
 
 export function validateMessageSuffix(
   messages: PersistedMessage[],
@@ -181,10 +181,7 @@ export async function compactSessionMessages(
   }
 
   let transcript = messagesToCompactTranscript(head, opts.maxToolSnippetChars)
-  if (transcript.length > MAX_TRANSCRIPT_CHARS) {
-    transcript =
-      transcript.slice(0, MAX_TRANSCRIPT_CHARS) + '\n…（转写过长已截断）'
-  }
+  transcript = truncateTranscriptAtBoundary(transcript, MAX_TRANSCRIPT_CHARS)
 
   let hookAddendum = ''
   if (opts.preCompactHook) {
@@ -211,7 +208,7 @@ export async function compactSessionMessages(
     config: opts.config,
     system: COMPACT_SUMMARY_SYSTEM,
     user: userParts.join('\n'),
-    maxOutTokens: 4096,
+    maxOutTokens: 8192,
     profile: 'compact',
   })
   if (summary.length > MAX_SUMMARY_CHARS) {
