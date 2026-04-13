@@ -5,17 +5,18 @@ import TextInput from 'ink-text-input'
 import chokidar from 'chokidar'
 import type { InfinitiConfig } from '../config/types.js'
 import { loadSkillsForCwd, skillsToSystemBlock } from '../skills/loader.js'
-import { readMemoryForPrompt } from '../memory/store.js'
 import {
   loadAgentPromptDocs,
   buildAgentSystemPrompt,
 } from '../prompt/loadProjectPrompt.js'
+import { buildSystemWithMemory } from '../prompt/systemBuilder.js'
 import { compactSessionMessages } from '../llm/compactSession.js'
 import { resolvedCompactionSettings } from '../llm/compactionSettings.js'
 import { estimateMessagesTokens } from '../llm/estimateTokens.js'
 import { runToolLoop } from '../llm/runLoop.js'
 import type { PersistedMessage } from '../llm/persisted.js'
 import { saveSession, loadSession } from '../session/file.js'
+import { archiveSession } from '../session/archive.js'
 import { localSkillsDir } from '../paths.js'
 import type { McpManager } from '../mcp/manager.js'
 import { loadConfig } from '../config/io.js'
@@ -34,7 +35,7 @@ type Props = {
   dangerouslySkipPermissions?: boolean
 }
 
-const STREAM_DEBOUNCE_MS = 48
+const STREAM_DEBOUNCE_MS = 80
 const SLASH_MENU_MAX_ROWS = 10
 
 export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions }: Props): React.ReactElement {
@@ -57,11 +58,12 @@ export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions
   busyRef.current = busy
   const [notice, setNotice] = useState<string | null>(null)
   const [compacting, setCompacting] = useState(false)
-  /** 比泛化的「请求中」更细：等首包 / 执行工具 / SSE 中 */
-  const [busySubtext, setBusySubtext] = useState<string | null>(null)
-  const [busyDiag, setBusyDiag] = useState({ elapsed: 0, stall: 0 })
+  const busySubtextRef = useRef<string | null>(null)
+  const thinkingTextRef = useRef('')
   const lastStreamDeltaAtRef = useRef<number | null>(null)
-  const [thinkingText, setThinkingText] = useState('')
+  const busyStartRef = useRef<number>(0)
+  const [statusLine, setStatusLine] = useState('')
+  const [thinkingSnap, setThinkingSnap] = useState('')
 
   const slashItems = useMemo(
     () => buildSlashItems(mcp),
@@ -72,6 +74,12 @@ export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions
     () => filterSlashItems(slashItems, input),
     [slashItems, input],
   )
+
+  const visibleStreamText = useMemo(() => {
+    if (!streamText) return null
+    const lastNl = streamText.lastIndexOf('\n')
+    return lastNl >= 0 ? streamText.substring(0, lastNl + 1) : null
+  }, [streamText])
 
   const slashMenuOpen =
     sessionReady &&
@@ -85,17 +93,25 @@ export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions
 
   useEffect(() => {
     if (!busy) {
-      setBusyDiag({ elapsed: 0, stall: 0 })
+      setStatusLine('')
+      setThinkingSnap('')
+      busySubtextRef.current = null
+      thinkingTextRef.current = ''
       return
     }
-    const start = Date.now()
+    busyStartRef.current = Date.now()
     lastStreamDeltaAtRef.current = null
-    setBusyDiag({ elapsed: 0, stall: 0 })
     const id = setInterval(() => {
-      const elapsed = Math.floor((Date.now() - start) / 1000)
+      const elapsed = Math.floor((Date.now() - busyStartRef.current) / 1000)
       const last = lastStreamDeltaAtRef.current
       const stall = last ? Math.floor((Date.now() - last) / 1000) : 0
-      setBusyDiag({ elapsed, stall })
+      const sub = busySubtextRef.current ?? '请求中（Anthropic/OpenAI/Gemini 均走流式 SSE）…'
+      const elapsedPart = elapsed > 0 ? ` · 已 ${elapsed}s` : ''
+      const stallPart = stall >= 12 && last != null ? ` · ${stall}s 无新字` : ''
+      setStatusLine(`${sub}${elapsedPart}${stallPart}`)
+      if (thinkingTextRef.current) {
+        setThinkingSnap(thinkingTextRef.current)
+      }
     }, 1000)
     return () => clearInterval(id)
   }, [busy])
@@ -202,20 +218,9 @@ export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions
   }, [cwd])
 
   const buildSystem = useCallback(async (): Promise<string> => {
-    const mem = await readMemoryForPrompt(cwd)
-    const skills = await loadSkillsForCwd(cwd)
     void skillsEpoch
     void promptEpoch
-    const docs = await loadAgentPromptDocs(cwd)
-    const skillBlock = skillsToSystemBlock(skills)
-    const parts = [buildAgentSystemPrompt(docs)]
-    if (mem.trim()) {
-      parts.push(`## 长期记忆（来自 .infiniti-agent/memory.md）\n\n${mem}`)
-    }
-    if (skillBlock.trim()) {
-      parts.push(skillBlock)
-    }
-    return parts.join('\n\n')
+    return buildSystemWithMemory(config, cwd)
   }, [config, cwd, skillsEpoch, promptEpoch])
 
   const reloadAll = useCallback(async () => {
@@ -247,7 +252,10 @@ export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions
         exit()
         return
       }
-      if (raw === '/clear') {
+      if (raw === '/clear' || raw === '/new') {
+        if (messages.length > 0) {
+          await archiveSession(cwd, messages).catch(() => {})
+        }
         setMessages([])
         await saveSession(cwd, [])
         setInput('')
@@ -259,7 +267,7 @@ export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions
         return
       }
       if (raw === '/memory') {
-        setError('长期记忆文件: ~/.infiniti-agent/memory.md')
+        setError('记忆系统：memory.json（结构化记忆）+ user_profile.json（用户画像）— 在 .infiniti-agent/ 下')
         setInput('')
         return
       }
@@ -344,9 +352,10 @@ export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions
 
       setBusy(true)
       setError(null)
-      setBusySubtext('等待模型响应（首包/跨境 API 可能较慢）…')
+      busySubtextRef.current = '等待模型响应（首包/跨境 API 可能较慢）…'
       resetStream()
-      setThinkingText('')
+      thinkingTextRef.current = ''
+      setThinkingSnap('')
       const userLine = raw
 
       let baseMessages = messages
@@ -358,6 +367,9 @@ export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions
         setCompacting(true)
         setNotice('历史较长，正在自动压缩上下文（非流式）…')
         try {
+          if (baseMessages.length > 0) {
+            await archiveSession(cwd, baseMessages).catch(() => {})
+          }
           baseMessages = await compactSessionMessages({
             config,
             cwd,
@@ -397,36 +409,35 @@ export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions
           skipPermissions: dangerouslySkipPermissions,
           editHistory: editHistoryRef.current,
           onToolDispatch: (name) => {
-            setBusySubtext(`执行工具：${name}…`)
+            busySubtextRef.current = `执行工具：${name}…`
           },
           stream: {
             onStreamReset: () => {
               resetStream()
-              setThinkingText('')
+              thinkingTextRef.current = ''
+              setThinkingSnap('')
               lastStreamDeltaAtRef.current = null
-              setBusySubtext('等待模型响应（多轮工具之间会重新请求）…')
+              busySubtextRef.current = '等待模型响应（多轮工具之间会重新请求）…'
             },
             onTextDelta: (_delta, full) => {
               lastStreamDeltaAtRef.current = Date.now()
-              setBusySubtext(
-                'SSE 流式中（久无新字时：可能在生成 tool 调用或网络慢）…',
-              )
+              busySubtextRef.current =
+                'SSE 流式中（久无新字时：可能在生成 tool 调用或网络慢）…'
               flushStream(full)
             },
             onToolUseStart: (toolName) => {
               lastStreamDeltaAtRef.current = Date.now()
-              setBusySubtext(
-                `模型正在生成 ${toolName} 调用参数（SSE 仍在传输中）…`,
-              )
+              busySubtextRef.current =
+                `模型正在生成 ${toolName} 调用参数（SSE 仍在传输中）…`
             },
             onToolExecStart: (toolName) => {
               lastStreamDeltaAtRef.current = Date.now()
-              setBusySubtext(`正在执行工具 ${toolName}…`)
+              busySubtextRef.current = `正在执行工具 ${toolName}…`
             },
             onThinkingDelta: (_delta, full) => {
               lastStreamDeltaAtRef.current = Date.now()
-              setBusySubtext('模型正在深度思考…')
-              setThinkingText(full)
+              busySubtextRef.current = '模型正在深度思考…'
+              thinkingTextRef.current = full
             },
           },
         })
@@ -435,7 +446,7 @@ export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions
       } catch (e: unknown) {
         setError(formatChatError(e))
       } finally {
-        setBusySubtext(null)
+        busySubtextRef.current = null
         resetStream()
         setBusy(false)
       }
@@ -519,7 +530,7 @@ export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions
         {visible.map((m, i) => (
           <MessageLine key={`${i}-${m.role}`} m={m} />
         ))}
-        {thinkingText && !streamText ? (
+        {thinkingSnap && !visibleStreamText ? (
           <Box
             flexDirection="column"
             marginTop={1}
@@ -532,13 +543,13 @@ export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions
               💭 Thinking…
             </Text>
             <Text dimColor wrap="wrap">
-              {thinkingText.length > 600
-                ? `…${thinkingText.slice(-600)}`
-                : thinkingText}
+              {thinkingSnap.length > 600
+                ? `…${thinkingSnap.slice(-600)}`
+                : thinkingSnap}
             </Text>
           </Box>
         ) : null}
-        {streamText ? (
+        {visibleStreamText ? (
           <Box
             flexDirection="column"
             marginTop={1}
@@ -551,7 +562,7 @@ export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions
               Assistant · 流式
             </Text>
             <Text dimColor wrap="wrap">
-              {streamText}
+              {visibleStreamText}
             </Text>
           </Box>
         ) : null}
@@ -567,14 +578,7 @@ export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions
           <Text color="yellow">
             {compacting
               ? '◆ 正在压缩会话历史（非流式）…'
-              : `◆ ${
-                  busySubtext ??
-                  '请求中（Anthropic/OpenAI/Gemini 均走流式 SSE）…'
-                }${busyDiag.elapsed > 0 ? ` · 已 ${busyDiag.elapsed}s` : ''}${
-                  busyDiag.stall >= 12 && lastStreamDeltaAtRef.current != null
-                    ? ` · ${busyDiag.stall}s 无新字`
-                    : ''
-                }`}
+              : `◆ ${statusLine || '请求中（Anthropic/OpenAI/Gemini 均走流式 SSE）…'}`}
           </Text>
         </Box>
       ) : null}
@@ -602,7 +606,7 @@ export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions
   )
 }
 
-function SlashCompletePanel({
+const SlashCompletePanel = React.memo(function SlashCompletePanel({
   items,
   selectedIndex,
 }: {
@@ -666,9 +670,9 @@ function SlashCompletePanel({
       )}
     </Box>
   )
-}
+})
 
-function MessageLine({ m }: { m: PersistedMessage }): React.ReactElement {
+const MessageLine = React.memo(function MessageLine({ m }: { m: PersistedMessage }): React.ReactElement {
   if (m.role === 'user') {
     return (
       <Box
@@ -725,4 +729,4 @@ function MessageLine({ m }: { m: PersistedMessage }): React.ReactElement {
       </Text>
     </Box>
   )
-}
+})

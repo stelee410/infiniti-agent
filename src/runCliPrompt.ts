@@ -2,12 +2,12 @@ import { appendFile, mkdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { ensureLocalAgentDir } from './config/io.js'
 import type { InfinitiConfig } from './config/types.js'
-import { readMemoryForPrompt } from './memory/store.js'
 import { McpManager } from './mcp/manager.js'
 import { loadAgentPromptDocs, buildAgentSystemPrompt } from './prompt/loadProjectPrompt.js'
 import { runToolLoop } from './llm/runLoop.js'
 import type { PersistedMessage } from './llm/persisted.js'
 import { loadSession, saveSession } from './session/file.js'
+import { archiveSession } from './session/archive.js'
 import { EditHistory } from './session/editHistory.js'
 import { loadSkillsForCwd, skillsToSystemBlock } from './skills/loader.js'
 import { localErrorLogPath } from './paths.js'
@@ -15,20 +15,10 @@ import { formatChatError } from './utils/formatError.js'
 import { estimateMessagesTokens } from './llm/estimateTokens.js'
 import { resolvedCompactionSettings } from './llm/compactionSettings.js'
 import { compactSessionMessages } from './llm/compactSession.js'
+import { buildSystemWithMemory } from './prompt/systemBuilder.js'
 
 async function buildCliSystem(config: InfinitiConfig, cwd: string): Promise<string> {
-  const mem = await readMemoryForPrompt(cwd)
-  const skills = await loadSkillsForCwd(cwd)
-  const docs = await loadAgentPromptDocs(cwd)
-  const skillBlock = skillsToSystemBlock(skills)
-  const parts = [buildAgentSystemPrompt(docs)]
-  if (mem.trim()) {
-    parts.push(`## 长期记忆（来自 .infiniti-agent/memory.md）\n\n${mem}`)
-  }
-  if (skillBlock.trim()) {
-    parts.push(skillBlock)
-  }
-  return parts.join('\n\n')
+  return buildSystemWithMemory(config, cwd)
 }
 
 async function appendCliErrorLog(cwd: string, e: unknown): Promise<void> {
@@ -73,6 +63,9 @@ export async function runCliPrompt(
       estimateMessagesTokens(messages) >= compSettings.autoThresholdTokens
     ) {
       try {
+        if (messages.length > 0) {
+          await archiveSession(cwd, messages).catch(() => {})
+        }
         messages = await compactSessionMessages({
           config,
           cwd,

@@ -1,5 +1,10 @@
 import { spawn } from 'child_process'
 import { appendMemoryEntry } from '../memory/store.js'
+import { executeMemoryAction, type MemoryAction, type MemoryTag } from '../memory/structured.js'
+import { executeProfileAction, type ProfileAction, type ProfileTag } from '../memory/userProfile.js'
+import { searchSessions, type SearchResult } from '../session/archive.js'
+import { executeSkillAction, type SkillAction } from '../skills/manager.js'
+import { executeKgAction, type KgAction } from '../memory/knowledgeGraph.js'
 import type { BuiltinToolName } from './definitions.js'
 import type { EditHistory } from '../session/editHistory.js'
 import {
@@ -263,7 +268,128 @@ export async function runBuiltinTool(
       title: args.title != null ? String(args.title) : undefined,
       body,
     })
-    return JSON.stringify({ ok: true, message: '已写入长期记忆文件' })
+    return JSON.stringify({ ok: true, message: '已写入长期记忆文件（建议改用 memory 工具）' })
+  }
+
+  if (name === 'memory') {
+    const action = String(args.action ?? '')
+    if (!['add', 'replace', 'remove', 'list'].includes(action)) {
+      return JSON.stringify({ ok: false, error: 'action 须为 add/replace/remove/list' })
+    }
+    const act: MemoryAction = action === 'list'
+      ? { action: 'list' }
+      : action === 'remove'
+        ? { action: 'remove', id: String(args.id ?? '') }
+        : action === 'replace'
+          ? {
+              action: 'replace',
+              id: String(args.id ?? ''),
+              title: args.title != null ? String(args.title) : undefined,
+              body: args.body != null ? String(args.body) : undefined,
+              tag: args.tag as MemoryTag | undefined,
+            }
+          : {
+              action: 'add',
+              title: String(args.title ?? ''),
+              body: String(args.body ?? ''),
+              tag: args.tag as MemoryTag | undefined,
+            }
+    return JSON.stringify(await executeMemoryAction(ctx.sessionCwd, act))
+  }
+
+  if (name === 'user_profile') {
+    const action = String(args.action ?? '')
+    if (!['add', 'replace', 'remove', 'list'].includes(action)) {
+      return JSON.stringify({ ok: false, error: 'action 须为 add/replace/remove/list' })
+    }
+    const act: ProfileAction = action === 'list'
+      ? { action: 'list' }
+      : action === 'remove'
+        ? { action: 'remove', id: String(args.id ?? '') }
+        : action === 'replace'
+          ? {
+              action: 'replace',
+              id: String(args.id ?? ''),
+              title: args.title != null ? String(args.title) : undefined,
+              body: args.body != null ? String(args.body) : undefined,
+              tag: args.tag as ProfileTag | undefined,
+            }
+          : {
+              action: 'add',
+              title: String(args.title ?? ''),
+              body: String(args.body ?? ''),
+              tag: args.tag as ProfileTag | undefined,
+            }
+    return JSON.stringify(await executeProfileAction(ctx.sessionCwd, act))
+  }
+
+  if (name === 'search_sessions') {
+    const query = String(args.query ?? '').trim()
+    if (!query) {
+      return JSON.stringify({ ok: false, error: 'query 不能为空' })
+    }
+    const limit = typeof args.limit === 'number' ? args.limit : 10
+    const results: SearchResult[] = await searchSessions(ctx.sessionCwd, query, limit)
+    return JSON.stringify({ ok: true, count: results.length, results })
+  }
+
+  if (name === 'knowledge_graph') {
+    const action = String(args.action ?? '')
+    if (!['add', 'invalidate', 'query', 'timeline', 'stats'].includes(action)) {
+      return JSON.stringify({ ok: false, error: 'action 须为 add/invalidate/query/timeline/stats' })
+    }
+    const act: KgAction = action === 'stats'
+      ? { action: 'stats' }
+      : action === 'add'
+        ? {
+            action: 'add',
+            subject: String(args.subject ?? ''),
+            predicate: String(args.predicate ?? ''),
+            object: String(args.object ?? ''),
+            valid_from: args.valid_from != null ? String(args.valid_from) : undefined,
+            source: args.source != null ? String(args.source) : undefined,
+          }
+        : action === 'invalidate'
+          ? {
+              action: 'invalidate',
+              subject: String(args.subject ?? ''),
+              predicate: String(args.predicate ?? ''),
+              object: String(args.object ?? ''),
+              ended: args.ended != null ? String(args.ended) : undefined,
+            }
+          : action === 'query'
+            ? {
+                action: 'query',
+                entity: String(args.entity ?? ''),
+                as_of: args.as_of != null ? String(args.as_of) : undefined,
+              }
+            : {
+                action: 'timeline',
+                entity: String(args.entity ?? ''),
+              }
+    return JSON.stringify(await executeKgAction(ctx.sessionCwd, act))
+  }
+
+  if (name === 'manage_skill') {
+    const action = String(args.action ?? '')
+    const skillName = String(args.name ?? '')
+    if (!['create', 'patch', 'delete'].includes(action)) {
+      return JSON.stringify({ ok: false, error: 'action 须为 create/patch/delete' })
+    }
+    if (!skillName.trim()) {
+      return JSON.stringify({ ok: false, error: 'name 不能为空' })
+    }
+    const act: SkillAction = action === 'create'
+      ? { action: 'create', name: skillName, content: String(args.content ?? '') }
+      : action === 'patch'
+        ? {
+            action: 'patch',
+            name: skillName,
+            old_string: String(args.old_string ?? ''),
+            new_string: String(args.new_string ?? ''),
+          }
+        : { action: 'delete', name: skillName }
+    return JSON.stringify(await executeSkillAction(ctx.sessionCwd, act))
   }
 
   if (name === 'read_file') {

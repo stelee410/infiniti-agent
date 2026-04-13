@@ -4,6 +4,11 @@ export type BuiltinToolName =
   | 'http_request'
   | 'bash'
   | 'update_memory'
+  | 'memory'
+  | 'user_profile'
+  | 'search_sessions'
+  | 'manage_skill'
+  | 'knowledge_graph'
   | 'read_file'
   | 'glob_files'
   | 'grep_files'
@@ -214,7 +219,7 @@ export const BUILTIN_TOOLS: Array<{
   {
     name: 'update_memory',
     description:
-      '向全局长期记忆文件追加结构化笔记，供后续会话与自动 loop 使用。应写入高信号、可复用的事实。',
+      '[已废弃，请用 memory 工具] 向长期记忆追加笔记。',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -223,6 +228,146 @@ export const BUILTIN_TOOLS: Array<{
         body: { type: 'string', description: '要追加的正文（Markdown）' },
       },
       required: ['body'],
+    },
+  },
+  {
+    name: 'memory',
+    description:
+      '结构化长期记忆管理。支持 add（添加）、replace（替换）、remove（删除）、list（列出全部）四种操作。记忆有容量上限，满时需整合或替换旧条目。你应主动使用此工具保存：用户偏好与纠正、环境事实、项目约定、关键教训。',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['add', 'replace', 'remove', 'list'],
+          description: '操作类型',
+        },
+        id: {
+          type: 'string',
+          description: 'replace/remove 时必填：要操作的条目 ID',
+        },
+        title: {
+          type: 'string',
+          description: 'add/replace 时可选：短标题',
+        },
+        body: {
+          type: 'string',
+          description: 'add 时必填、replace 时可选：正文内容',
+        },
+        tag: {
+          type: 'string',
+          enum: ['fact', 'preference', 'lesson', 'convention', 'environment', 'other'],
+          description: '分类标签（默认 other）',
+        },
+      },
+      required: ['action'],
+    },
+  },
+  {
+    name: 'user_profile',
+    description:
+      '用户画像管理。记录用户的技术偏好、沟通风格、项目背景等持久信息。支持 add、replace、remove、list 操作。你应在发现用户偏好时主动保存。',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['add', 'replace', 'remove', 'list'],
+          description: '操作类型',
+        },
+        id: {
+          type: 'string',
+          description: 'replace/remove 时必填',
+        },
+        title: { type: 'string', description: '短标题' },
+        body: { type: 'string', description: '正文' },
+        tag: {
+          type: 'string',
+          enum: ['tech_stack', 'communication', 'workflow', 'background', 'other'],
+          description: '画像维度',
+        },
+      },
+      required: ['action'],
+    },
+  },
+  {
+    name: 'search_sessions',
+    description:
+      '搜索历史会话。可通过关键词搜索过去所有对话的内容，找到之前讨论过的决策、方案、问题等。返回匹配的会话片段和元数据。',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        query: {
+          type: 'string',
+          description: '搜索关键词（支持全文搜索语法）',
+        },
+        limit: {
+          type: 'integer',
+          description: '最多返回条数，默认 10',
+        },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'knowledge_graph',
+    description:
+      '时序知识图谱。存储实体-关系三元组（subject → predicate → object），每条事实可有时间有效期。支持 add（添加三元组）、invalidate（标记失效）、query（查询实体关系）、timeline（生成时间线）、stats（统计概览）。',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['add', 'invalidate', 'query', 'timeline', 'stats'],
+          description: '操作类型',
+        },
+        subject: { type: 'string', description: '主语实体' },
+        predicate: { type: 'string', description: '谓词/关系' },
+        object: { type: 'string', description: '宾语实体' },
+        entity: { type: 'string', description: 'query/timeline 时必填：要查询的实体名' },
+        valid_from: { type: 'string', description: '事实生效起始时间（ISO 8601）' },
+        as_of: { type: 'string', description: 'query 时按时间点查快照' },
+        ended: { type: 'string', description: 'invalidate 时的失效时间' },
+        source: { type: 'string', description: '事实来源说明' },
+      },
+      required: ['action'],
+    },
+  },
+  {
+    name: 'manage_skill',
+    description:
+      '自主创建、更新或删除 Skill。在完成复杂任务后，应考虑将可复用的流程提炼为 Skill。支持 create（新建）、patch（局部更新）、delete（删除）三种操作。',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['create', 'patch', 'delete'],
+          description: '操作类型',
+        },
+        name: {
+          type: 'string',
+          description: 'Skill 名称（用作目录名，如 deploy-k8s）',
+        },
+        content: {
+          type: 'string',
+          description: 'create 时必填：完整 SKILL.md 内容；patch 时为空',
+        },
+        old_string: {
+          type: 'string',
+          description: 'patch 时必填：要替换的原文片段',
+        },
+        new_string: {
+          type: 'string',
+          description: 'patch 时必填：替换为的新文本',
+        },
+      },
+      required: ['action', 'name'],
     },
   },
 ]

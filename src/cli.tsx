@@ -8,6 +8,7 @@ import { configExistsSync, loadConfig, ensureLocalAgentDir, upgradeConfig } from
 import { InitWizard } from './ui/InitWizard.js'
 import { ChatWithSplash } from './ui/ChatWithSplash.js'
 import { McpManager } from './mcp/manager.js'
+import { enableSyncOutput, disableSyncOutput } from './ui/terminalSync.js'
 import { installSkillFromGit, installSkillFromPath } from './skills/install.js'
 import { loadSkillsForCwd } from './skills/loader.js'
 import {
@@ -48,14 +49,17 @@ async function runChatTui(opts: { skipPermissions?: boolean; disableThinking?: b
     return
   }
   const mcp = new McpManager()
+  enableSyncOutput()
   try {
     await mcp.start(cfg)
     const skipPerm = opts.skipPermissions ?? false
     const { waitUntilExit } = render(
       <ChatWithSplash config={cfg} mcp={mcp} dangerouslySkipPermissions={skipPerm} />,
+      { maxFps: 15, incrementalRendering: true },
     )
     await waitUntilExit()
   } finally {
+    disableSyncOutput()
     await mcp.stop()
   }
 }

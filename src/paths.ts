@@ -31,6 +31,18 @@ export function localMemoryPath(cwd: string): string {
   return join(cwd, LOCAL_DIR_NAME, 'memory.md')
 }
 
+export function localMemoryJsonPath(cwd: string): string {
+  return join(cwd, LOCAL_DIR_NAME, 'memory.json')
+}
+
+export function localUserProfilePath(cwd: string): string {
+  return join(cwd, LOCAL_DIR_NAME, 'user_profile.json')
+}
+
+export function localSessionDbPath(cwd: string): string {
+  return join(cwd, LOCAL_DIR_NAME, 'sessions.db')
+}
+
 export function localErrorLogPath(cwd: string): string {
   return join(cwd, LOCAL_DIR_NAME, 'error.log')
 }

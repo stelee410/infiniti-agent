@@ -29,10 +29,17 @@ const COMMAND_ITEMS: SlashItem[] = [
     insert: '/quit ',
   },
   {
+    id: '/new',
+    kind: 'command',
+    label: '/new',
+    desc: '归档当前会话并开始新对话',
+    insert: '/new ',
+  },
+  {
     id: '/clear',
     kind: 'command',
     label: '/clear',
-    desc: '清空当前对话与 session.json',
+    desc: '归档并清空当前对话（同 /new）',
     insert: '/clear ',
   },
   {
