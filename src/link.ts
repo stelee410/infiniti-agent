@@ -109,9 +109,9 @@ check_and_handle() {
 
   # 统计未读邮件数量
   local count
-  count="$(python3 -c "
-import json
-msgs = json.loads('''\${response}''')
+  count="$(printf '%s' "\${response}" | python3 -c "
+import json, sys
+msgs = json.loads(sys.stdin.read())
 if isinstance(msgs, list):
     print(sum(1 for m in msgs if m.get('is_read') == False))
 else:
