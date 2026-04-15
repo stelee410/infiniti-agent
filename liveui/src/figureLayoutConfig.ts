@@ -38,6 +38,13 @@ export const FIGURE_LAYOUT = {
   /** 用「从画布顶到脚底可用高度」算缩放时的系数，略小于 1 留一点顶边余量 */
   modelHeightScaleFraction: 0.99,
 
+  /**
+   * 计算 Live2D **缩放**时用的竖直预算（占画布高度），与底部 dock 实际像素高度解耦。
+   * 多行输入增高会触发 ResizeObserver，若再用 soleCeiling 参与缩放会与 `liveModel.width`（含 scale）
+   * 形成正反馈导致人物越来越大；位置仍用真实 control bar 对齐，仅缩放用固定屏高比例。
+   */
+  modelScaleViewportHeightFraction: 0.63,
+
   /** 无底部 dock 时，用于估算的屏高比例（兜底） */
   fallbackDockReserveScreenFraction: 0.24,
 } as const

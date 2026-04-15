@@ -77,6 +77,25 @@ type Msg =
 
 const FACE_RADIUS = 110
 
+/** 从 Cubism4 MotionManager.definitions（或 model3 的 motions）收集可随机播放的条目的 group/index。 */
+function collectMotionEntriesFromDefinitions(
+  defs: Record<string, unknown> | undefined | null,
+): { group: string; index: number }[] {
+  const out: { group: string; index: number }[] = []
+  if (!defs || typeof defs !== 'object') return out
+  for (const [group, items] of Object.entries(defs)) {
+    if (Array.isArray(items)) {
+      for (let i = 0; i < items.length; i++) {
+        out.push({ group, index: i })
+      }
+    } else if (items != null && typeof items === 'object') {
+      /* 个别 model3 里某组只有单对象无数组包装 */
+      out.push({ group, index: 0 })
+    }
+  }
+  return out
+}
+
 function readPort(): string {
   const fromPreload = window.infinitiLiveUi?.port?.trim()
   if (fromPreload) return fromPreload
@@ -183,6 +202,9 @@ async function bootstrap(): Promise<void> {
   mouth.position.set(face.x, face.y + 38)
 
   let liveModel: InstanceType<typeof Live2DModel> | null = null
+  /** 模型在 scale=1 时的本地包围尺寸，用于缩放计算（勿用 liveModel.width：会含当前 scale，Resize 时会越算越大） */
+  let liveModelNaturalW = 400
+  let liveModelNaturalH = 600
 
   const layoutFootGapPx = (viewH: number): number =>
     Math.max(0, Math.round(viewH * FIGURE_LAYOUT.footGapScreenFraction))
@@ -217,12 +239,15 @@ async function bootstrap(): Promise<void> {
     )
 
     if (liveModel) {
-      const uw = liveModel.width || 400
-      const uh = liveModel.height || 600
-      const maxBodyH = Math.max(100, Math.min(soleCeiling, targetFootY + footNudgeMax))
+      const uw = liveModelNaturalW
+      const uh = liveModelNaturalH
+      const scaleVerticalBudget = Math.max(
+        100,
+        Math.round(H * FIGURE_LAYOUT.modelScaleViewportHeightFraction),
+      )
       const s = Math.min(
         (W * FIGURE_LAYOUT.modelWidthScreenFraction) / uw,
-        (maxBodyH * FIGURE_LAYOUT.modelHeightScaleFraction) / uh,
+        (scaleVerticalBudget * FIGURE_LAYOUT.modelHeightScaleFraction) / uh,
       )
       liveModel.scale.set(s, s)
       liveModel.position.set(W / 2, H / 2)
@@ -394,6 +419,10 @@ async function bootstrap(): Promise<void> {
       app.stage.removeChild(face)
       app.stage.removeChild(mouth)
       liveModel.anchor.set(0.5, 0.5)
+      liveModel.scale.set(1, 1)
+      const nb = liveModel.getLocalBounds()
+      liveModelNaturalW = Math.max(nb.width, 1)
+      liveModelNaturalH = Math.max(nb.height, 1)
       app.stage.addChild(liveModel)
       layoutFigureInStage()
       wireHover(liveModel)
@@ -1068,18 +1097,19 @@ async function bootstrap(): Promise<void> {
     if (!liveModel || randomMotionBusy) return
     randomMotionBusy = true
     const im = liveModel.internalModel as {
-      settings?: { motions?: Record<string, unknown[]> }
+      settings?: { motions?: Record<string, unknown> }
+      motionManager?: { definitions?: Record<string, unknown> }
     }
-    const motionDefs = im?.settings?.motions
-    const allMotions: { group: string; index: number }[] = []
-    if (motionDefs) {
-      for (const [group, items] of Object.entries(motionDefs)) {
-        if (Array.isArray(items)) {
-          for (let i = 0; i < items.length; i++) {
-            allMotions.push({ group, index: i })
-          }
-        }
-      }
+    /* motionManager.definitions 与 settings.motions 在 Cubism4 为同一数据源；优先读 manager，并兼容非数组条目 + 配置兜底 */
+    let allMotions = collectMotionEntriesFromDefinitions(im?.motionManager?.definitions)
+    if (allMotions.length === 0) {
+      allMotions = collectMotionEntriesFromDefinitions(im?.settings?.motions ?? null)
+    }
+    if (allMotions.length === 0) {
+      allMotions = [
+        ...LIVE2D_IDLE.motionPool.map((m) => ({ group: m.group, index: m.index })),
+        ...LIVE2D_BODY_POKE_MOTIONS.map((m) => ({ group: m.group, index: m.index })),
+      ]
     }
     if (allMotions.length === 0) {
       randomMotionBusy = false
