@@ -6,6 +6,7 @@ import { GLOBAL_AGENT_DIR, GLOBAL_CONFIG_PATH, localConfigPath, localAgentDir } 
 import type {
   CompactionConfig,
   InfinitiConfig,
+  LiveUiConfig,
   LlmProfile,
   McpServerConfig,
 } from './types.js'
@@ -115,6 +116,7 @@ export async function loadConfig(cwd?: string): Promise<InfinitiConfig> {
 
   const mcp = o.mcp as Record<string, unknown> | undefined
   const compaction = parseCompactionConfig(o.compaction)
+  const liveUi = parseLiveUiConfig(o.liveUi)
 
   return {
     version: 1,
@@ -133,7 +135,31 @@ export async function loadConfig(cwd?: string): Promise<InfinitiConfig> {
           }
         : undefined,
     ...(compaction ? { compaction } : {}),
+    ...(liveUi ? { liveUi } : {}),
   }
+}
+
+function parseLiveUiConfig(raw: unknown): LiveUiConfig | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const u = raw as Record<string, unknown>
+  const out: LiveUiConfig = {}
+  if (typeof u.port === 'number' && Number.isFinite(u.port)) {
+    const p = Math.floor(u.port)
+    if (p >= 1 && p <= 65535) out.port = p
+  }
+  if (typeof u.live2dModelsDir === 'string' && u.live2dModelsDir.trim()) {
+    out.live2dModelsDir = u.live2dModelsDir.trim()
+  }
+  if (typeof u.live2dModelDict === 'string' && u.live2dModelDict.trim()) {
+    out.live2dModelDict = u.live2dModelDict.trim()
+  }
+  if (typeof u.live2dModelName === 'string' && u.live2dModelName.trim()) {
+    out.live2dModelName = u.live2dModelName.trim()
+  }
+  if (typeof u.live2dModel3Json === 'string' && u.live2dModel3Json.trim()) {
+    out.live2dModel3Json = u.live2dModel3Json.trim()
+  }
+  return Object.keys(out).length ? out : undefined
 }
 
 function parseLlmProfiles(raw: unknown): Record<string, LlmProfile> | undefined {
@@ -212,6 +238,7 @@ export async function saveConfig(input: SaveConfigInput): Promise<void> {
       servers: {},
     },
     ...(existing?.compaction ? { compaction: existing.compaction } : {}),
+    ...(existing?.liveUi ? { liveUi: existing.liveUi } : {}),
   }
   const target = GLOBAL_CONFIG_PATH
   await mkdir(dirname(target), { recursive: true })

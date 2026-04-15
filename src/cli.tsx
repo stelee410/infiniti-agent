@@ -27,6 +27,7 @@ import { readPackageVersion } from './packageRoot.js'
 import { runLink } from './link.js'
 import { LiveUiSession } from './liveui/wsSession.js'
 import { spawnLiveElectron } from './liveui/spawnRenderer.js'
+import { resolveLive2dModelForUi } from './liveui/resolveModelPath.js'
 
 const cwd = process.cwd()
 
@@ -36,7 +37,12 @@ function applyThinkingOverride(cfg: Awaited<ReturnType<typeof loadConfig>>, disa
 }
 
 async function runChatTui(
-  opts: { skipPermissions?: boolean; disableThinking?: boolean; liveUi?: LiveUiSession | null } = {},
+  opts: {
+    skipPermissions?: boolean
+    disableThinking?: boolean
+    liveUi?: LiveUiSession | null
+    liveUiModel3FileUrl?: string
+  } = {},
 ): Promise<void> {
   if (!configExistsSync(cwd)) {
     const { waitUntilExit } = render(<InitWizard />)
@@ -59,7 +65,7 @@ async function runChatTui(
     if (liveUi) {
       await liveUi.start()
       liveUi.startMouthPump()
-      const child = spawnLiveElectron(liveUi.port)
+      const child = spawnLiveElectron(liveUi.port, opts.liveUiModel3FileUrl)
       liveUi.setElectronChild(child)
       if (!child) {
         console.error('[liveui] Electron 未启动：已启动 WebSocket，可稍后自行对接渲染端。')
@@ -239,19 +245,43 @@ async function main(): Promise<void> {
   program
     .command('live')
     .description('LiveUI：本地 WebSocket + Electron 透明渲染 + TUI（需 npm run build 生成 liveui/dist）')
-    .option('-p, --port <port>', 'WebSocket 端口', process.env.INFINITI_LIVEUI_PORT ?? '8080')
+    .option('-p, --port <port>', 'WebSocket 端口（覆盖 config.json 中 liveUi.port）')
     .action(async (cmdOpts: { port?: string }) => {
-      const port = Number(cmdOpts.port ?? '8080')
-      if (!Number.isFinite(port) || port <= 0 || port > 65535) {
-        console.error('无效端口，请使用 1–65535 之间的数字。')
-        process.exit(2)
-      }
       if (!configExistsSync(cwd)) {
         console.error('尚未配置。请先运行: infiniti-agent init 或 infiniti-agent migrate')
         process.exit(2)
       }
+      let cfg: Awaited<ReturnType<typeof loadConfig>>
+      try {
+        cfg = applyThinkingOverride(await loadConfig(cwd), disableThinking)
+      } catch (e) {
+        console.error((e as Error).message)
+        process.exit(2)
+      }
+
+      const explicitPort = cmdOpts.port?.trim()
+      const port = explicitPort
+        ? Number(explicitPort)
+        : cfg.liveUi?.port ??
+          (process.env.INFINITI_LIVEUI_PORT ? Number(process.env.INFINITI_LIVEUI_PORT) : 8080)
+
+      if (!Number.isFinite(port) || port <= 0 || port > 65535) {
+        console.error('无效端口，请使用 1–65535 之间的数字。')
+        process.exit(2)
+      }
+
+      const resolved = resolveLive2dModelForUi(cwd, cfg.liveUi)
+      for (const w of resolved?.warnings ?? []) {
+        console.error(`[liveui] ${w}`)
+      }
+
       const liveUi = new LiveUiSession(port)
-      await runChatTui({ skipPermissions, disableThinking, liveUi })
+      await runChatTui({
+        skipPermissions,
+        disableThinking,
+        liveUi,
+        liveUiModel3FileUrl: resolved?.model3FileUrl,
+      })
     })
 
   program

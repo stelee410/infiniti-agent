@@ -38,6 +38,43 @@ export type CompactionConfig = {
 }
 
 /**
+ * LiveUI / Live2D（对齐 Open-LLM-VTuber：`live2d-models/` + `model_dict.json` + `live2d_model_name`）。
+ *
+ * 解析优先级：`live2dModel3Json` 直接路径 > `live2dModelName` + `live2dModelDict` 中的 `url`。
+ * 相对路径均相对**当前工作目录**（项目根）。
+ *
+ * @example
+ * ```json
+ * "liveUi": {
+ *   "port": 8080,
+ *   "live2dModelsDir": "./live2d-models",
+ *   "live2dModelDict": "./model_dict.json",
+ *   "live2dModelName": "mao_pro"
+ * }
+ * ```
+ * 或直接指定离线下载的 model3：
+ * `"live2dModel3Json": "./live2d-models/mao_pro/runtime/mao_pro.model3.json"`
+ */
+export type LiveUiConfig = {
+  /** WebSocket 端口；`infiniti-agent live` 未传 `--port` 时使用 */
+  port?: number
+  /**
+   * Live2D 资源根目录（其下为各模型子目录，如 `mao_pro/runtime/…`）。
+   * 与 VTuber 的 `live2d-models` 目录一致；用于把 `model_dict.json` 里以 `/live2d-models/` 开头的 `url` 映射到本地磁盘。
+   */
+  live2dModelsDir?: string
+  /**
+   * `model_dict.json` 路径（数组，元素含 `name`、`url`）。
+   * 默认 `./model_dict.json`（仅当设置了 `live2dModelName` 且未指定 `live2dModel3Json` 时尝试读取）。
+   */
+  live2dModelDict?: string
+  /** 在 model_dict 中选中的模型 `name`（对应 VTuber `character_config.live2d_model_name`） */
+  live2dModelName?: string
+  /** 直接指向 `.model3.json` 的绝对路径，或相对 cwd 的路径（优先级最高） */
+  live2dModel3Json?: string
+}
+
+/**
  * 多 LLM 配置：
  *
  * 新格式（推荐）——在 llm.profiles 中定义多个命名配置：
@@ -73,6 +110,7 @@ export type InfinitiConfig = {
   }
   compaction?: CompactionConfig
   thinking?: ThinkingConfig
+  liveUi?: LiveUiConfig
 }
 
 /**

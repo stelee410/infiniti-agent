@@ -6,6 +6,8 @@ function createWindow() {
   const port = process.env.INFINITI_LIVEUI_PORT || '8080'
   const indexHtml = path.join(__dirname, 'dist', 'index.html')
 
+  const preload = path.join(__dirname, 'preload.cjs')
+
   const win = new BrowserWindow({
     width: 420,
     height: 640,
@@ -18,6 +20,7 @@ function createWindow() {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
+      preload,
     },
   })
 

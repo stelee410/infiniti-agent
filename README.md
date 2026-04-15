@@ -34,6 +34,15 @@ infiniti-agent
 | `infiniti-agent link` | 从 SOUL.md 提取邮件配置，生成 `mail-poller.sh` 邮件轮询守护脚本 |
 | `infiniti-agent skill add <source>` | 安装 Skill（支持 `owner/repo`、git URL、本地路径） |
 | `infiniti-agent skill list` | 列出当前项目已安装的 Skills |
+| `infiniti-agent live` | LiveUI：WebSocket + Electron 透明窗 + TUI（需先 `npm run build`） |
+
+**LiveUI / Live2D（`config.json` 顶层 `liveUi`，对齐 Open-LLM-VTuber 的目录与 `model_dict.json`）：**
+
+- `live2dModelsDir`：模型根目录（如 `./live2d-models`，其下为 `模型名/runtime/*.model3.json`）。
+- `live2dModelDict`：模型清单 JSON 路径，默认 `./model_dict.json`。
+- `live2dModelName`：清单里某条目的 `name`（与 VTuber `character_config.live2d_model_name` 一致）。
+- `live2dModel3Json`：若已离线下载，可直接写 `.model3.json` 路径（**优先于** dict+name）。
+- `port`：WebSocket 端口；也可用 `infiniti-agent live -p 9000` 或环境变量 `INFINITI_LIVEUI_PORT` 覆盖。
 
 **常用选项：**
 

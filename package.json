@@ -9,7 +9,8 @@
     "INFINITI.md",
     "docs",
     "liveui/dist",
-    "liveui/electron-main.cjs"
+    "liveui/electron-main.cjs",
+    "liveui/preload.cjs"
   ],
   "workspaces": [
     "liveui"

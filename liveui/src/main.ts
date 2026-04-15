@@ -1,5 +1,12 @@
 import { Application, Graphics, Text } from 'pixi.js'
 
+declare global {
+  interface Window {
+    /** Electron preload 注入 */
+    infinitiLiveUi?: { port: string; model3FileUrl: string }
+  }
+}
+
 type SyncParam = {
   type: 'SYNC_PARAM'
   data: { id: 'ParamMouthOpenY'; value: number }
@@ -13,8 +20,20 @@ type ActionMsg = {
 type Msg = SyncParam | ActionMsg
 
 function readPort(): string {
-  const q = new URLSearchParams(window.location.search)
-  return q.get('port') ?? '8080'
+  const fromPreload = window.infinitiLiveUi?.port?.trim()
+  if (fromPreload) return fromPreload
+  return new URLSearchParams(window.location.search).get('port') ?? '8080'
+}
+
+async function probeModelJson(fileUrl: string): Promise<string | null> {
+  try {
+    const r = await fetch(fileUrl)
+    if (!r.ok) return `HTTP ${r.status}`
+    await r.json()
+    return null
+  } catch (e) {
+    return (e as Error).message
+  }
 }
 
 async function bootstrap(): Promise<void> {
@@ -52,6 +71,16 @@ async function bootstrap(): Promise<void> {
   label.anchor.set(0.5, 0)
   label.position.set(app.screen.width / 2, 12)
   app.stage.addChild(label)
+
+  const modelUrl = window.infinitiLiveUi?.model3FileUrl?.trim() ?? ''
+  if (modelUrl) {
+    const pe = await probeModelJson(modelUrl)
+    if (pe) {
+      label.text = `LiveUI · model3 校验失败：${pe.slice(0, 72)}`
+    } else {
+      label.text = 'LiveUI · model3 已加载（占位渲染，待接 Live2D Cubism）'
+    }
+  }
 
   let mouthOpen = 0
   let expression = 'neutral'
@@ -98,7 +127,8 @@ async function bootstrap(): Promise<void> {
   const socket = new WebSocket(wsUrl)
 
   socket.addEventListener('open', () => {
-    label.text = `LiveUI · 已连接 ${wsUrl}`
+    const m = modelUrl ? ' · 已配置 model3' : ''
+    label.text = `LiveUI · 已连接 ${wsUrl}${m}`
   })
   socket.addEventListener('close', () => {
     label.text = 'LiveUI · 连接已断开'
@@ -128,7 +158,6 @@ async function bootstrap(): Promise<void> {
   })
 
   app.ticker.add(() => {
-    // 轻微 idle 动画（与主进程口型叠加）
     const t = performance.now() / 1000
     face.scale.set(1 + Math.sin(t * 2.2) * 0.012)
   })
