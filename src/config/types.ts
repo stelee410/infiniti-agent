@@ -112,6 +112,7 @@ export type InfinitiConfig = {
   thinking?: ThinkingConfig
   liveUi?: LiveUiConfig
   tts?: TtsConfig
+  asr?: AsrConfig
 }
 
 /**
@@ -151,6 +152,30 @@ export type TtsConfig = {
   /** 音调 -12–12 */
   pitch?: number
 }
+
+/** 云端 Whisper ASR 配置（OpenAI-compatible）。 */
+export type WhisperAsrConfig = {
+  provider: 'whisper'
+  apiKey: string
+  baseUrl: string
+  model?: string
+  lang?: string
+}
+
+/** 本地 sherpa-onnx SenseVoice ASR 配置。 */
+export type SherpaOnnxAsrConfig = {
+  provider: 'sherpa_onnx'
+  /** 模型 .onnx 文件路径（相对于 cwd） */
+  model: string
+  /** tokens.txt 文件路径（相对于 cwd） */
+  tokens: string
+  /** 语言代码：zh / en / auto */
+  lang?: string
+  /** 推理线程数（默认 4） */
+  numThreads?: number
+}
+
+export type AsrConfig = WhisperAsrConfig | SherpaOnnxAsrConfig
 
 export function isLlmProvider(v: string): v is LlmProvider {
   return v === 'anthropic' || v === 'openai' || v === 'gemini' || v === 'minimax'

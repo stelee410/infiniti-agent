@@ -55,8 +55,10 @@ type AudioChunkMsg = {
 type AudioResetMsg = { type: 'AUDIO_RESET' }
 
 type TtsStatusMsg = { type: 'TTS_STATUS'; data: { available: boolean } }
+type AsrStatusMsg = { type: 'ASR_STATUS'; data: { available: boolean } }
+type AsrResultMsg = { type: 'ASR_RESULT'; data: { text: string } }
 
-type Msg = SyncParam | ActionMsg | AssistantStreamMsg | StatusPillMsg | AudioChunkMsg | AudioResetMsg | TtsStatusMsg
+type Msg = SyncParam | ActionMsg | AssistantStreamMsg | StatusPillMsg | AudioChunkMsg | AudioResetMsg | TtsStatusMsg | AsrStatusMsg | AsrResultMsg
 
 const FACE_RADIUS = 110
 
@@ -630,6 +632,15 @@ async function bootstrap(): Promise<void> {
     } else if (msg.type === 'TTS_STATUS') {
       ttsAvailable = !!msg.data?.available
       updateSpeakerBtn()
+    } else if (msg.type === 'ASR_STATUS') {
+      asrAvailable = !!msg.data?.available
+      updateMicBtn()
+    } else if (msg.type === 'ASR_RESULT') {
+      const text = msg.data?.text
+      if (typeof text === 'string' && text.trim() && userLineInput) {
+        userLineInput.value = text.trim()
+        touchConvActivity()
+      }
     } else if (msg.type === 'AUDIO_CHUNK') {
       if (ttsEnabled) enqueueAudioChunk(msg.data.audioBase64)
     } else if (msg.type === 'AUDIO_RESET') {
@@ -721,8 +732,78 @@ async function bootstrap(): Promise<void> {
     if (!ttsEnabled) resetAudioQueue()
   })
 
-  document.getElementById('liveui-btn-mute')?.addEventListener('click', () => {
-    console.debug('[liveui] toolbar placeholder: liveui-btn-mute')
+  // ── 麦克风按钮：ASR 语音识别 ──
+  let asrAvailable = false
+  let micRecording = false
+  let mediaRecorder: MediaRecorder | null = null
+  let micChunks: Blob[] = []
+
+  const micBtn = document.getElementById('liveui-btn-mic') as HTMLButtonElement | null
+  const micIconIdle = document.getElementById('liveui-mic-icon-idle')
+  const micIconRecording = document.getElementById('liveui-mic-icon-recording')
+
+  const updateMicBtn = (): void => {
+    if (!micBtn) return
+    micBtn.setAttribute('aria-pressed', String(micRecording))
+    micBtn.title = !asrAvailable ? '语音输入：不可用' : (micRecording ? '录音中…点击停止' : '点击开始语音输入')
+    if (micIconIdle) micIconIdle.style.display = micRecording ? 'none' : ''
+    if (micIconRecording) micIconRecording.style.display = micRecording ? '' : 'none'
+  }
+
+  const stopRecording = (): void => {
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+      mediaRecorder.stop()
+    }
+  }
+
+  const startRecording = async (): Promise<void> => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000, channelCount: 1 } })
+      micChunks = []
+      const mr = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' })
+      mediaRecorder = mr
+
+      mr.ondataavailable = (e) => {
+        if (e.data.size > 0) micChunks.push(e.data)
+      }
+
+      mr.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop())
+        micRecording = false
+        updateMicBtn()
+
+        if (micChunks.length === 0) return
+        const blob = new Blob(micChunks, { type: 'audio/webm' })
+        micChunks = []
+
+        const reader = new FileReader()
+        reader.onloadend = () => {
+          const base64 = (reader.result as string).split(',')[1]
+          if (base64 && socket.readyState === WebSocket.OPEN) {
+            console.debug(`[liveui] 发送录音: ${blob.size} bytes`)
+            socket.send(JSON.stringify({ type: 'MIC_AUDIO', data: { audioBase64: base64, format: 'webm' } }))
+          }
+        }
+        reader.readAsDataURL(blob)
+      }
+
+      mr.start()
+      micRecording = true
+      updateMicBtn()
+    } catch (e) {
+      console.warn('[liveui] 麦克风获取失败:', e)
+      micRecording = false
+      updateMicBtn()
+    }
+  }
+
+  micBtn?.addEventListener('click', () => {
+    if (!asrAvailable) return
+    if (micRecording) {
+      stopRecording()
+    } else {
+      void startRecording()
+    }
   })
 
   // ── 手掌按钮：随机动作 ──

@@ -60,6 +60,18 @@ export type LiveUiTtsStatusMessage = {
   data: { available: boolean }
 }
 
+/** 告知渲染端 ASR 是否可用（连接时推送）。 */
+export type LiveUiAsrStatusMessage = {
+  type: 'ASR_STATUS'
+  data: { available: boolean }
+}
+
+/** ASR 识别结果（server → client），渲染端收到后填入输入框并自动提交。 */
+export type LiveUiAsrResultMessage = {
+  type: 'ASR_RESULT'
+  data: { text: string }
+}
+
 export type LiveUiMessage =
   | LiveUiSyncParamMessage
   | LiveUiActionMessage
@@ -68,6 +80,8 @@ export type LiveUiMessage =
   | LiveUiAudioChunkMessage
   | LiveUiAudioResetMessage
   | LiveUiTtsStatusMessage
+  | LiveUiAsrStatusMessage
+  | LiveUiAsrResultMessage
 
 export function isLiveUiMessage(x: unknown): x is LiveUiMessage {
   if (!x || typeof x !== 'object') return false
@@ -107,10 +121,15 @@ export function isLiveUiMessage(x: unknown): x is LiveUiMessage {
     return typeof dd.audioBase64 === 'string' && typeof dd.sequence === 'number'
   }
   if (o.type === 'AUDIO_RESET') return true
-  if (o.type === 'TTS_STATUS') {
+  if (o.type === 'TTS_STATUS' || o.type === 'ASR_STATUS') {
     const d = (x as { data?: unknown }).data
     if (!d || typeof d !== 'object') return false
     return typeof (d as { available?: unknown }).available === 'boolean'
+  }
+  if (o.type === 'ASR_RESULT') {
+    const d = (x as { data?: unknown }).data
+    if (!d || typeof d !== 'object') return false
+    return typeof (d as { text?: unknown }).text === 'string'
   }
   return false
 }

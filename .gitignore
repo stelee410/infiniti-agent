@@ -8,6 +8,9 @@ dist/
 # setup:liveui 复制到仓库根时与示例重复，保留本地即可
 /model_dict.json
 
+# ASR / TTS 模型文件（体积过大，不纳入 Git）
+models/
+
 # Live2D 模型资源（体积较大，本地从 Open-LLM-VTuber 同步，默认不提交）
 live2d-models/**
 !live2d-models/README.txt

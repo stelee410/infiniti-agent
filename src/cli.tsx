@@ -27,6 +27,8 @@ import { readPackageVersion } from './packageRoot.js'
 import { runLink } from './link.js'
 import { LiveUiSession } from './liveui/wsSession.js'
 import { createMinimaxTts } from './tts/minimaxTts.js'
+import { createWhisperAsr } from './asr/whisperAsr.js'
+import { createSherpaOnnxAsr } from './asr/sherpaOnnxAsr.js'
 import { spawnLiveElectron } from './liveui/spawnRenderer.js'
 import { resolveLive2dModelForUi } from './liveui/resolveModelPath.js'
 
@@ -71,7 +73,14 @@ async function runChatTui(
       liveUi.startMouthPump()
       if (cfg.tts?.provider === 'minimax') {
         liveUi.setTtsEngine(createMinimaxTts(cfg.tts))
-        console.error(`[liveui] MiniMax TTS 已启用 (model: ${cfg.tts.model ?? 'speech-2.8-turbo'}, voice: ${cfg.tts.voiceId ?? 'female-shaonv'})`)
+        console.error(`[liveui] MiniMax TTS 已启用 (model: ${cfg.tts.model ?? 'speech-02-turbo'}, voice: ${cfg.tts.voiceId ?? 'female-shaonv'})`)
+      }
+      if (cfg.asr?.provider === 'whisper') {
+        liveUi.setAsrEngine(createWhisperAsr(cfg.asr))
+        console.error(`[liveui] Whisper ASR 已启用 (model: ${cfg.asr.model ?? 'whisper-large-v3-turbo'}, baseUrl: ${cfg.asr.baseUrl})`)
+      } else if (cfg.asr?.provider === 'sherpa_onnx') {
+        liveUi.setAsrEngine(await createSherpaOnnxAsr(cfg.asr))
+        console.error(`[liveui] sherpa-onnx ASR 已启用 (model: ${cfg.asr.model})`)
       }
       const child = spawnLiveElectron(liveUi.port, opts.liveUiModel3FileUrl)
       liveUi.setElectronChild(child)

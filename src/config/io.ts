@@ -4,6 +4,7 @@ import { dirname } from 'path'
 import { constants } from 'fs'
 import { GLOBAL_AGENT_DIR, GLOBAL_CONFIG_PATH, localConfigPath, localAgentDir } from '../paths.js'
 import type {
+  AsrConfig,
   CompactionConfig,
   InfinitiConfig,
   LiveUiConfig,
@@ -119,6 +120,7 @@ export async function loadConfig(cwd?: string): Promise<InfinitiConfig> {
   const compaction = parseCompactionConfig(o.compaction)
   const liveUi = parseLiveUiConfig(o.liveUi)
   const tts = parseTtsConfig(o.tts)
+  const asr = parseAsrConfig(o.asr)
 
   return {
     version: 1,
@@ -139,6 +141,7 @@ export async function loadConfig(cwd?: string): Promise<InfinitiConfig> {
     ...(compaction ? { compaction } : {}),
     ...(liveUi ? { liveUi } : {}),
     ...(tts ? { tts } : {}),
+    ...(asr ? { asr } : {}),
   }
 }
 
@@ -225,6 +228,28 @@ function parseTtsConfig(raw: unknown): TtsConfig | undefined {
   return out
 }
 
+function parseAsrConfig(raw: unknown): AsrConfig | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const a = raw as Record<string, unknown>
+  if (a.provider === 'whisper') {
+    if (typeof a.apiKey !== 'string' || !a.apiKey.trim()) return undefined
+    if (typeof a.baseUrl !== 'string' || !a.baseUrl.trim()) return undefined
+    const out: AsrConfig = { provider: 'whisper', apiKey: a.apiKey.trim(), baseUrl: a.baseUrl.trim() }
+    if (typeof a.model === 'string' && a.model.trim()) out.model = a.model.trim()
+    if (typeof a.lang === 'string' && a.lang.trim()) out.lang = a.lang.trim()
+    return out
+  }
+  if (a.provider === 'sherpa_onnx') {
+    if (typeof a.model !== 'string' || !a.model.trim()) return undefined
+    if (typeof a.tokens !== 'string' || !a.tokens.trim()) return undefined
+    const out: AsrConfig = { provider: 'sherpa_onnx', model: a.model.trim(), tokens: a.tokens.trim() }
+    if (typeof a.lang === 'string' && a.lang.trim()) out.lang = a.lang.trim()
+    if (typeof a.numThreads === 'number' && a.numThreads >= 1) out.numThreads = Math.floor(a.numThreads)
+    return out
+  }
+  return undefined
+}
+
 export type SaveConfigInput = {
   /** 所有 profiles（key = profile 名） */
   profiles: Record<string, LlmProfile>
@@ -258,6 +283,7 @@ export async function saveConfig(input: SaveConfigInput): Promise<void> {
     ...(existing?.compaction ? { compaction: existing.compaction } : {}),
     ...(existing?.liveUi ? { liveUi: existing.liveUi } : {}),
     ...(existing?.tts ? { tts: existing.tts } : {}),
+    ...(existing?.asr ? { asr: existing.asr } : {}),
   }
   const target = GLOBAL_CONFIG_PATH
   await mkdir(dirname(target), { recursive: true })

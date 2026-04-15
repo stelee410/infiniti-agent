@@ -10,6 +10,7 @@ import type {
 } from './protocol.js'
 import { StreamMouthEstimator } from './streamMouth.js'
 import type { TtsEngine } from '../tts/minimaxTts.js'
+import type { AsrEngine } from '../asr/whisperAsr.js'
 
 export type LiveUiConnectionListener = (connected: boolean) => void
 export type LiveUiUserLineListener = (line: string) => void
@@ -33,6 +34,7 @@ export class LiveUiSession {
   private ttsEnabled = true
   private ttsSequence = 0
   private ttsPending: Promise<void> = Promise.resolve()
+  private asrEngine: AsrEngine | null = null
 
   constructor(port: number) {
     this.port = port
@@ -46,6 +48,15 @@ export class LiveUiSession {
 
   private broadcastTtsStatus(): void {
     this.broadcast({ type: 'TTS_STATUS', data: { available: this.ttsEngine != null } } as LiveUiMessage)
+  }
+
+  setAsrEngine(engine: AsrEngine | null): void {
+    this.asrEngine = engine
+    this.broadcastAsrStatus()
+  }
+
+  private broadcastAsrStatus(): void {
+    this.broadcast({ type: 'ASR_STATUS', data: { available: this.asrEngine != null } } as LiveUiMessage)
   }
 
   setElectronChild(proc: ChildProcess | null): void {
@@ -109,6 +120,10 @@ export class LiveUiSession {
         const status = JSON.stringify({ type: 'TTS_STATUS', data: { available: true } })
         if (ws.readyState === WebSocket.OPEN) ws.send(status)
       }
+      if (this.asrEngine) {
+        const status = JSON.stringify({ type: 'ASR_STATUS', data: { available: true } })
+        if (ws.readyState === WebSocket.OPEN) ws.send(status)
+      }
       ws.on('message', (buf) => {
         try {
           const raw = typeof buf === 'string' ? buf : buf.toString('utf8')
@@ -123,6 +138,13 @@ export class LiveUiSession {
           if (t === 'TTS_TOGGLE' && parsed.data && typeof parsed.data === 'object') {
             const enabled = (parsed.data as { enabled?: unknown }).enabled
             this.ttsEnabled = !!enabled
+            return
+          }
+          if (t === 'MIC_AUDIO' && parsed.data && typeof parsed.data === 'object') {
+            const d = parsed.data as { audioBase64?: string; format?: string }
+            if (typeof d.audioBase64 === 'string' && this.asrEngine) {
+              void this.handleMicAudio(d.audioBase64, d.format ?? 'webm', ws)
+            }
             return
           }
           if (t === 'LIVEUI_INTERACTION' && parsed.data && typeof parsed.data === 'object') {
@@ -215,6 +237,22 @@ export class LiveUiSession {
         appendFileSync('/tmp/infiniti-tts.log', `[${new Date().toISOString()}] TTS #${seq}: 合成失败: ${(e as Error).message}\n`)
       }
     })
+  }
+
+  private async handleMicAudio(audioBase64: string, format: string, ws: WebSocket): Promise<void> {
+    if (!this.asrEngine) return
+    try {
+      const buf = Buffer.from(audioBase64, 'base64')
+      appendFileSync('/tmp/infiniti-tts.log', `[asr] 收到音频: ${buf.length} bytes, format=${format}\n`)
+      const text = await this.asrEngine.transcribe(buf, format)
+      appendFileSync('/tmp/infiniti-tts.log', `[asr] 识别结果: "${text}"\n`)
+      if (!text.trim()) return
+      const result = JSON.stringify({ type: 'ASR_RESULT', data: { text: text.trim() } })
+      if (ws.readyState === WebSocket.OPEN) ws.send(result)
+      this.emitUserLine(text.trim())
+    } catch (e) {
+      appendFileSync('/tmp/infiniti-tts.log', `[asr] 识别失败: ${(e as Error).message}\n`)
+    }
   }
 
   get hasTts(): boolean {
