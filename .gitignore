@@ -8,6 +8,10 @@ dist/
 # setup:liveui 复制到仓库根时与示例重复，保留本地即可
 /model_dict.json
 
+# Live2D 模型资源（体积较大，本地从 Open-LLM-VTuber 同步，默认不提交）
+live2d-models/**
+!live2d-models/README.txt
+
 # 兼容文件由用户在工作目录自行维护，不纳入本仓库
 AGENT.md
 AGENTS.md
