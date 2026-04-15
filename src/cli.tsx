@@ -26,6 +26,7 @@ import { runCliPrompt } from './runCliPrompt.js'
 import { readPackageVersion } from './packageRoot.js'
 import { runLink } from './link.js'
 import { LiveUiSession } from './liveui/wsSession.js'
+import { createMinimaxTts } from './tts/minimaxTts.js'
 import { spawnLiveElectron } from './liveui/spawnRenderer.js'
 import { resolveLive2dModelForUi } from './liveui/resolveModelPath.js'
 
@@ -68,6 +69,10 @@ async function runChatTui(
       }
       await liveUi.start()
       liveUi.startMouthPump()
+      if (cfg.tts?.provider === 'minimax') {
+        liveUi.setTtsEngine(createMinimaxTts(cfg.tts))
+        console.error(`[liveui] MiniMax TTS 已启用 (model: ${cfg.tts.model ?? 'speech-2.8-turbo'}, voice: ${cfg.tts.voiceId ?? 'female-shaonv'})`)
+      }
       const child = spawnLiveElectron(liveUi.port, opts.liveUiModel3FileUrl)
       liveUi.setElectronChild(child)
       if (!child) {

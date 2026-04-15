@@ -1,4 +1,4 @@
-export type LlmProvider = 'anthropic' | 'openai' | 'gemini'
+export type LlmProvider = 'anthropic' | 'openai' | 'gemini' | 'minimax'
 
 export type McpServerConfig = {
   command: string
@@ -111,6 +111,7 @@ export type InfinitiConfig = {
   compaction?: CompactionConfig
   thinking?: ThinkingConfig
   liveUi?: LiveUiConfig
+  tts?: TtsConfig
 }
 
 /**
@@ -133,6 +134,24 @@ export function resolveLlmProfile(config: InfinitiConfig, profileName?: string):
   }
 }
 
+/** MiniMax TTS 配置（同时用于 LiveUI 语音合成）。 */
+export type TtsConfig = {
+  provider: 'minimax'
+  apiKey: string
+  /** MiniMax GroupId（必填，可在 https://platform.minimaxi.com 获取） */
+  groupId: string
+  /** TTS 模型，如 speech-02-hd / speech-02-turbo */
+  model?: string
+  /** 音色 ID，如 male-qn-qingse / female-shaonv */
+  voiceId?: string
+  /** 语速 0.5–2.0 */
+  speed?: number
+  /** 音量 0.1–10.0 */
+  vol?: number
+  /** 音调 -12–12 */
+  pitch?: number
+}
+
 export function isLlmProvider(v: string): v is LlmProvider {
-  return v === 'anthropic' || v === 'openai' || v === 'gemini'
+  return v === 'anthropic' || v === 'openai' || v === 'gemini' || v === 'minimax'
 }

@@ -1,5 +1,6 @@
 import { type ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
+import { appendFileSync } from 'node:fs'
 import { WebSocketServer, WebSocket } from 'ws'
 import type {
   LiveUiActionMessage,
@@ -8,9 +9,14 @@ import type {
   LiveUiStatusVariant,
 } from './protocol.js'
 import { StreamMouthEstimator } from './streamMouth.js'
+import type { TtsEngine } from '../tts/minimaxTts.js'
 
 export type LiveUiConnectionListener = (connected: boolean) => void
 export type LiveUiUserLineListener = (line: string) => void
+
+/** 渲染端点击 Live2D 头部 / 身体等，由 Node 转成一条合成用户消息请求模型回应 */
+export type LiveUiInteractionKind = 'head_pat' | 'body_poke'
+export type LiveUiInteractionListener = (kind: LiveUiInteractionKind) => void
 
 export class LiveUiSession {
   readonly port: number
@@ -20,11 +26,26 @@ export class LiveUiSession {
   private clients = new Set<WebSocket>()
   private listeners = new Set<LiveUiConnectionListener>()
   private userLineListeners = new Set<LiveUiUserLineListener>()
+  private interactionListeners = new Set<LiveUiInteractionListener>()
   private mouthTimer: ReturnType<typeof setInterval> | undefined
   private electronChild: ChildProcess | null = null
+  private ttsEngine: TtsEngine | null = null
+  private ttsEnabled = true
+  private ttsSequence = 0
+  private ttsPending: Promise<void> = Promise.resolve()
 
   constructor(port: number) {
     this.port = port
+  }
+
+  setTtsEngine(engine: TtsEngine | null): void {
+    this.ttsEngine = engine
+    appendFileSync('/tmp/infiniti-tts.log', `[${new Date().toISOString()}] setTtsEngine: engine=${engine != null}, hasTts=${this.hasTts}\n`)
+    this.broadcastTtsStatus()
+  }
+
+  private broadcastTtsStatus(): void {
+    this.broadcast({ type: 'TTS_STATUS', data: { available: this.ttsEngine != null } } as LiveUiMessage)
   }
 
   setElectronChild(proc: ChildProcess | null): void {
@@ -57,6 +78,19 @@ export class LiveUiSession {
     }
   }
 
+  onInteraction(fn: LiveUiInteractionListener): () => void {
+    this.interactionListeners.add(fn)
+    return () => {
+      this.interactionListeners.delete(fn)
+    }
+  }
+
+  private emitInteraction(kind: LiveUiInteractionKind): void {
+    for (const f of this.interactionListeners) {
+      f(kind)
+    }
+  }
+
   private emitConn(): void {
     const ok = this.clientConnected
     for (const f of this.listeners) f(ok)
@@ -71,16 +105,32 @@ export class LiveUiSession {
     wss.on('connection', (ws) => {
       this.clients.add(ws)
       this.emitConn()
+      if (this.ttsEngine) {
+        const status = JSON.stringify({ type: 'TTS_STATUS', data: { available: true } })
+        if (ws.readyState === WebSocket.OPEN) ws.send(status)
+      }
       ws.on('message', (buf) => {
         try {
           const raw = typeof buf === 'string' ? buf : buf.toString('utf8')
           const parsed = JSON.parse(raw) as { type?: unknown; data?: unknown }
-          if (parsed?.type !== 'USER_INPUT' || !parsed.data || typeof parsed.data !== 'object') {
+          const t = parsed?.type
+          if (t === 'USER_INPUT' && parsed.data && typeof parsed.data === 'object') {
+            const line = (parsed.data as { line?: unknown }).line
+            if (typeof line !== 'string' || !line.trim()) return
+            this.emitUserLine(line.trimEnd())
             return
           }
-          const line = (parsed.data as { line?: unknown }).line
-          if (typeof line !== 'string' || !line.trim()) return
-          this.emitUserLine(line.trimEnd())
+          if (t === 'TTS_TOGGLE' && parsed.data && typeof parsed.data === 'object') {
+            const enabled = (parsed.data as { enabled?: unknown }).enabled
+            this.ttsEnabled = !!enabled
+            return
+          }
+          if (t === 'LIVEUI_INTERACTION' && parsed.data && typeof parsed.data === 'object') {
+            const kind = (parsed.data as { kind?: unknown }).kind
+            if (kind === 'head_pat' || kind === 'body_poke') {
+              this.emitInteraction(kind)
+            }
+          }
         } catch {
           /* ignore invalid client frames */
         }
@@ -127,6 +177,48 @@ export class LiveUiSession {
   /** 同步底部栏左侧状态胶囊（就绪 / 处理中 / 渲染未连接等）。 */
   sendStatusPill(label: string, variant: LiveUiStatusVariant): void {
     this.broadcast({ type: 'STATUS_PILL', data: { label, variant } })
+  }
+
+  /** 通知渲染端清空音频队列（新一轮 assistant 回答开始时调用）。 */
+  resetAudio(): void {
+    this.ttsSequence = 0
+    this.ttsPending = Promise.resolve()
+    this.broadcast({ type: 'AUDIO_RESET' })
+  }
+
+  /**
+   * 异步合成一句话的 TTS 并发送 AUDIO_CHUNK 到渲染端。
+   * 串行排队，不阻塞调用方。
+   */
+  enqueueTts(text: string): void {
+    appendFileSync('/tmp/infiniti-tts.log', `[${new Date().toISOString()}] enqueueTts called: engine=${this.ttsEngine != null}, enabled=${this.ttsEnabled}, text="${text.slice(0, 40)}"\n`)
+    if (!this.ttsEngine || !this.ttsEnabled || !text.trim()) return
+    const seq = this.ttsSequence++
+    const engine = this.ttsEngine
+    appendFileSync('/tmp/infiniti-tts.log', `[${new Date().toISOString()}] TTS 排队 #${seq}: "${text.slice(0, 40)}"\n`)
+    this.ttsPending = this.ttsPending.then(async () => {
+      try {
+        const buf = await engine.synthesize(text)
+        appendFileSync('/tmp/infiniti-tts.log', `[${new Date().toISOString()}] TTS #${seq}: 合成完成 ${buf.length} bytes\n`)
+        if (buf.length === 0) return
+        appendFileSync('/tmp/infiniti-tts.log', `[${new Date().toISOString()}] TTS #${seq}: 广播到 ${this.clients.size} 个客户端\n`)
+        this.broadcast({
+          type: 'AUDIO_CHUNK',
+          data: {
+            audioBase64: buf.toString('base64'),
+            format: 'mp3',
+            sampleRate: 32000,
+            sequence: seq,
+          },
+        })
+      } catch (e) {
+        appendFileSync('/tmp/infiniti-tts.log', `[${new Date().toISOString()}] TTS #${seq}: 合成失败: ${(e as Error).message}\n`)
+      }
+    })
+  }
+
+  get hasTts(): boolean {
+    return this.ttsEngine != null && this.ttsEnabled
   }
 
   startMouthPump(): void {

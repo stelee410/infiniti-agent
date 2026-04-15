@@ -9,6 +9,7 @@ import type {
   LiveUiConfig,
   LlmProfile,
   McpServerConfig,
+  TtsConfig,
 } from './types.js'
 import { isLlmProvider } from './types.js'
 import { PROVIDER_DEFAULTS } from './defaults.js'
@@ -102,7 +103,7 @@ export async function loadConfig(cwd?: string): Promise<InfinitiConfig> {
   apiKey = apiKey ?? (llm.apiKey as string | undefined)
 
   if (typeof provider !== 'string' || !isLlmProvider(provider)) {
-    throw new ConfigError('llm.provider 必须是 anthropic | openai | gemini（或在 profiles 中配置）')
+    throw new ConfigError('llm.provider 必须是 anthropic | openai | gemini | minimax（或在 profiles 中配置）')
   }
   if (typeof baseUrl !== 'string' || !baseUrl.trim()) {
     throw new ConfigError('llm.baseUrl 无效')
@@ -117,6 +118,7 @@ export async function loadConfig(cwd?: string): Promise<InfinitiConfig> {
   const mcp = o.mcp as Record<string, unknown> | undefined
   const compaction = parseCompactionConfig(o.compaction)
   const liveUi = parseLiveUiConfig(o.liveUi)
+  const tts = parseTtsConfig(o.tts)
 
   return {
     version: 1,
@@ -136,6 +138,7 @@ export async function loadConfig(cwd?: string): Promise<InfinitiConfig> {
         : undefined,
     ...(compaction ? { compaction } : {}),
     ...(liveUi ? { liveUi } : {}),
+    ...(tts ? { tts } : {}),
   }
 }
 
@@ -207,6 +210,21 @@ function parseCompactionConfig(raw: unknown): CompactionConfig | undefined {
   return Object.keys(out).length ? out : undefined
 }
 
+function parseTtsConfig(raw: unknown): TtsConfig | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const t = raw as Record<string, unknown>
+  if (t.provider !== 'minimax') return undefined
+  if (typeof t.apiKey !== 'string' || !t.apiKey.trim()) return undefined
+  if (typeof t.groupId !== 'string' || !t.groupId.trim()) return undefined
+  const out: TtsConfig = { provider: 'minimax', apiKey: t.apiKey.trim(), groupId: t.groupId.trim() }
+  if (typeof t.model === 'string' && t.model.trim()) out.model = t.model.trim()
+  if (typeof t.voiceId === 'string' && t.voiceId.trim()) out.voiceId = t.voiceId.trim()
+  if (typeof t.speed === 'number' && t.speed > 0) out.speed = t.speed
+  if (typeof t.vol === 'number' && t.vol > 0) out.vol = t.vol
+  if (typeof t.pitch === 'number') out.pitch = t.pitch
+  return out
+}
+
 export type SaveConfigInput = {
   /** 所有 profiles（key = profile 名） */
   profiles: Record<string, LlmProfile>
@@ -239,6 +257,7 @@ export async function saveConfig(input: SaveConfigInput): Promise<void> {
     },
     ...(existing?.compaction ? { compaction: existing.compaction } : {}),
     ...(existing?.liveUi ? { liveUi: existing.liveUi } : {}),
+    ...(existing?.tts ? { tts: existing.tts } : {}),
   }
   const target = GLOBAL_CONFIG_PATH
   await mkdir(dirname(target), { recursive: true })

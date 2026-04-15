@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { join } from 'node:path'
+import { appendFileSync } from 'node:fs'
 import { Box, Text, useApp, useInput } from 'ink'
 import TextInput from 'ink-text-input'
 import chokidar from 'chokidar'
@@ -29,7 +30,7 @@ import {
   filterSlashItems,
   type SlashItem,
 } from './slashCompletions.js'
-import type { LiveUiSession } from '../liveui/wsSession.js'
+import type { LiveUiInteractionKind, LiveUiSession } from '../liveui/wsSession.js'
 import type { LiveUiStatusVariant } from '../liveui/protocol.js'
 import {
   createStreamLiveUiState,
@@ -37,6 +38,12 @@ import {
   stripLiveUiKnownEmotionTagsEverywhere,
   stripLiveUiTagsFromMessages,
 } from '../liveui/emotionParse.js'
+
+const SENTENCE_RE = /(?<=[。！？.!?\n])\s*/
+
+function splitSentences(text: string): string[] {
+  return text.split(SENTENCE_RE).filter((s) => s.trim().length > 0)
+}
 
 type Props = {
   config: InfinitiConfig
@@ -68,11 +75,13 @@ export function ChatApp({
   const [streamText, setStreamText] = useState('')
   const streamTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const streamLiveUiRef = useRef(createStreamLiveUiState())
+  const ttsSentRef = useRef(0)
   const [liveUiConnected, setLiveUiConnected] = useState(false)
   const editHistoryRef = useRef(new EditHistory())
   const [slashIndex, setSlashIndex] = useState(0)
   const busyRef = useRef(false)
   busyRef.current = busy
+  const liveUiInteractionCooldownRef = useRef(0)
   const [notice, setNotice] = useState<string | null>(null)
   const [compacting, setCompacting] = useState(false)
   const busySubtextRef = useRef<string | null>(null)
@@ -448,6 +457,10 @@ export function ChatApp({
               lastStreamDeltaAtRef.current = null
               busySubtextRef.current = '等待模型响应（多轮工具之间会重新请求）…'
               liveUi?.sendAssistantStream('', true)
+              if (liveUi?.hasTts) {
+                liveUi.resetAudio()
+                ttsSentRef.current = 0
+              }
             },
             onTextDelta: (_delta, full) => {
               lastStreamDeltaAtRef.current = Date.now()
@@ -462,6 +475,15 @@ export function ChatApp({
                 const clean = stripLiveUiKnownEmotionTagsEverywhere(displayText)
                 liveUi.mouth.onDisplayText(clean)
                 flushStream(clean)
+                appendFileSync('/tmp/infiniti-tts.log', `[${new Date().toISOString()}] onTextDelta: hasTts=${liveUi.hasTts}, clean="${clean.slice(0, 30)}"\n`)
+                if (liveUi.hasTts) {
+                  const sentences = splitSentences(clean)
+                  appendFileSync('/tmp/infiniti-tts.log', `[${new Date().toISOString()}] sentences: ${sentences.length}, ttsSent: ${ttsSentRef.current}\n`)
+                  for (let si = ttsSentRef.current; si < sentences.length - 1; si++) {
+                    liveUi.enqueueTts(sentences[si]!)
+                  }
+                  ttsSentRef.current = Math.max(0, sentences.length - 1)
+                }
               } else {
                 flushStream(full)
               }
@@ -483,6 +505,17 @@ export function ChatApp({
           },
         })
         const out = liveUi ? stripLiveUiTagsFromMessages(outRaw) : outRaw
+        if (liveUi?.hasTts) {
+          const lastMsg = outRaw[outRaw.length - 1]
+          if (lastMsg?.role === 'assistant' && lastMsg.content) {
+            const clean = stripLiveUiKnownEmotionTagsEverywhere(lastMsg.content)
+            const sentences = splitSentences(clean)
+            for (let si = ttsSentRef.current; si < sentences.length; si++) {
+              liveUi.enqueueTts(sentences[si]!)
+            }
+            ttsSentRef.current = sentences.length
+          }
+        }
         setMessages(out)
         await saveSession(cwd, out)
       } catch (e: unknown) {
@@ -512,6 +545,23 @@ export function ChatApp({
     if (!liveUi) return
     return liveUi.onUserLine((line) => {
       void handleSubmit(line)
+    })
+  }, [liveUi, handleSubmit])
+
+  useEffect(() => {
+    if (!liveUi) return
+    const prompts: Record<LiveUiInteractionKind, string> = {
+      head_pat:
+        '（刚才用户摸了摸你的头。请用一两句中文轻声回应；句首必须加合适的表情标签，例如 [Blush]。）',
+      body_poke:
+        '（刚才用户戳了戳你。请用一两句中文假装有点被冒犯又好笑；句首加表情标签，例如 [Angry] 或 [Thinking]。）',
+    }
+    return liveUi.onInteraction((kind) => {
+      if (busyRef.current) return
+      const now = Date.now()
+      if (now - liveUiInteractionCooldownRef.current < 5000) return
+      liveUiInteractionCooldownRef.current = now
+      void handleSubmit(prompts[kind])
     })
   }, [liveUi, handleSubmit])
 
@@ -577,6 +627,11 @@ export function ChatApp({
               {liveUiConnected ? '● 渲染已连接' : '○ 等待渲染'}
             </Text>
             <Text dimColor>{` · ws://127.0.0.1:${liveUi.port}`}</Text>
+            {liveUi.hasTts ? (
+              <Text color="cyan">{' · TTS ✓'}</Text>
+            ) : (
+              <Text dimColor>{' · TTS ✗'}</Text>
+            )}
           </Box>
         ) : null}
         <Text dimColor wrap="truncate">

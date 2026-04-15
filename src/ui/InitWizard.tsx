@@ -19,6 +19,7 @@ const providerItems: { label: string; value: LlmProvider }[] = [
   { label: 'Anthropic (Claude)', value: 'anthropic' },
   { label: 'OpenAI', value: 'openai' },
   { label: 'Google Gemini', value: 'gemini' },
+  { label: 'MiniMax (M2.7)', value: 'minimax' },
 ]
 
 const yesNoItems = [

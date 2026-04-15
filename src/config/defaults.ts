@@ -17,4 +17,8 @@ export const PROVIDER_DEFAULTS: Record<
     baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
     model: 'gemini-2.0-flash',
   },
+  minimax: {
+    baseUrl: 'https://api.minimax.io/v1',
+    model: 'MiniMax-M2.7',
+  },
 }

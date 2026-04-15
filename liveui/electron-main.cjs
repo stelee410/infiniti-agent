@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
-const { app, BrowserWindow, Menu } = require('electron')
+const { app, BrowserWindow, Menu, ipcMain } = require('electron')
 const path = require('path')
 
 /**
@@ -80,6 +80,21 @@ function createWindow() {
   if (!debugWindow) {
     win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
   }
+
+  /**
+   * macOS 透明窗口默认在透明像素处穿透点击。
+   * 用 forward: true 让 mousemove 仍然到达渲染进程，
+   * 渲染端检测鼠标是否在人物/控件区域，通过 IPC 动态切换。
+   */
+  if (!debugWindow) {
+    win.setIgnoreMouseEvents(true, { forward: true })
+  }
+
+  ipcMain.on('set-ignore-mouse-events', (_e, ignore, opts) => {
+    try {
+      win.setIgnoreMouseEvents(ignore, opts ?? {})
+    } catch { /* window may be destroyed */ }
+  })
 
   win.loadFile(indexHtml, { query: { port } }).catch((err) => {
     console.error('[liveui] loadFile failed', err)

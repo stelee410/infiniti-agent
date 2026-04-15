@@ -35,11 +35,39 @@ export type LiveUiStatusPillMessage = {
   }
 }
 
+/**
+ * TTS 音频块（server → client）。
+ * audioBase64 为完整一句话的 mp3 编码（base64）；客户端按 sequence 顺序播放。
+ */
+export type LiveUiAudioChunkMessage = {
+  type: 'AUDIO_CHUNK'
+  data: {
+    audioBase64: string
+    format: 'mp3'
+    sampleRate: number
+    sequence: number
+  }
+}
+
+/** 通知渲染端清空音频队列（新一轮对话开始时发送）。 */
+export type LiveUiAudioResetMessage = {
+  type: 'AUDIO_RESET'
+}
+
+/** 告知渲染端 TTS 引擎是否可用（连接时推送）。 */
+export type LiveUiTtsStatusMessage = {
+  type: 'TTS_STATUS'
+  data: { available: boolean }
+}
+
 export type LiveUiMessage =
   | LiveUiSyncParamMessage
   | LiveUiActionMessage
   | LiveUiAssistantStreamMessage
   | LiveUiStatusPillMessage
+  | LiveUiAudioChunkMessage
+  | LiveUiAudioResetMessage
+  | LiveUiTtsStatusMessage
 
 export function isLiveUiMessage(x: unknown): x is LiveUiMessage {
   if (!x || typeof x !== 'object') return false
@@ -71,6 +99,18 @@ export function isLiveUiMessage(x: unknown): x is LiveUiMessage {
     const v = dd.variant
     if (v !== 'ready' && v !== 'busy' && v !== 'warn' && v !== 'loading') return false
     return true
+  }
+  if (o.type === 'AUDIO_CHUNK') {
+    const d = (x as { data?: unknown }).data
+    if (!d || typeof d !== 'object') return false
+    const dd = d as { audioBase64?: unknown; format?: unknown; sampleRate?: unknown; sequence?: unknown }
+    return typeof dd.audioBase64 === 'string' && typeof dd.sequence === 'number'
+  }
+  if (o.type === 'AUDIO_RESET') return true
+  if (o.type === 'TTS_STATUS') {
+    const d = (x as { data?: unknown }).data
+    if (!d || typeof d !== 'object') return false
+    return typeof (d as { available?: unknown }).available === 'boolean'
   }
   return false
 }
