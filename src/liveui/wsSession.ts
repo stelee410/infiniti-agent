@@ -1,7 +1,12 @@
 import { type ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
 import { WebSocketServer, WebSocket } from 'ws'
-import type { LiveUiActionMessage, LiveUiAssistantStreamMessage, LiveUiMessage } from './protocol.js'
+import type {
+  LiveUiActionMessage,
+  LiveUiAssistantStreamMessage,
+  LiveUiMessage,
+  LiveUiStatusVariant,
+} from './protocol.js'
 import { StreamMouthEstimator } from './streamMouth.js'
 
 export type LiveUiConnectionListener = (connected: boolean) => void
@@ -117,6 +122,11 @@ export class LiveUiSession {
   sendAssistantStream(fullRaw: string, reset = false): void {
     const data: LiveUiAssistantStreamMessage['data'] = { fullRaw, reset }
     this.broadcast({ type: 'ASSISTANT_STREAM', data })
+  }
+
+  /** 同步底部栏左侧状态胶囊（就绪 / 处理中 / 渲染未连接等）。 */
+  sendStatusPill(label: string, variant: LiveUiStatusVariant): void {
+    this.broadcast({ type: 'STATUS_PILL', data: { label, variant } })
   }
 
   startMouthPump(): void {

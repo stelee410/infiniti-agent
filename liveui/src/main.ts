@@ -6,6 +6,8 @@ import {
   stripLiveUiKnownEmotionTagsEverywhere,
   type StreamLiveUiState,
 } from '../../src/liveui/emotionParse.ts'
+import type { LiveUiStatusVariant } from '../../src/liveui/protocol.ts'
+import { FIGURE_LAYOUT } from './figureLayoutConfig.ts'
 
 declare global {
   interface Window {
@@ -30,7 +32,12 @@ type AssistantStreamMsg = {
   data: { fullRaw: string; reset?: boolean }
 }
 
-type Msg = SyncParam | ActionMsg | AssistantStreamMsg
+type StatusPillMsg = {
+  type: 'STATUS_PILL'
+  data: { label: string; variant: LiveUiStatusVariant }
+}
+
+type Msg = SyncParam | ActionMsg | AssistantStreamMsg | StatusPillMsg
 
 const FACE_RADIUS = 110
 
@@ -78,11 +85,11 @@ function setMouthFromModel(model: InstanceType<typeof Live2DModel>, value01: num
 
 async function bootstrap(): Promise<void> {
   const canvas = document.getElementById('app') as HTMLCanvasElement | null
-  const chrome = document.getElementById('figure-chrome')
   const speechBubble = document.getElementById('speech-bubble')
   const speechBubbleText = document.getElementById('speech-bubble-text')
-  const userLineInput = document.getElementById('liveui-user-line') as HTMLInputElement | null
-  if (!canvas || !chrome) return
+  const statusPill = document.getElementById('liveui-status-pill')
+  const userLineInput = document.getElementById('liveui-user-line') as HTMLTextAreaElement | null
+  if (!canvas) return
 
   window.PIXI = PIXI
   /* 必须传入 Ticker 类；插件内部使用 tickerRef.shared.add（传 Ticker.shared 会 undefined） */
@@ -110,8 +117,73 @@ async function bootstrap(): Promise<void> {
   const mouth = new PIXI.Graphics()
   mouth.position.set(face.x, face.y + 38)
 
-  let hoverTarget: PIXI.Container = face
   let liveModel: InstanceType<typeof Live2DModel> | null = null
+
+  const layoutFootGapPx = (viewH: number): number =>
+    Math.max(0, Math.round(viewH * FIGURE_LAYOUT.footGapScreenFraction))
+
+  /**
+   * 脚底对齐在「字幕气泡顶」（气泡可见时）或「控制条顶」（无气泡时），略陷入则像站在对话框上；
+   * 再用控制条上沿做硬顶，避免踩进输入区。参数见 `figureLayoutConfig.ts`。
+   */
+  const layoutFigureInStage = (): void => {
+    const W = app.screen.width
+    const H = app.screen.height
+    const gap = layoutFootGapPx(H)
+    const canvasRect = canvas.getBoundingClientRect()
+    const controlBar = document.getElementById('liveui-control-bar')
+    const controlBarTop = controlBar
+      ? controlBar.getBoundingClientRect().top - canvasRect.top
+      : H
+    const soleCeiling = controlBarTop - FIGURE_LAYOUT.footClearOfControlBarPx
+
+    const bubbleOn = speechBubble?.classList.contains('visible') ?? false
+    const platformTop = bubbleOn
+      ? (speechBubble!.getBoundingClientRect().top - canvasRect.top)
+      : controlBarTop
+
+    const dock = document.getElementById('liveui-bottom-dock')
+    const fallbackPlatform =
+      dock != null
+        ? dock.getBoundingClientRect().top - canvasRect.top
+        : Math.max(120, H - Math.ceil(window.innerHeight * FIGURE_LAYOUT.fallbackDockReserveScreenFraction))
+    const effectivePlatform =
+      controlBar != null ? platformTop : fallbackPlatform
+
+    const stand = FIGURE_LAYOUT.footStandOnOverlapPx
+    const targetFootY = effectivePlatform + stand - gap
+
+    const footNudgeMax = Math.min(
+      FIGURE_LAYOUT.footNudgeMaxPx,
+      Math.round(H * FIGURE_LAYOUT.footNudgeScreenFraction),
+    )
+
+    if (liveModel) {
+      const uw = liveModel.width || 400
+      const uh = liveModel.height || 600
+      const maxBodyH = Math.max(100, Math.min(soleCeiling, targetFootY + footNudgeMax))
+      const s = Math.min(
+        (W * FIGURE_LAYOUT.modelWidthScreenFraction) / uw,
+        (maxBodyH * FIGURE_LAYOUT.modelHeightScaleFraction) / uh,
+      )
+      liveModel.scale.set(s, s)
+      liveModel.position.set(W / 2, H / 2)
+      const b = liveModel.getBounds()
+      liveModel.position.y += targetFootY - b.bottom
+      liveModel.position.y += footNudgeMax
+      const b2 = liveModel.getBounds()
+      if (b2.bottom > soleCeiling) {
+        liveModel.position.y -= b2.bottom - soleCeiling
+      }
+    } else {
+      let fy = targetFootY - FACE_RADIUS + footNudgeMax
+      if (fy + FACE_RADIUS > soleCeiling) {
+        fy = soleCeiling - FACE_RADIUS
+      }
+      face.position.set(W / 2, fy)
+      mouth.position.set(face.x, face.y + 38)
+    }
+  }
   let mouthOpen = 0
   let expression = 'neutral'
 
@@ -207,68 +279,11 @@ async function bootstrap(): Promise<void> {
     }
   }
 
-  let hideChromeTimer: ReturnType<typeof setTimeout> | undefined
-
-  const layoutChrome = (): void => {
-    const b = hoverTarget.getBounds()
-    const cx = b.x + b.width / 2
-    const cyTop = b.y
-    const cyBottom = b.y + b.height
-    chrome.style.transform = 'translate(0, 0)'
-    const rect = chrome.getBoundingClientRect()
-    const w = rect.width || 160
-    const h = rect.height || 56
-    let left = cx - w / 2
-    let top = cyTop - h - 12
-    if (top < 8) top = cyBottom + 10
-    left = Math.max(8, Math.min(left, window.innerWidth - w - 8))
-    top = Math.max(8, Math.min(top, window.innerHeight - h - 8))
-    chrome.style.left = `${left}px`
-    chrome.style.top = `${top}px`
-  }
-
-  const showChrome = (): void => {
-    if (hideChromeTimer) {
-      clearTimeout(hideChromeTimer)
-      hideChromeTimer = undefined
-    }
-    chrome.classList.add('visible')
-    chrome.setAttribute('aria-hidden', 'false')
-    layoutChrome()
-  }
-
-  const scheduleHideChrome = (): void => {
-    if (hideChromeTimer) clearTimeout(hideChromeTimer)
-    hideChromeTimer = setTimeout(() => {
-      chrome.classList.remove('visible')
-      chrome.setAttribute('aria-hidden', 'true')
-      hideChromeTimer = undefined
-    }, 280)
-  }
-
-  chrome.addEventListener('pointerenter', () => {
-    if (hideChromeTimer) {
-      clearTimeout(hideChromeTimer)
-      hideChromeTimer = undefined
-    }
-  })
-  chrome.addEventListener('pointerleave', scheduleHideChrome)
-
   const modelUrl = window.infinitiLiveUi?.model3FileUrl?.trim() ?? ''
 
   const wireHover = (target: PIXI.Container): void => {
-    if (hoverTarget !== face) {
-      hoverTarget.off('pointerover', showChrome)
-      hoverTarget.off('pointerout', scheduleHideChrome)
-    } else {
-      face.off('pointerover', showChrome)
-      face.off('pointerout', scheduleHideChrome)
-    }
-    hoverTarget = target
-    hoverTarget.interactive = true
-    hoverTarget.cursor = 'pointer'
-    hoverTarget.on('pointerover', showChrome)
-    hoverTarget.on('pointerout', scheduleHideChrome)
+    target.interactive = true
+    target.cursor = 'default'
   }
 
   if (modelUrl) {
@@ -279,15 +294,8 @@ async function bootstrap(): Promise<void> {
       app.stage.removeChild(face)
       app.stage.removeChild(mouth)
       liveModel.anchor.set(0.5, 0.5)
-      const layoutLive2d = (): void => {
-        liveModel!.position.set(app.screen.width / 2, app.screen.height / 2 + 20)
-        const uw = liveModel!.width || 400
-        const uh = liveModel!.height || 600
-        const s = Math.min((app.screen.width * 0.92) / uw, (app.screen.height * 0.85) / uh)
-        liveModel!.scale.set(s, s)
-      }
-      layoutLive2d()
       app.stage.addChild(liveModel)
+      layoutFigureInStage()
       wireHover(liveModel)
       void liveModel.motion('Idle', 0).catch(() => {})
       console.debug('[liveui] Live2D Cubism4 模型已加载', modelUrl)
@@ -299,6 +307,7 @@ async function bootstrap(): Promise<void> {
       applyPlaceholderExpression('neutral')
       redrawPlaceholderMouth()
       wireHover(face)
+      layoutFigureInStage()
     }
   } else {
     app.stage.addChild(face)
@@ -306,20 +315,24 @@ async function bootstrap(): Promise<void> {
     applyPlaceholderExpression('neutral')
     redrawPlaceholderMouth()
     wireHover(face)
+    layoutFigureInStage()
   }
 
   window.addEventListener('resize', () => {
     app.renderer.resize(window.innerWidth, window.innerHeight)
-    face.position.set(app.screen.width / 2, app.screen.height / 2 - 20)
-    mouth.position.set(face.x, face.y + 38)
-    if (liveModel) {
-      liveModel.position.set(app.screen.width / 2, app.screen.height / 2 + 20)
-      const uw = liveModel.width || 400
-      const uh = liveModel.height || 600
-      const s = Math.min((app.screen.width * 0.92) / uw, (app.screen.height * 0.85) / uh)
-      liveModel.scale.set(s, s)
-    }
-    layoutChrome()
+    layoutFigureInStage()
+  })
+
+  const dockEl = document.getElementById('liveui-bottom-dock')
+  if (dockEl && typeof ResizeObserver !== 'undefined') {
+    const ro = new ResizeObserver(() => {
+      requestAnimationFrame(() => layoutFigureInStage())
+    })
+    ro.observe(dockEl)
+  }
+
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => layoutFigureInStage())
   })
 
   const port = readPort()
@@ -368,11 +381,18 @@ async function bootstrap(): Promise<void> {
         if (a.expression) applyLive2dExpression(a.expression)
       }
       setBubbleFromDisplayText(stripLiveUiKnownEmotionTagsEverywhere(displayText))
+    } else if (msg.type === 'STATUS_PILL' && statusPill) {
+      const label = typeof msg.data?.label === 'string' ? msg.data.label : '就绪'
+      const v = msg.data?.variant
+      const variant: LiveUiStatusVariant =
+        v === 'ready' || v === 'busy' || v === 'warn' || v === 'loading' ? v : 'ready'
+      statusPill.textContent = label
+      statusPill.className = `liveui-status-pill liveui-status-pill--${variant}`
     }
   })
 
   userLineInput?.addEventListener('keydown', (ev) => {
-    if (ev.key !== 'Enter') return
+    if (ev.key !== 'Enter' || ev.shiftKey) return
     ev.preventDefault()
     const v = userLineInput.value.trimEnd()
     if (!v.trim()) return
@@ -381,13 +401,16 @@ async function bootstrap(): Promise<void> {
     userLineInput.value = ''
   })
 
+  for (const id of ['liveui-btn-voice', 'liveui-btn-mute', 'liveui-btn-hand'] as const) {
+    document.getElementById(id)?.addEventListener('click', () => {
+      console.debug(`[liveui] toolbar placeholder: ${id}`)
+    })
+  }
+
   app.ticker.add(() => {
     if (!liveModel) {
       const t = performance.now() / 1000
       face.scale.set(1 + Math.sin(t * 2.2) * 0.012)
-    }
-    if (chrome.classList.contains('visible')) {
-      layoutChrome()
     }
   })
 }

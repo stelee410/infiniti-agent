@@ -36,7 +36,7 @@ infiniti-agent
 | `infiniti-agent skill list` | 列出当前项目已安装的 Skills |
 | `infiniti-agent live` | LiveUI：WebSocket + Electron 透明窗 + TUI（需先 `npm run build`） |
 
-LiveUI 窗口为无边框透明窗：**鼠标移到人物（Live2D 或占位圆）上**会浮出半透明控制条，点击 **「⋮⋮ 拖动」** 即可拖动窗口；移开后面板短时淡出。
+LiveUI 窗口为无边框透明窗：**在底部深色对话条上，除按钮与输入框以外的区域**（条的外沿与留白）可拖动窗口；人物区域不再弹出单独拖动面板。
 
 **Electron 窗口（默认）**：无边框、**透明**、置顶叠层。需要标题栏 + **视图** 菜单（重新加载、开发者工具、缩放等）时：`INFINITI_LIVEUI_DEBUG_WINDOW=1`。启动时自动打开 DevTools（独立窗口）：`INFINITI_LIVEUI_DEVTOOLS=1`；`infiniti-agent live` 带 **`--debug`** 时也会自动设置 DevTools。
 

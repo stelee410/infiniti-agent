@@ -30,6 +30,7 @@ import {
   type SlashItem,
 } from './slashCompletions.js'
 import type { LiveUiSession } from '../liveui/wsSession.js'
+import type { LiveUiStatusVariant } from '../liveui/protocol.js'
 import {
   createStreamLiveUiState,
   processAssistantStreamChunk,
@@ -513,6 +514,29 @@ export function ChatApp({
       void handleSubmit(line)
     })
   }, [liveUi, handleSubmit])
+
+  useEffect(() => {
+    if (!liveUi) return
+    let label = '就绪'
+    let variant: LiveUiStatusVariant = 'ready'
+    if (!sessionReady) {
+      label = '加载中…'
+      variant = 'loading'
+    } else if (compacting) {
+      label = '压缩中…'
+      variant = 'busy'
+    } else if (busy) {
+      label = '处理中…'
+      variant = 'busy'
+    } else if (!liveUiConnected) {
+      label = '就绪 · 渲染未连'
+      variant = 'warn'
+    } else {
+      label = '就绪'
+      variant = 'ready'
+    }
+    liveUi.sendStatusPill(label, variant)
+  }, [liveUi, sessionReady, compacting, busy, liveUiConnected])
 
   const visibleCount = Math.max(4, rows - 14)
   const visible = messages.slice(-visibleCount)

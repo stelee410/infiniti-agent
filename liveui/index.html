@@ -18,60 +18,15 @@
         width: 100%;
         height: 100%;
       }
-      /* 悬停在人物上时显示：半透明控制层 + 可拖动按钮（Electron app-region） */
-      #figure-chrome {
-        position: fixed;
-        z-index: 200;
-        left: 0;
-        top: 0;
-        min-width: 140px;
-        padding: 8px 10px;
-        border-radius: 12px;
-        background: rgba(22, 28, 38, 0.58);
-        backdrop-filter: blur(8px);
-        -webkit-backdrop-filter: blur(8px);
-        box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
-        border: 1px solid rgba(255, 255, 255, 0.14);
-        -webkit-app-region: no-drag;
-        app-region: no-drag;
-        pointer-events: none;
-        opacity: 0;
-        transition: opacity 0.16s ease;
-      }
-      #figure-chrome.visible {
-        opacity: 1;
-        pointer-events: auto;
-      }
-      #figure-chrome-hint {
-        font: 11px/1.3 system-ui, sans-serif;
-        color: rgba(255, 255, 255, 0.75);
-        margin-bottom: 6px;
-        user-select: none;
-      }
-      #figure-drag-btn {
-        -webkit-app-region: drag;
-        app-region: drag;
-        cursor: grab;
-        font: 12px/1.2 system-ui, sans-serif;
-        color: #fff;
-        text-align: center;
-        padding: 8px 12px;
-        border-radius: 8px;
-        background: rgba(110, 197, 255, 0.35);
-        border: 1px solid rgba(110, 197, 255, 0.55);
-        user-select: none;
-      }
-      #figure-drag-btn:active {
-        cursor: grabbing;
-      }
-      /* 底部：字幕 + 输入（与人物分离，略宽于原先单气泡） */
+      /* 底部：字幕 + 参考截图的深色控制条（左按钮簇 + 右输入） */
       #liveui-bottom-dock {
         position: fixed;
         z-index: 150;
         left: 50%;
-        bottom: max(12px, env(safe-area-inset-bottom, 0px));
+        /* 略贴底边，把画布留给全身（含脚） */
+        bottom: max(4px, env(safe-area-inset-bottom, 0px));
         transform: translateX(-50%);
-        width: min(96vw, 580px);
+        width: min(96vw, 720px);
         display: flex;
         flex-direction: column;
         align-items: stretch;
@@ -106,30 +61,191 @@
         word-break: break-word;
         user-select: none;
       }
-      #liveui-input-row {
-        width: 100%;
+      #liveui-control-bar {
         box-sizing: border-box;
+        width: 100%;
+        padding: 10px 12px 12px;
+        border-radius: 18px;
+        background: #14161c;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+        /* 空白处拖动窗口；交互区由子元素 no-drag 排除 */
+        -webkit-app-region: drag;
+        app-region: drag;
+        cursor: grab;
+      }
+      #liveui-control-bar:active {
+        cursor: grabbing;
+      }
+      #liveui-bar-body {
+        display: flex;
+        flex-direction: row;
+        align-items: stretch;
+        gap: 12px;
+        -webkit-app-region: no-drag;
+        app-region: no-drag;
+        cursor: default;
+      }
+      #liveui-bar-side {
+        flex: 0 0 auto;
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 8px;
+        width: 108px;
+      }
+      .liveui-status-pill {
+        box-sizing: border-box;
+        width: 100%;
+        padding: 8px 5px;
+        border-radius: 10px;
+        text-align: center;
+        font: 10px/1.25 system-ui, sans-serif;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+        color: #fff;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        user-select: none;
+        word-break: break-word;
+        hyphens: auto;
+        transition: background 0.2s ease, box-shadow 0.2s ease;
+      }
+      .liveui-status-pill--ready {
+        background: linear-gradient(180deg, #8b5cf6 0%, #6d28d9 100%);
+        box-shadow: 0 2px 8px rgba(109, 40, 217, 0.35);
+      }
+      .liveui-status-pill--busy {
+        background: linear-gradient(180deg, #38bdf8 0%, #0284c7 100%);
+        box-shadow: 0 2px 8px rgba(2, 132, 199, 0.35);
+      }
+      .liveui-status-pill--warn {
+        background: linear-gradient(180deg, #fbbf24 0%, #b45309 100%);
+        box-shadow: 0 2px 8px rgba(180, 83, 9, 0.35);
+      }
+      .liveui-status-pill--loading {
+        background: linear-gradient(180deg, #64748b 0%, #334155 100%);
+        box-shadow: 0 2px 8px rgba(51, 65, 85, 0.35);
+      }
+      #liveui-icon-cluster {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 6px;
+      }
+      .liveui-icon-btn {
+        -webkit-app-region: no-drag;
+        app-region: no-drag;
+        box-sizing: border-box;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 100%;
+        aspect-ratio: 1;
+        min-height: 0;
+        margin: 0;
+        padding: 0;
+        border: none;
+        border-radius: 10px;
+        cursor: pointer;
+        color: #fff;
+        transition: transform 0.12s ease, filter 0.12s ease, opacity 0.12s ease;
+      }
+      .liveui-icon-btn:hover {
+        filter: brightness(1.08);
+      }
+      .liveui-icon-btn:active {
+        transform: scale(0.96);
+      }
+      .liveui-icon-btn svg {
+        width: 20px;
+        height: 20px;
+        display: block;
+      }
+      .liveui-hand-emoji {
+        font-size: 19px;
+        line-height: 1;
+        display: block;
+        filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.25));
+      }
+      .liveui-icon-btn--voice {
+        background: linear-gradient(180deg, #34d399 0%, #059669 100%);
+        box-shadow: 0 2px 6px rgba(5, 150, 105, 0.35);
+      }
+      .liveui-icon-btn--mute {
+        background: linear-gradient(180deg, #52525b 0%, #3f3f46 100%);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+      }
+      .liveui-icon-btn--hand {
+        background: linear-gradient(180deg, #fbbf24 0%, #d97706 100%);
+        box-shadow: 0 2px 6px rgba(217, 119, 6, 0.35);
+      }
+      #liveui-composer {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: row;
+        align-items: stretch;
+        gap: 2px;
+        padding: 4px 6px 4px 8px;
+        border-radius: 12px;
+        background: #1e2128;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+      }
+      #liveui-composer:focus-within {
+        border-color: rgba(110, 197, 255, 0.45);
+        box-shadow: 0 0 0 1px rgba(110, 197, 255, 0.15);
+      }
+      .liveui-attach-btn {
+        -webkit-app-region: no-drag;
+        app-region: no-drag;
+        flex: 0 0 auto;
+        align-self: flex-start;
+        margin-top: 4px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 36px;
+        height: 36px;
+        margin: 0;
+        padding: 0;
+        border: none;
+        border-radius: 8px;
+        background: transparent;
+        color: rgba(255, 255, 255, 0.45);
+        cursor: not-allowed;
+        opacity: 0.65;
+      }
+      .liveui-attach-btn svg {
+        width: 18px;
+        height: 18px;
       }
       #liveui-user-line {
-        width: 100%;
+        flex: 1;
+        min-width: 0;
         box-sizing: border-box;
         margin: 0;
-        padding: 11px 14px;
-        border-radius: 12px;
-        border: 1px solid rgba(255, 255, 255, 0.18);
-        background: rgba(12, 16, 24, 0.88);
+        padding: 8px 10px 8px 4px;
+        border: none;
+        border-radius: 8px;
+        background: transparent;
         color: rgba(255, 255, 255, 0.96);
-        font: 14px/1.4 system-ui, -apple-system, 'Segoe UI', sans-serif;
+        font: 14px/1.45 system-ui, -apple-system, 'Segoe UI', sans-serif;
         outline: none;
         -webkit-app-region: no-drag;
         app-region: no-drag;
+        min-height: 40px;
+        max-height: 168px;
+        resize: none;
+        overflow-y: auto;
+        field-sizing: content;
+        line-height: 1.45;
+      }
+      @supports not (field-sizing: content) {
+        #liveui-user-line {
+          min-height: 72px;
+        }
       }
       #liveui-user-line::placeholder {
-        color: rgba(255, 255, 255, 0.45);
-      }
-      #liveui-user-line:focus {
-        border-color: rgba(110, 197, 255, 0.55);
-        box-shadow: 0 0 0 1px rgba(110, 197, 255, 0.25);
+        color: rgba(255, 255, 255, 0.38);
       }
     </style>
   </head>
@@ -138,20 +254,83 @@
       <div id="speech-bubble" aria-hidden="true">
         <p id="speech-bubble-text"></p>
       </div>
-      <div id="liveui-input-row">
-        <input
-          id="liveui-user-line"
-          type="text"
-          placeholder="输入消息，Enter 发送（/help、/clear 等）"
-          spellcheck="false"
-          autocomplete="off"
-          aria-label="对话输入"
-        />
+      <div id="liveui-control-bar">
+        <div id="liveui-bar-body">
+          <aside id="liveui-bar-side">
+            <div
+              id="liveui-status-pill"
+              class="liveui-status-pill liveui-status-pill--loading"
+              aria-live="polite"
+            >
+              加载中…
+            </div>
+            <div id="liveui-icon-cluster">
+              <button
+                type="button"
+                class="liveui-icon-btn liveui-icon-btn--voice"
+                id="liveui-btn-voice"
+                title="语音输入（即将支持）"
+                aria-label="语音输入，即将支持"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path
+                    fill="currentColor"
+                    d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5-3c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"
+                  />
+                </svg>
+              </button>
+              <button
+                type="button"
+                class="liveui-icon-btn liveui-icon-btn--mute"
+                id="liveui-btn-mute"
+                title="静音（即将支持）"
+                aria-label="静音，即将支持"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path
+                    fill="currentColor"
+                    d="M19 11h-1.7c0 .74-.16 1.43-.43 2.05l1.23 1.23c.56-.98.9-2.09.9-3.28zm-4.02.17c0-.06.02-.11.02-.17V5c0-1.66-1.34-3-3-3S9 3.34 9 5v.18l5.98 5.99zM4.27 3L3 4.27l6.01 6.01V11c0 1.66 1.33 3 2.99 3 .22 0 .44-.03.65-.08l1.66 1.66c-.71.33-1.5.52-2.31.52-2.76 0-5.3-2.1-5.3-5.1H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.08c.91-.13 1.77-.45 2.54-.9L19.73 21 21 19.73 4.27 3z"
+                  />
+                </svg>
+              </button>
+              <button
+                type="button"
+                class="liveui-icon-btn liveui-icon-btn--hand"
+                id="liveui-btn-hand"
+                title="举手 / 打断（即将支持）"
+                aria-label="举手，即将支持"
+              >
+                <span class="liveui-hand-emoji" aria-hidden="true">✋</span>
+              </button>
+            </div>
+          </aside>
+          <div id="liveui-composer">
+            <button
+              type="button"
+              class="liveui-attach-btn"
+              id="liveui-btn-attach"
+              disabled
+              title="附件（即将支持）"
+              aria-label="附件，即将支持"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  fill="currentColor"
+                  d="M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5v10.5c0 .55-.45 1-1 1s-1-.45-1-1V6H10v9.5c0 1.38 1.12 2.5 2.5 2.5s2.5-1.12 2.5-2.5V5c0-2.21-1.79-4-4-4S7 2.79 7 5v12.5c0 3.04 2.46 5.5 5.5 5.5s5.5-2.46 5.5-5.5V6h-1.5z"
+                />
+              </svg>
+            </button>
+            <textarea
+              id="liveui-user-line"
+              rows="1"
+              placeholder="输入消息… Shift+Enter 换行，Enter 发送"
+              spellcheck="false"
+              autocomplete="off"
+              aria-label="对话输入"
+            ></textarea>
+          </div>
+        </div>
       </div>
-    </div>
-    <div id="figure-chrome" aria-hidden="true">
-      <div id="figure-chrome-hint">在此拖动窗口</div>
-      <div id="figure-drag-btn" title="按住拖动窗口">⋮⋮ 拖动</div>
     </div>
     <canvas id="app"></canvas>
     <!-- Cubism 4 Core：须先于模块执行。使用相对路径，保证 Electron file:// 与 Vite dev 均能加载（文件来自 liveui/public/） -->
