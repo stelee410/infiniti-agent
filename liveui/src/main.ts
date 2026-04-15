@@ -70,7 +70,8 @@ async function bootstrap(): Promise<void> {
   if (!canvas || !chrome) return
 
   window.PIXI = PIXI
-  Live2DModel.registerTicker(PIXI.Ticker.shared)
+  /* 必须传入 Ticker 类；插件内部使用 tickerRef.shared.add（传 Ticker.shared 会 undefined） */
+  Live2DModel.registerTicker(PIXI.Ticker)
 
   const app = new PIXI.Application({
     view: canvas,
