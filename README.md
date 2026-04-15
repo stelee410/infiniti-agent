@@ -36,7 +36,9 @@ infiniti-agent
 | `infiniti-agent skill list` | 列出当前项目已安装的 Skills |
 | `infiniti-agent live` | LiveUI：WebSocket + Electron 透明窗 + TUI（需先 `npm run build`） |
 
-LiveUI 窗口为无边框透明窗：**鼠标移到人物圆形上**会浮出半透明控制条，点击 **「⋮⋮ 拖动」** 区域即可拖动窗口（`-webkit-app-region: drag`）；移开人物后面板短时淡出。
+LiveUI 窗口为无边框透明窗：**鼠标移到人物（Live2D 或占位圆）上**会浮出半透明控制条，点击 **「⋮⋮ 拖动」** 即可拖动窗口；移开后面板短时淡出。
+
+渲染依赖 **Live2D Cubism Core**：`liveui/index.html` 默认从官方 URL 加载脚本（需联网首次加载）；离线可把 `live2dcubismcore.min.js` 放到 `liveui/public/` 并改为本地 `<script src="./live2dcubismcore.min.js">`。模型入口为配置解析出的 `file:` 路径（`.model3.json`）。
 
 **LiveUI / Live2D（`config.json` 顶层 `liveUi`，对齐 Open-LLM-VTuber 的目录与 `model_dict.json`）：**
 

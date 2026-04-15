@@ -21,6 +21,8 @@ function createWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       preload,
+      /* file:// 加载 model3 + 相对纹理时，避免部分环境跨域拦截 */
+      webSecurity: false,
     },
   })
 

@@ -8,7 +8,8 @@
     "dev": "vite"
   },
   "dependencies": {
-    "pixi.js": "^7.4.2"
+    "pixi-live2d-display": "0.4.0",
+    "pixi.js": "6.5.10"
   },
   "devDependencies": {
     "electron": "^33.2.0",
