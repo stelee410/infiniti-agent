@@ -1,4 +1,4 @@
-import { Application, Circle, Graphics, Text } from 'pixi.js'
+import { Application, Circle, Graphics } from 'pixi.js'
 
 declare global {
   interface Window {
@@ -41,8 +41,7 @@ async function probeModelJson(fileUrl: string): Promise<string | null> {
 async function bootstrap(): Promise<void> {
   const canvas = document.getElementById('app') as HTMLCanvasElement | null
   const chrome = document.getElementById('figure-chrome')
-  const dragBtn = document.getElementById('figure-drag-btn')
-  if (!canvas || !chrome || !dragBtn) return
+  if (!canvas || !chrome) return
 
   const app = new Application({
     view: canvas,
@@ -67,17 +66,6 @@ async function bootstrap(): Promise<void> {
   const mouth = new Graphics()
   mouth.position.set(face.x, face.y + 38)
   app.stage.addChild(mouth)
-
-  const label = new Text('LiveUI · 等待连接…', {
-    fill: 0xffffff,
-    fontSize: 13,
-    dropShadow: true,
-    dropShadowBlur: 3,
-    dropShadowDistance: 1,
-  })
-  label.anchor.set(0.5, 0)
-  label.position.set(app.screen.width / 2, 12)
-  app.stage.addChild(label)
 
   let hideChromeTimer: ReturnType<typeof setTimeout> | undefined
 
@@ -133,9 +121,7 @@ async function bootstrap(): Promise<void> {
   if (modelUrl) {
     const pe = await probeModelJson(modelUrl)
     if (pe) {
-      label.text = `LiveUI · model3 校验失败：${pe.slice(0, 72)}`
-    } else {
-      label.text = 'LiveUI · model3 已加载（占位渲染，待接 Live2D Cubism）'
+      console.warn('[liveui] model3 校验失败:', pe)
     }
   }
 
@@ -177,7 +163,6 @@ async function bootstrap(): Promise<void> {
     app.renderer.resize(window.innerWidth, window.innerHeight)
     face.position.set(app.screen.width / 2, app.screen.height / 2 - 20)
     mouth.position.set(face.x, face.y + 38)
-    label.position.set(app.screen.width / 2, 12)
     layoutChrome()
   })
 
@@ -186,14 +171,13 @@ async function bootstrap(): Promise<void> {
   const socket = new WebSocket(wsUrl)
 
   socket.addEventListener('open', () => {
-    const m = modelUrl ? ' · 已配置 model3' : ''
-    label.text = `LiveUI · 已连接 ${wsUrl}${m}`
+    console.debug('[liveui] WebSocket 已连接', wsUrl, modelUrl ? '(model3 已配置)' : '')
   })
   socket.addEventListener('close', () => {
-    label.text = 'LiveUI · 连接已断开'
+    console.debug('[liveui] WebSocket 已断开')
   })
   socket.addEventListener('error', () => {
-    label.text = 'LiveUI · WebSocket 错误'
+    console.warn('[liveui] WebSocket 错误')
   })
 
   socket.addEventListener('message', (ev) => {
@@ -211,7 +195,7 @@ async function bootstrap(): Promise<void> {
       if (e) applyExpression(e)
       const m = msg.data?.motion
       if (m) {
-        label.text = `LiveUI · ${expression} · motion:${m}`
+        console.debug('[liveui] motion:', m, 'expression:', expression)
       }
     }
   })
