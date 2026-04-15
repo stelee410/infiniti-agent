@@ -63,6 +63,9 @@ async function runChatTui(
   enableSyncOutput()
   try {
     if (liveUi) {
+      if (process.env.INFINITI_AGENT_DEBUG === '1') {
+        process.env.INFINITI_LIVEUI_DEVTOOLS = '1'
+      }
       await liveUi.start()
       liveUi.startMouthPump()
       const child = spawnLiveElectron(liveUi.port, opts.liveUiModel3FileUrl)
