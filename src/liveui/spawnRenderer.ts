@@ -4,8 +4,26 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { PACKAGE_ROOT } from '../packageRoot.js'
 
+function resolveElectronCliJs(): string | null {
+  const direct = [
+    join(PACKAGE_ROOT, 'node_modules', 'electron', 'cli.js'),
+    join(PACKAGE_ROOT, 'liveui', 'node_modules', 'electron', 'cli.js'),
+  ]
+  for (const p of direct) {
+    if (existsSync(p)) return p
+  }
+  try {
+    const req = createRequire(import.meta.url)
+    return req.resolve('electron/cli.js', {
+      paths: [PACKAGE_ROOT, join(PACKAGE_ROOT, 'liveui')],
+    })
+  } catch {
+    return null
+  }
+}
+
 /**
- * 启动 Electron 渲染进程（liveui 包）。需已安装 electron（工作区 liveui 或根依赖）。
+ * 启动 Electron 渲染进程（liveui 包）。需已安装 `electron`（根目录或 liveui 的 node_modules）。
  */
 export function spawnLiveElectron(port: number, model3FileUrl?: string): ChildProcess | null {
   const main = join(PACKAGE_ROOT, 'liveui', 'electron-main.cjs')
@@ -14,12 +32,14 @@ export function spawnLiveElectron(port: number, model3FileUrl?: string): ChildPr
     return null
   }
 
-  let electronCli: string
-  try {
-    const require = createRequire(import.meta.url)
-    electronCli = require.resolve('electron/cli.js', { paths: [PACKAGE_ROOT, join(PACKAGE_ROOT, 'liveui')] })
-  } catch {
-    console.error('[liveui] 未解析到 electron/cli.js。请在仓库根目录执行 npm install（含 liveui 工作区）。')
+  const electronCli = resolveElectronCliJs()
+  if (!electronCli) {
+    console.error(
+      '[liveui] 未找到 electron：无法打开虚拟人窗口（仅 WebSocket 在跑）。\n' +
+        `  包根: ${PACKAGE_ROOT}\n` +
+        '  处理: 在 infiniti-agent 包根执行 npm install（含 workspaces）；或全局安装后再装一次本包以拉取 optional 依赖里的 electron。\n' +
+        '  从源码开发: cd 仓库根目录 && npm install && npm run build',
+    )
     return null
   }
 

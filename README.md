@@ -34,7 +34,7 @@ infiniti-agent
 | `infiniti-agent link` | 从 SOUL.md 提取邮件配置，生成 `mail-poller.sh` 邮件轮询守护脚本 |
 | `infiniti-agent skill add <source>` | 安装 Skill（支持 `owner/repo`、git URL、本地路径） |
 | `infiniti-agent skill list` | 列出当前项目已安装的 Skills |
-| `infiniti-agent live` | LiveUI：WebSocket + Electron 透明窗 + TUI（需先 `npm run build`） |
+| `infiniti-agent live` | LiveUI：WebSocket + Electron 透明窗 + TUI（需先 `npm run build`；**虚拟人窗口依赖本包内的 `electron` 模块**，全局安装后若看不到窗口，在包安装目录执行一次 `npm install` 或重装本包以拉取 optional 依赖） |
 
 LiveUI 窗口为无边框透明窗：**在底部深色对话条上，除按钮与输入框以外的区域**（条的外沿与留白）可拖动窗口；人物区域不再弹出单独拖动面板。
 
