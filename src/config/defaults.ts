@@ -21,4 +21,8 @@ export const PROVIDER_DEFAULTS: Record<
     baseUrl: 'https://api.minimax.io/v1',
     model: 'MiniMax-M2.7',
   },
+  openrouter: {
+    baseUrl: 'https://openrouter.ai/api/v1',
+    model: 'openai/gpt-4o',
+  },
 }

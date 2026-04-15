@@ -112,7 +112,8 @@ export function ChatApp({
     sessionReady &&
     !busy &&
     input.startsWith('/') &&
-    !input.includes(' ')
+    !input.includes(' ') &&
+    !input.includes('\n')
 
   useEffect(() => {
     setSlashIndex(0)
@@ -182,7 +183,7 @@ export function ChatApp({
         setSlashIndex((i) => (i + 1) % list.length)
       }
     },
-    { isActive: slashMenuOpen },
+    { isActive: slashMenuOpen && !liveUi },
   )
 
   const flushStream = useCallback((full: string) => {
@@ -557,6 +558,25 @@ export function ChatApp({
 
   useEffect(() => {
     if (!liveUi) return
+    return liveUi.onUserComposer(setInput)
+  }, [liveUi])
+
+  useEffect(() => {
+    if (!liveUi) return
+    liveUi.sendSlashCompletion(
+      slashMenuOpen,
+      slashFiltered.map((i) => ({
+        id: i.id,
+        kind: i.kind,
+        label: i.label,
+        desc: i.desc,
+        insert: i.insert,
+      })),
+    )
+  }, [liveUi, slashMenuOpen, slashFiltered])
+
+  useEffect(() => {
+    if (!liveUi) return
     return liveUi.onInterrupt(() => {
       const ac = abortRef.current
       if (ac && !ac.signal.aborted) {
@@ -738,7 +758,7 @@ export function ChatApp({
         </Box>
       ) : null}
 
-      {slashMenuOpen ? (
+      {slashMenuOpen && !liveUi ? (
         <SlashCompletePanel
           items={slashFiltered}
           selectedIndex={slashIndex}
@@ -748,7 +768,7 @@ export function ChatApp({
       <Box marginTop={1} borderStyle="single" borderColor="cyan" paddingX={1}>
         {liveUi ? (
           <Text dimColor wrap="wrap">
-            输入已移至桌面 Live 窗口底部；此处不再接收键盘输入（仍显示状态与历史）。斜杠命令请在窗口输入框中输入，例如 /help /clear。
+            输入已移至桌面 Live 窗口底部；此处不再接收键盘输入（仍显示状态与历史）。斜杠命令在窗口输入框输入 / 可调出补全（Tab 写入 · ↑↓ 选择），例如 /help /clear。
           </Text>
         ) : (
           <>

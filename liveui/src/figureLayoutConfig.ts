@@ -26,6 +26,12 @@ export const FIGURE_LAYOUT = {
    */
   footClearOfControlBarPx: 10,
 
+  /**
+   * 多行输入增高时控制条整体上移，soleCeiling 会过小导致人物被「顶」到屏外。
+   * 用「站台」参考线的最小屏高比例（距画布顶），低于此值则按此值计算，保证人物仍在可视区内。
+   */
+  minPlatformTopScreenFraction: 0.36,
+
   /** 模型最大宽度占画布宽的比例（水平留白） */
   modelWidthScreenFraction: 0.92,
 

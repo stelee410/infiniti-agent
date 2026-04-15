@@ -20,6 +20,7 @@ const providerItems: { label: string; value: LlmProvider }[] = [
   { label: 'OpenAI', value: 'openai' },
   { label: 'Google Gemini', value: 'gemini' },
   { label: 'MiniMax (M2.7)', value: 'minimax' },
+  { label: 'OpenRouter', value: 'openrouter' },
 ]
 
 const yesNoItems = [

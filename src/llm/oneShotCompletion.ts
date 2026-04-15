@@ -71,7 +71,7 @@ export async function oneShotTextCompletion(
     return parts.join('\n').trim()
   }
 
-  if (llm.provider === 'openai' || llm.provider === 'minimax') {
+  if (llm.provider === 'openai' || llm.provider === 'minimax' || llm.provider === 'openrouter') {
     const client = new OpenAI({
       apiKey: llm.apiKey,
       baseURL: normalizeBaseUrl(llm.baseUrl),

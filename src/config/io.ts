@@ -104,7 +104,9 @@ export async function loadConfig(cwd?: string): Promise<InfinitiConfig> {
   apiKey = apiKey ?? (llm.apiKey as string | undefined)
 
   if (typeof provider !== 'string' || !isLlmProvider(provider)) {
-    throw new ConfigError('llm.provider 必须是 anthropic | openai | gemini | minimax（或在 profiles 中配置）')
+    throw new ConfigError(
+      'llm.provider 必须是 anthropic | openai | gemini | minimax | openrouter（或在 profiles 中配置）',
+    )
   }
   if (typeof baseUrl !== 'string' || !baseUrl.trim()) {
     throw new ConfigError('llm.baseUrl 无效')
@@ -255,6 +257,18 @@ export type SaveConfigInput = {
   profiles: Record<string, LlmProfile>
   /** 默认 profile 名 */
   defaultProfile: string
+}
+
+/** 写入当前项目 `.infiniti-agent/config.json`（不覆盖全局配置）。 */
+export async function saveProjectConfig(cwd: string, cfg: InfinitiConfig): Promise<void> {
+  const target = localConfigPath(cwd)
+  await ensureLocalAgentDir(cwd)
+  await writeFile(target, `${JSON.stringify(cfg, null, 2)}\n`, 'utf8')
+  try {
+    await chmod(target, constants.S_IRUSR | constants.S_IWUSR)
+  } catch {
+    /* Windows 等环境可能不支持 chmod */
+  }
 }
 
 export async function saveConfig(input: SaveConfigInput): Promise<void> {

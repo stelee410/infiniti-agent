@@ -31,8 +31,16 @@ import { createWhisperAsr } from './asr/whisperAsr.js'
 import { createSherpaOnnxAsr } from './asr/sherpaOnnxAsr.js'
 import { spawnLiveElectron } from './liveui/spawnRenderer.js'
 import { resolveLive2dModelForUi } from './liveui/resolveModelPath.js'
+import { runAddLlm, runSelectLlm } from './cli/llmCli.js'
 
 const cwd = process.cwd()
+
+function parseAddLlmProviderFlag(s?: string): 'openai' | 'anthropic' | 'gemini' | 'openrouter' | undefined {
+  if (!s) return undefined
+  const x = s.trim().toLowerCase()
+  if (x === 'openai' || x === 'anthropic' || x === 'gemini' || x === 'openrouter') return x
+  return undefined
+}
 
 function applyThinkingOverride(cfg: Awaited<ReturnType<typeof loadConfig>>, disable: boolean): Awaited<ReturnType<typeof loadConfig>> {
   if (!disable) return cfg
@@ -250,6 +258,34 @@ async function main(): Promise<void> {
           console.error(`✗ ${target}: ${(e as Error).message}`)
         }
       }
+    })
+
+  program
+    .command('add_llm')
+    .description('交互式添加 LLM profile 到项目 .infiniti-agent/config.json（拉取模型列表、选模型）')
+    .option('--profile <name>', 'Profile 名称（默认 main）')
+    .option(
+      '--provider <name>',
+      '跳过厂商选择：openai | anthropic | gemini | openrouter',
+    )
+    .action(async (cmd: { profile?: string; provider?: string }) => {
+      const p = parseAddLlmProviderFlag(cmd.provider)
+      if (cmd.provider?.trim() && !p) {
+        console.error('--provider 须为 openai | anthropic | gemini | openrouter')
+        process.exit(2)
+        return
+      }
+      await ensureLocalAgentDir(cwd)
+      await runAddLlm(cwd, { profile: cmd.profile, provider: p })
+    })
+
+  program
+    .command('select_llm')
+    .description('切换项目默认 LLM（写入 .infiniti-agent/config.json 的 llm.default）')
+    .option('--name <profile>', '直接指定 profile 名，跳过交互')
+    .action(async (cmd: { name?: string }) => {
+      await ensureLocalAgentDir(cwd)
+      await runSelectLlm(cwd, { name: cmd.name })
     })
 
   program

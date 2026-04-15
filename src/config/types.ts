@@ -1,4 +1,4 @@
-export type LlmProvider = 'anthropic' | 'openai' | 'gemini' | 'minimax'
+export type LlmProvider = 'anthropic' | 'openai' | 'gemini' | 'minimax' | 'openrouter'
 
 export type McpServerConfig = {
   command: string
@@ -178,5 +178,11 @@ export type SherpaOnnxAsrConfig = {
 export type AsrConfig = WhisperAsrConfig | SherpaOnnxAsrConfig
 
 export function isLlmProvider(v: string): v is LlmProvider {
-  return v === 'anthropic' || v === 'openai' || v === 'gemini' || v === 'minimax'
+  return (
+    v === 'anthropic' ||
+    v === 'openai' ||
+    v === 'gemini' ||
+    v === 'minimax' ||
+    v === 'openrouter'
+  )
 }

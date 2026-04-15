@@ -58,7 +58,22 @@ type TtsStatusMsg = { type: 'TTS_STATUS'; data: { available: boolean } }
 type AsrStatusMsg = { type: 'ASR_STATUS'; data: { available: boolean } }
 type AsrResultMsg = { type: 'ASR_RESULT'; data: { text: string } }
 
-type Msg = SyncParam | ActionMsg | AssistantStreamMsg | StatusPillMsg | AudioChunkMsg | AudioResetMsg | TtsStatusMsg | AsrStatusMsg | AsrResultMsg
+type SlashCompletionMsg = {
+  type: 'SLASH_COMPLETION'
+  data: { open?: boolean; items?: unknown }
+}
+
+type Msg =
+  | SyncParam
+  | ActionMsg
+  | AssistantStreamMsg
+  | StatusPillMsg
+  | AudioChunkMsg
+  | AudioResetMsg
+  | TtsStatusMsg
+  | AsrStatusMsg
+  | AsrResultMsg
+  | SlashCompletionMsg
 
 const FACE_RADIUS = 110
 
@@ -180,18 +195,18 @@ async function bootstrap(): Promise<void> {
     const H = app.screen.height
     const gap = layoutFootGapPx(H)
     const canvasRect = canvas.getBoundingClientRect()
-    const controlBar = document.getElementById('liveui-control-bar')
-    const controlBarTop = controlBar
-      ? controlBar.getBoundingClientRect().top - canvasRect.top
-      : H
-    const soleCeiling = controlBarTop - FIGURE_LAYOUT.footClearOfControlBarPx
-
     const dock = document.getElementById('liveui-bottom-dock')
+    const controlBar = document.getElementById('liveui-control-bar')
+    const minPlatformTop = Math.round(H * FIGURE_LAYOUT.minPlatformTopScreenFraction)
     const fallbackPlatform =
       dock != null
         ? dock.getBoundingClientRect().top - canvasRect.top
         : Math.max(120, H - Math.ceil(window.innerHeight * FIGURE_LAYOUT.fallbackDockReserveScreenFraction))
-    const platformTop = controlBar != null ? controlBarTop : fallbackPlatform
+    const rawPlatform = controlBar
+      ? controlBar.getBoundingClientRect().top - canvasRect.top
+      : fallbackPlatform
+    const platformTop = Math.max(rawPlatform, minPlatformTop)
+    const soleCeiling = platformTop - FIGURE_LAYOUT.footClearOfControlBarPx
 
     const stand = FIGURE_LAYOUT.footStandOnOverlapPx
     const targetFootY = platformTop + stand - gap
@@ -428,6 +443,78 @@ async function bootstrap(): Promise<void> {
   const wsUrl = `ws://127.0.0.1:${port}`
   const socket = new WebSocket(wsUrl)
 
+  const SLASH_MENU_MAX_ROWS = 10
+  type SlashRow = { id: string; kind: string; label: string; desc: string; insert: string }
+  let slashMenuOpenLive = false
+  let slashRows: SlashRow[] = []
+  let slashSel = 0
+  let slashSig = ''
+  const slashMenuEl = document.getElementById('liveui-slash-menu')
+  const slashHintEl = document.getElementById('liveui-slash-menu-hint')
+  const slashListEl = document.getElementById('liveui-slash-menu-list')
+
+  const pushComposerDraft = (): void => {
+    if (socket.readyState !== WebSocket.OPEN || !userLineInput) return
+    socket.send(JSON.stringify({ type: 'USER_COMPOSER', data: { text: userLineInput.value } }))
+  }
+
+  const applySlashInsert = (): void => {
+    if (!userLineInput || slashRows.length === 0) return
+    const item = slashRows[slashSel]
+    if (!item) return
+    const ins = item.insert.endsWith(' ') ? item.insert : `${item.insert} `
+    userLineInput.value = ins
+    pushComposerDraft()
+  }
+
+  const renderLiveSlashMenu = (): void => {
+    if (!slashMenuEl || !slashListEl) return
+    if (!slashMenuOpenLive) {
+      slashMenuEl.hidden = true
+      slashMenuEl.setAttribute('aria-hidden', 'true')
+      return
+    }
+    slashMenuEl.hidden = false
+    slashMenuEl.setAttribute('aria-hidden', 'false')
+    const total = slashRows.length
+    if (slashHintEl) {
+      slashHintEl.textContent =
+        total === 0
+          ? '无匹配项，继续输入或退格'
+          : `↑↓ 选择 · Tab 写入 — 共 ${total} 项`
+    }
+    const n = slashRows.length
+    slashSel = n === 0 ? 0 : Math.max(0, Math.min(slashSel, n - 1))
+    let start = 0
+    if (total > SLASH_MENU_MAX_ROWS) {
+      start = Math.max(
+        0,
+        Math.min(slashSel - Math.floor(SLASH_MENU_MAX_ROWS / 2), total - SLASH_MENU_MAX_ROWS),
+      )
+    }
+    const visible = slashRows.slice(start, start + SLASH_MENU_MAX_ROWS)
+    slashListEl.replaceChildren()
+    for (let i = 0; i < visible.length; i++) {
+      const item = visible[i]!
+      const globalIdx = start + i
+      const row = document.createElement('li')
+      row.className = `liveui-slash-row${globalIdx === slashSel ? ' liveui-slash-row--active' : ''}`
+      row.setAttribute('role', 'option')
+      row.setAttribute('aria-selected', String(globalIdx === slashSel))
+      const kindEl = document.createElement('span')
+      kindEl.className = 'liveui-slash-kind'
+      kindEl.textContent = item.kind === 'command' ? '[命令]' : '[工具]'
+      const labEl = document.createElement('span')
+      labEl.className = 'liveui-slash-label'
+      labEl.textContent = item.label
+      const descEl = document.createElement('span')
+      descEl.className = 'liveui-slash-desc'
+      descEl.textContent = ` — ${item.desc}`
+      row.append(kindEl, labEl, descEl)
+      slashListEl.append(row)
+    }
+  }
+
   let lastConvActivity = Date.now()
   let statusPillVariant: LiveUiStatusVariant = 'ready'
   let idleMotionBusy = false
@@ -605,6 +692,7 @@ async function bootstrap(): Promise<void> {
   socket.addEventListener('open', () => {
     console.debug('[liveui] WebSocket 已连接', wsUrl)
     touchConvActivity()
+    pushComposerDraft()
   })
   socket.addEventListener('close', () => {
     console.debug('[liveui] WebSocket 已断开')
@@ -640,9 +728,43 @@ async function bootstrap(): Promise<void> {
       if (typeof text === 'string' && text.trim()) {
         if (userLineInput && !voiceMode) {
           userLineInput.value = text.trim()
+          pushComposerDraft()
         }
         touchConvActivity()
       }
+    } else if (msg.type === 'SLASH_COMPLETION') {
+      const open = !!msg.data?.open
+      const raw = msg.data?.items
+      const next: SlashRow[] = []
+      if (Array.isArray(raw)) {
+        for (const it of raw) {
+          if (!it || typeof it !== 'object') continue
+          const o = it as Record<string, unknown>
+          if (
+            typeof o.id === 'string' &&
+            typeof o.kind === 'string' &&
+            typeof o.label === 'string' &&
+            typeof o.desc === 'string' &&
+            typeof o.insert === 'string'
+          ) {
+            next.push({
+              id: o.id,
+              kind: o.kind,
+              label: o.label,
+              desc: o.desc,
+              insert: o.insert,
+            })
+          }
+        }
+      }
+      const sig = next.map((r) => r.id).join('\0')
+      if (sig !== slashSig) {
+        slashSig = sig
+        slashSel = 0
+      }
+      slashMenuOpenLive = open
+      slashRows = next
+      renderLiveSlashMenu()
     } else if (msg.type === 'AUDIO_CHUNK') {
       if (ttsEnabled) enqueueAudioChunk(msg.data.audioBase64)
     } else if (msg.type === 'AUDIO_RESET') {
@@ -684,7 +806,31 @@ async function bootstrap(): Promise<void> {
     }
   })
 
+  userLineInput?.addEventListener('input', () => {
+    pushComposerDraft()
+    touchConvActivity()
+  })
+
   userLineInput?.addEventListener('keydown', (ev) => {
+    if (slashMenuOpenLive && slashRows.length > 0) {
+      if (ev.key === 'Tab') {
+        ev.preventDefault()
+        applySlashInsert()
+        return
+      }
+      if (ev.key === 'ArrowUp') {
+        ev.preventDefault()
+        slashSel = (slashSel - 1 + slashRows.length) % slashRows.length
+        renderLiveSlashMenu()
+        return
+      }
+      if (ev.key === 'ArrowDown') {
+        ev.preventDefault()
+        slashSel = (slashSel + 1) % slashRows.length
+        renderLiveSlashMenu()
+        return
+      }
+    }
     if (ev.key !== 'Enter' || ev.shiftKey || ev.isComposing) return
     ev.preventDefault()
     const v = userLineInput.value.trimEnd()
@@ -693,6 +839,7 @@ async function bootstrap(): Promise<void> {
     touchConvActivity()
     socket.send(JSON.stringify({ type: 'USER_INPUT', data: { line: v } }))
     userLineInput.value = ''
+    pushComposerDraft()
   })
 
   wirePointerInteractions()

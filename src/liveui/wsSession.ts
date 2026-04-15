@@ -6,6 +6,7 @@ import type {
   LiveUiActionMessage,
   LiveUiAssistantStreamMessage,
   LiveUiMessage,
+  LiveUiSlashCompletionItem,
   LiveUiStatusVariant,
 } from './protocol.js'
 import { StreamMouthEstimator } from './streamMouth.js'
@@ -14,6 +15,8 @@ import type { AsrEngine } from '../asr/whisperAsr.js'
 
 export type LiveUiConnectionListener = (connected: boolean) => void
 export type LiveUiUserLineListener = (line: string) => void
+/** 渲染端输入框草稿（含未发送的 `/` 前缀），用于与 TUI 同步斜杠补全。 */
+export type LiveUiUserComposerListener = (text: string) => void
 export type LiveUiInterruptListener = () => void
 
 /** 渲染端点击 Live2D 头部 / 身体等，由 Node 转成一条合成用户消息请求模型回应 */
@@ -28,6 +31,7 @@ export class LiveUiSession {
   private clients = new Set<WebSocket>()
   private listeners = new Set<LiveUiConnectionListener>()
   private userLineListeners = new Set<LiveUiUserLineListener>()
+  private userComposerListeners = new Set<LiveUiUserComposerListener>()
   private interruptListeners = new Set<LiveUiInterruptListener>()
   private interactionListeners = new Set<LiveUiInteractionListener>()
   private mouthTimer: ReturnType<typeof setInterval> | undefined
@@ -91,6 +95,25 @@ export class LiveUiSession {
     }
   }
 
+  /** 渲染端输入框内容变化（含空串，用于清空 TUI 草稿状态）。 */
+  onUserComposer(fn: LiveUiUserComposerListener): () => void {
+    this.userComposerListeners.add(fn)
+    return () => {
+      this.userComposerListeners.delete(fn)
+    }
+  }
+
+  private emitUserComposer(text: string): void {
+    for (const f of this.userComposerListeners) {
+      f(text)
+    }
+  }
+
+  /** 将当前斜杠补全列表推送到所有已连接的 Live 窗口。 */
+  sendSlashCompletion(open: boolean, items: LiveUiSlashCompletionItem[]): void {
+    this.broadcast({ type: 'SLASH_COMPLETION', data: { open, items } })
+  }
+
   onInterrupt(fn: LiveUiInterruptListener): () => void {
     this.interruptListeners.add(fn)
     return () => { this.interruptListeners.delete(fn) }
@@ -144,6 +167,12 @@ export class LiveUiSession {
             const line = (parsed.data as { line?: unknown }).line
             if (typeof line !== 'string' || !line.trim()) return
             this.emitUserLine(line.trimEnd())
+            return
+          }
+          if (t === 'USER_COMPOSER' && parsed.data && typeof parsed.data === 'object') {
+            const text = (parsed.data as { text?: unknown }).text
+            if (typeof text !== 'string') return
+            this.emitUserComposer(text)
             return
           }
           if (t === 'TTS_TOGGLE' && parsed.data && typeof parsed.data === 'object') {

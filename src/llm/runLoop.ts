@@ -131,6 +131,7 @@ export async function runToolLoop(opts: RunLoopOptions): Promise<{
       return runAnthropic(opts, llm, tools, dispatch)
     case 'openai':
     case 'minimax':
+    case 'openrouter':
       return runOpenAI(opts, llm, tools, dispatch)
     case 'gemini':
       return runGemini(opts, llm, tools, dispatch)

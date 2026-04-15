@@ -72,6 +72,24 @@ export type LiveUiAsrResultMessage = {
   data: { text: string }
 }
 
+/** 斜杠补全项（server → Live 窗口），与 TUI SlashItem 字段一致。 */
+export type LiveUiSlashCompletionItem = {
+  id: string
+  kind: 'command' | 'tool'
+  label: string
+  desc: string
+  insert: string
+}
+
+/** 同步 / 补全列表到渲染端（单行 / 命令模式下 open 为 true）。 */
+export type LiveUiSlashCompletionMessage = {
+  type: 'SLASH_COMPLETION'
+  data: {
+    open: boolean
+    items: LiveUiSlashCompletionItem[]
+  }
+}
+
 export type LiveUiMessage =
   | LiveUiSyncParamMessage
   | LiveUiActionMessage
@@ -82,6 +100,7 @@ export type LiveUiMessage =
   | LiveUiTtsStatusMessage
   | LiveUiAsrStatusMessage
   | LiveUiAsrResultMessage
+  | LiveUiSlashCompletionMessage
 
 export function isLiveUiMessage(x: unknown): x is LiveUiMessage {
   if (!x || typeof x !== 'object') return false
@@ -130,6 +149,23 @@ export function isLiveUiMessage(x: unknown): x is LiveUiMessage {
     const d = (x as { data?: unknown }).data
     if (!d || typeof d !== 'object') return false
     return typeof (d as { text?: unknown }).text === 'string'
+  }
+  if (o.type === 'SLASH_COMPLETION') {
+    const d = (x as { data?: unknown }).data
+    if (!d || typeof d !== 'object') return false
+    const dd = d as { open?: unknown; items?: unknown }
+    if (typeof dd.open !== 'boolean' || !Array.isArray(dd.items)) return false
+    return dd.items.every((it) => {
+      if (!it || typeof it !== 'object') return false
+      const o2 = it as Record<string, unknown>
+      return (
+        typeof o2.id === 'string' &&
+        (o2.kind === 'command' || o2.kind === 'tool') &&
+        typeof o2.label === 'string' &&
+        typeof o2.desc === 'string' &&
+        typeof o2.insert === 'string'
+      )
+    })
   }
   return false
 }

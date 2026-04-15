@@ -125,7 +125,7 @@ export function filterSlashItems(
   items: SlashItem[],
   input: string,
 ): SlashItem[] {
-  if (!input.startsWith('/') || input.includes(' ')) {
+  if (!input.startsWith('/') || input.includes(' ') || input.includes('\n')) {
     return []
   }
   const q = input.slice(1).toLowerCase()
