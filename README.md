@@ -36,7 +36,7 @@ infiniti-agent
 | `infiniti-agent skill list` | 列出当前项目已安装的 Skills |
 | `infiniti-agent live` | LiveUI：WebSocket + Electron 透明窗 + TUI（需先 `npm run build`） |
 
-LiveUI 窗口为无边框透明窗：**顶部约 28px 深色条为拖动手柄**（系统 `-webkit-app-region: drag`），在该条上按住拖动即可移动窗口。
+LiveUI 窗口为无边框透明窗：**鼠标移到人物圆形上**会浮出半透明控制条，点击 **「⋮⋮ 拖动」** 区域即可拖动窗口（`-webkit-app-region: drag`）；移开人物后面板短时淡出。
 
 **LiveUI / Live2D（`config.json` 顶层 `liveUi`，对齐 Open-LLM-VTuber 的目录与 `model_dict.json`）：**
 

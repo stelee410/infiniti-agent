@@ -1,4 +1,4 @@
-import { Application, Graphics, Text } from 'pixi.js'
+import { Application, Circle, Graphics, Text } from 'pixi.js'
 
 declare global {
   interface Window {
@@ -19,6 +19,8 @@ type ActionMsg = {
 
 type Msg = SyncParam | ActionMsg
 
+const FACE_RADIUS = 110
+
 function readPort(): string {
   const fromPreload = window.infinitiLiveUi?.port?.trim()
   if (fromPreload) return fromPreload
@@ -38,7 +40,9 @@ async function probeModelJson(fileUrl: string): Promise<string | null> {
 
 async function bootstrap(): Promise<void> {
   const canvas = document.getElementById('app') as HTMLCanvasElement | null
-  if (!canvas) return
+  const chrome = document.getElementById('figure-chrome')
+  const dragBtn = document.getElementById('figure-drag-btn')
+  if (!canvas || !chrome || !dragBtn) return
 
   const app = new Application({
     view: canvas,
@@ -52,9 +56,12 @@ async function bootstrap(): Promise<void> {
 
   const face = new Graphics()
   face.beginFill(0x6ec5ff, 0.85)
-  face.drawCircle(0, 0, 110)
+  face.drawCircle(0, 0, FACE_RADIUS)
   face.endFill()
   face.position.set(app.screen.width / 2, app.screen.height / 2 - 20)
+  face.eventMode = 'static'
+  face.cursor = 'pointer'
+  face.hitArea = new Circle(0, 0, FACE_RADIUS)
   app.stage.addChild(face)
 
   const mouth = new Graphics()
@@ -69,9 +76,58 @@ async function bootstrap(): Promise<void> {
     dropShadowDistance: 1,
   })
   label.anchor.set(0.5, 0)
-  /* 略低于 HTML #drag-bar，避免与拖动手柄重叠 */
-  label.position.set(app.screen.width / 2, 34)
+  label.position.set(app.screen.width / 2, 12)
   app.stage.addChild(label)
+
+  let hideChromeTimer: ReturnType<typeof setTimeout> | undefined
+
+  const layoutChrome = (): void => {
+    const r = FACE_RADIUS * face.scale.x
+    const cx = face.x
+    const cy = face.y
+    chrome.style.transform = 'translate(0, 0)'
+    const rect = chrome.getBoundingClientRect()
+    const w = rect.width || 160
+    const h = rect.height || 56
+    /* 面板贴在人物头顶略上方，不挡脸中心 */
+    let left = cx - w / 2
+    let top = cy - r - h - 12
+    if (top < 8) top = cy + r + 10
+    left = Math.max(8, Math.min(left, window.innerWidth - w - 8))
+    top = Math.max(8, Math.min(top, window.innerHeight - h - 8))
+    chrome.style.left = `${left}px`
+    chrome.style.top = `${top}px`
+  }
+
+  const showChrome = (): void => {
+    if (hideChromeTimer) {
+      clearTimeout(hideChromeTimer)
+      hideChromeTimer = undefined
+    }
+    chrome.classList.add('visible')
+    chrome.setAttribute('aria-hidden', 'false')
+    layoutChrome()
+  }
+
+  const scheduleHideChrome = (): void => {
+    if (hideChromeTimer) clearTimeout(hideChromeTimer)
+    hideChromeTimer = setTimeout(() => {
+      chrome.classList.remove('visible')
+      chrome.setAttribute('aria-hidden', 'true')
+      hideChromeTimer = undefined
+    }, 280)
+  }
+
+  face.on('pointerenter', showChrome)
+  face.on('pointerleave', scheduleHideChrome)
+
+  chrome.addEventListener('pointerenter', () => {
+    if (hideChromeTimer) {
+      clearTimeout(hideChromeTimer)
+      hideChromeTimer = undefined
+    }
+  })
+  chrome.addEventListener('pointerleave', scheduleHideChrome)
 
   const modelUrl = window.infinitiLiveUi?.model3FileUrl?.trim() ?? ''
   if (modelUrl) {
@@ -109,8 +165,9 @@ async function bootstrap(): Promise<void> {
     const fill = palette[expr] ?? 0x6ec5ff
     face.clear()
     face.beginFill(fill, 0.88)
-    face.drawCircle(0, 0, 110)
+    face.drawCircle(0, 0, FACE_RADIUS)
     face.endFill()
+    face.hitArea = new Circle(0, 0, FACE_RADIUS)
   }
 
   applyExpression('neutral')
@@ -120,7 +177,8 @@ async function bootstrap(): Promise<void> {
     app.renderer.resize(window.innerWidth, window.innerHeight)
     face.position.set(app.screen.width / 2, app.screen.height / 2 - 20)
     mouth.position.set(face.x, face.y + 38)
-    label.position.set(app.screen.width / 2, 34)
+    label.position.set(app.screen.width / 2, 12)
+    layoutChrome()
   })
 
   const port = readPort()
@@ -161,6 +219,9 @@ async function bootstrap(): Promise<void> {
   app.ticker.add(() => {
     const t = performance.now() / 1000
     face.scale.set(1 + Math.sin(t * 2.2) * 0.012)
+    if (chrome.classList.contains('visible')) {
+      layoutChrome()
+    }
   })
 }
 
