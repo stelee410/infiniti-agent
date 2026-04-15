@@ -1,0 +1,8 @@
+{
+  "liveUi": {
+    "port": 8080,
+    "live2dModelsDir": "./live2d-models",
+    "live2dModelDict": "./model_dict.json",
+    "live2dModelName": "mao_pro"
+  }
+}

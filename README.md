@@ -44,6 +44,20 @@ infiniti-agent
 - `live2dModel3Json`：若已离线下载，可直接写 `.model3.json` 路径（**优先于** dict+name）。
 - `port`：WebSocket 端口；也可用 `infiniti-agent live -p 9000` 或环境变量 `INFINITI_LIVEUI_PORT` 覆盖。
 
+**一键写入默认 `liveUi`（合并到项目的 `.infiniti-agent/config.json`，并在缺少 `./model_dict.json` 时从包内示例复制）：**
+
+```bash
+# 方式 A：在已 migrate 的项目根执行（把脚本路径换成你的 infiniti-agent 克隆目录）
+cd ~/your-project
+node ~/Dev/infiniti-agent/infiniti-agent/scripts/merge-liveui-config.mjs
+
+# 方式 B：在 infiniti-agent 源码根执行，并传入项目路径
+cd ~/Dev/infiniti-agent/infiniti-agent
+npm run setup:liveui -- ~/your-project
+```
+
+将 Open-LLM-VTuber 的 `live2d-models` 文件夹拷到项目根下的 `live2d-models/`，与 `model_dict.json` 中的 `url` 一致即可校验通过。
+
 **常用选项：**
 
 ```bash

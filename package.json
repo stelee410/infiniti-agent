@@ -8,6 +8,10 @@
     "SOUL.md",
     "INFINITI.md",
     "docs",
+    "docs/liveui.fragment.json",
+    "model_dict.example.json",
+    "scripts/merge-liveui-config.mjs",
+    "live2d-models/README.txt",
     "liveui/dist",
     "liveui/electron-main.cjs",
     "liveui/preload.cjs"
@@ -21,6 +25,7 @@
   "scripts": {
     "build": "tsc && npm run build -w infiniti-agent-liveui",
     "prepublishOnly": "npm run build",
+    "setup:liveui": "node scripts/merge-liveui-config.mjs",
     "dev": "tsx src/cli.tsx",
     "dev:cli": "tsx src/cli.tsx --cli",
     "start": "node dist/cli.js",
