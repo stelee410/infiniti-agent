@@ -69,7 +69,8 @@ async function bootstrap(): Promise<void> {
     dropShadowDistance: 1,
   })
   label.anchor.set(0.5, 0)
-  label.position.set(app.screen.width / 2, 12)
+  /* 略低于 HTML #drag-bar，避免与拖动手柄重叠 */
+  label.position.set(app.screen.width / 2, 34)
   app.stage.addChild(label)
 
   const modelUrl = window.infinitiLiveUi?.model3FileUrl?.trim() ?? ''
@@ -119,7 +120,7 @@ async function bootstrap(): Promise<void> {
     app.renderer.resize(window.innerWidth, window.innerHeight)
     face.position.set(app.screen.width / 2, app.screen.height / 2 - 20)
     mouth.position.set(face.x, face.y + 38)
-    label.position.set(app.screen.width / 2, 12)
+    label.position.set(app.screen.width / 2, 34)
   })
 
   const port = readPort()

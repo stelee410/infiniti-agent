@@ -29,8 +29,8 @@ function createWindow() {
     console.error('[liveui] loadFile failed', err)
   })
 
-  // 透明窗口：鼠标穿透（forward 仍会把移动事件转发给页面，便于将来做命中测试）
-  win.setIgnoreMouseEvents(true, { forward: true })
+  // 未使用 setIgnoreMouseEvents(true)：否则顶部 drag 区域无法接收按下事件，窗口无法拖动。
+  // 若需恢复「除标题条外整窗鼠标穿透」，需在渲染层做命中测试后再动态 setIgnoreMouseEvents。
 }
 
 app.whenReady().then(createWindow)
