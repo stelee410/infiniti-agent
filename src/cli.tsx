@@ -25,6 +25,8 @@ import {
 import { runCliPrompt } from './runCliPrompt.js'
 import { readPackageVersion } from './packageRoot.js'
 import { runLink } from './link.js'
+import { LiveUiSession } from './liveui/wsSession.js'
+import { spawnLiveElectron } from './liveui/spawnRenderer.js'
 
 const cwd = process.cwd()
 
@@ -33,7 +35,9 @@ function applyThinkingOverride(cfg: Awaited<ReturnType<typeof loadConfig>>, disa
   return { ...cfg, thinking: { ...cfg.thinking, mode: 'disabled' as const } }
 }
 
-async function runChatTui(opts: { skipPermissions?: boolean; disableThinking?: boolean } = {}): Promise<void> {
+async function runChatTui(
+  opts: { skipPermissions?: boolean; disableThinking?: boolean; liveUi?: LiveUiSession | null } = {},
+): Promise<void> {
   if (!configExistsSync(cwd)) {
     const { waitUntilExit } = render(<InitWizard />)
     await waitUntilExit()
@@ -49,17 +53,35 @@ async function runChatTui(opts: { skipPermissions?: boolean; disableThinking?: b
     return
   }
   const mcp = new McpManager()
+  const liveUi = opts.liveUi ?? null
   enableSyncOutput()
   try {
+    if (liveUi) {
+      await liveUi.start()
+      liveUi.startMouthPump()
+      const child = spawnLiveElectron(liveUi.port)
+      liveUi.setElectronChild(child)
+      if (!child) {
+        console.error('[liveui] Electron 未启动：已启动 WebSocket，可稍后自行对接渲染端。')
+      } else {
+        console.error(`[liveui] WebSocket ws://127.0.0.1:${liveUi.port} · Electron 已启动`)
+      }
+    }
     await mcp.start(cfg)
     const skipPerm = opts.skipPermissions ?? false
     const { waitUntilExit } = render(
-      <ChatWithSplash config={cfg} mcp={mcp} dangerouslySkipPermissions={skipPerm} />,
+      <ChatWithSplash
+        config={cfg}
+        mcp={mcp}
+        dangerouslySkipPermissions={skipPerm}
+        liveUi={liveUi}
+      />,
       { maxFps: 15, incrementalRendering: true },
     )
     await waitUntilExit()
   } finally {
     disableSyncOutput()
+    if (liveUi) await liveUi.dispose()
     await mcp.stop()
   }
 }
@@ -212,6 +234,24 @@ async function main(): Promise<void> {
     .description('进入对话界面（无参数时默认）')
     .action(async () => {
       await runChatTui({ skipPermissions, disableThinking })
+    })
+
+  program
+    .command('live')
+    .description('LiveUI：本地 WebSocket + Electron 透明渲染 + TUI（需 npm run build 生成 liveui/dist）')
+    .option('-p, --port <port>', 'WebSocket 端口', process.env.INFINITI_LIVEUI_PORT ?? '8080')
+    .action(async (cmdOpts: { port?: string }) => {
+      const port = Number(cmdOpts.port ?? '8080')
+      if (!Number.isFinite(port) || port <= 0 || port > 65535) {
+        console.error('无效端口，请使用 1–65535 之间的数字。')
+        process.exit(2)
+      }
+      if (!configExistsSync(cwd)) {
+        console.error('尚未配置。请先运行: infiniti-agent init 或 infiniti-agent migrate')
+        process.exit(2)
+      }
+      const liveUi = new LiveUiSession(port)
+      await runChatTui({ skipPermissions, disableThinking, liveUi })
     })
 
   program

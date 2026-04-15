@@ -7,13 +7,18 @@
     "dist",
     "SOUL.md",
     "INFINITI.md",
-    "docs"
+    "docs",
+    "liveui/dist",
+    "liveui/electron-main.cjs"
+  ],
+  "workspaces": [
+    "liveui"
   ],
   "bin": {
     "infiniti-agent": "dist/cli.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && npm run build -w infiniti-agent-liveui",
     "prepublishOnly": "npm run build",
     "dev": "tsx src/cli.tsx",
     "dev:cli": "tsx src/cli.tsx --cli",
@@ -54,10 +59,12 @@
     "ink-text-input": "^6.0.0",
     "openai": "^6.33.0",
     "react": "^19.2.5",
-    "sqlite-vec": "^0.1.9"
+    "sqlite-vec": "^0.1.9",
+    "ws": "^8.18.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
+    "@types/ws": "^8.5.13",
     "@types/node": "^22.10.0",
     "@types/react": "^19.2.14",
     "tsx": "^4.19.2",

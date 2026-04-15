@@ -28,17 +28,29 @@ import {
   filterSlashItems,
   type SlashItem,
 } from './slashCompletions.js'
+import type { LiveUiSession } from '../liveui/wsSession.js'
+import {
+  createStreamLiveUiState,
+  processAssistantStreamChunk,
+  stripLiveUiTagsFromMessages,
+} from '../liveui/emotionParse.js'
 
 type Props = {
   config: InfinitiConfig
   mcp: McpManager
   dangerouslySkipPermissions?: boolean
+  liveUi?: LiveUiSession | null
 }
 
 const STREAM_DEBOUNCE_MS = 80
 const SLASH_MENU_MAX_ROWS = 10
 
-export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions }: Props): React.ReactElement {
+export function ChatApp({
+  config: initialConfig,
+  mcp,
+  dangerouslySkipPermissions,
+  liveUi = null,
+}: Props): React.ReactElement {
   const { exit } = useApp()
   const rows = process.stdout.rows ?? 24
   const [config, setConfig] = useState(initialConfig)
@@ -52,6 +64,8 @@ export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions
   const [sessionReady, setSessionReady] = useState(false)
   const [streamText, setStreamText] = useState('')
   const streamTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const streamLiveUiRef = useRef(createStreamLiveUiState())
+  const [liveUiConnected, setLiveUiConnected] = useState(false)
   const editHistoryRef = useRef(new EditHistory())
   const [slashIndex, setSlashIndex] = useState(0)
   const busyRef = useRef(false)
@@ -116,6 +130,14 @@ export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions
     return () => clearInterval(id)
   }, [busy])
 
+  useEffect(() => {
+    if (!liveUi) {
+      setLiveUiConnected(false)
+      return
+    }
+    return liveUi.onConnectionChange(setLiveUiConnected)
+  }, [liveUi])
+
   useInput(
     (_ch, key) => {
       if (!slashMenuOpen) {
@@ -164,8 +186,10 @@ export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions
       clearTimeout(streamTimerRef.current)
       streamTimerRef.current = undefined
     }
+    streamLiveUiRef.current = createStreamLiveUiState()
+    liveUi?.mouth.reset()
     setStreamText('')
-  }, [])
+  }, [liveUi])
 
 
   useEffect(() => {
@@ -400,7 +424,7 @@ export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions
       setInput('')
       try {
         const system = await buildSystem()
-        const { messages: out } = await runToolLoop({
+        const { messages: outRaw } = await runToolLoop({
           config,
           system,
           messages: nextMsgs,
@@ -423,7 +447,19 @@ export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions
               lastStreamDeltaAtRef.current = Date.now()
               busySubtextRef.current =
                 'SSE 流式中（久无新字时：可能在生成 tool 调用或网络慢）…'
-              flushStream(full)
+              if (liveUi) {
+                const { displayText, newActions } = processAssistantStreamChunk(
+                  streamLiveUiRef.current,
+                  full,
+                )
+                for (const a of newActions) {
+                  liveUi.sendAction(a)
+                }
+                liveUi.mouth.onDisplayText(displayText)
+                flushStream(displayText)
+              } else {
+                flushStream(full)
+              }
             },
             onToolUseStart: (toolName) => {
               lastStreamDeltaAtRef.current = Date.now()
@@ -441,6 +477,7 @@ export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions
             },
           },
         })
+        const out = liveUi ? stripLiveUiTagsFromMessages(outRaw) : outRaw
         setMessages(out)
         await saveSession(cwd, out)
       } catch (e: unknown) {
@@ -457,6 +494,7 @@ export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions
       cwd,
       exit,
       flushStream,
+      liveUi,
       mcp,
       messages,
       reloadAll,
@@ -497,6 +535,15 @@ export function ChatApp({ config: initialConfig, mcp, dangerouslySkipPermissions
         <Text dimColor>
           {meta}
         </Text>
+        {liveUi ? (
+          <Box flexDirection="row" flexWrap="wrap">
+            <Text dimColor>LiveUI </Text>
+            <Text color={liveUiConnected ? 'green' : 'yellow'}>
+              {liveUiConnected ? '● 渲染已连接' : '○ 等待渲染'}
+            </Text>
+            <Text dimColor>{` · ws://127.0.0.1:${liveUi.port}`}</Text>
+          </Box>
+        ) : null}
         <Text dimColor wrap="truncate">
           cwd: {cwd}
         </Text>
