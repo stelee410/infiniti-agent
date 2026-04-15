@@ -64,9 +64,91 @@
       #figure-drag-btn:active {
         cursor: grabbing;
       }
+      /* 底部：字幕 + 输入（与人物分离，略宽于原先单气泡） */
+      #liveui-bottom-dock {
+        position: fixed;
+        z-index: 150;
+        left: 50%;
+        bottom: max(12px, env(safe-area-inset-bottom, 0px));
+        transform: translateX(-50%);
+        width: min(96vw, 580px);
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 10px;
+        pointer-events: none;
+      }
+      #liveui-bottom-dock > * {
+        pointer-events: auto;
+      }
+      #speech-bubble {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 12px 18px;
+        border-radius: 16px;
+        background: rgba(18, 22, 32, 0.78);
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 0.2s ease;
+      }
+      #speech-bubble.visible {
+        opacity: 1;
+      }
+      #speech-bubble-text {
+        margin: 0;
+        font: 14px/1.55 system-ui, -apple-system, 'Segoe UI', sans-serif;
+        color: rgba(255, 255, 255, 0.94);
+        white-space: pre-wrap;
+        word-break: break-word;
+        user-select: none;
+      }
+      #liveui-input-row {
+        width: 100%;
+        box-sizing: border-box;
+      }
+      #liveui-user-line {
+        width: 100%;
+        box-sizing: border-box;
+        margin: 0;
+        padding: 11px 14px;
+        border-radius: 12px;
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        background: rgba(12, 16, 24, 0.88);
+        color: rgba(255, 255, 255, 0.96);
+        font: 14px/1.4 system-ui, -apple-system, 'Segoe UI', sans-serif;
+        outline: none;
+        -webkit-app-region: no-drag;
+        app-region: no-drag;
+      }
+      #liveui-user-line::placeholder {
+        color: rgba(255, 255, 255, 0.45);
+      }
+      #liveui-user-line:focus {
+        border-color: rgba(110, 197, 255, 0.55);
+        box-shadow: 0 0 0 1px rgba(110, 197, 255, 0.25);
+      }
     </style>
   </head>
   <body>
+    <div id="liveui-bottom-dock">
+      <div id="speech-bubble" aria-hidden="true">
+        <p id="speech-bubble-text"></p>
+      </div>
+      <div id="liveui-input-row">
+        <input
+          id="liveui-user-line"
+          type="text"
+          placeholder="输入消息，Enter 发送（/help、/clear 等）"
+          spellcheck="false"
+          autocomplete="off"
+          aria-label="对话输入"
+        />
+      </div>
+    </div>
     <div id="figure-chrome" aria-hidden="true">
       <div id="figure-chrome-hint">在此拖动窗口</div>
       <div id="figure-drag-btn" title="按住拖动窗口">⋮⋮ 拖动</div>

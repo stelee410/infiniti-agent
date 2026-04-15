@@ -1,10 +1,11 @@
 import { type ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
 import { WebSocketServer, WebSocket } from 'ws'
-import type { LiveUiActionMessage, LiveUiMessage } from './protocol.js'
+import type { LiveUiActionMessage, LiveUiAssistantStreamMessage, LiveUiMessage } from './protocol.js'
 import { StreamMouthEstimator } from './streamMouth.js'
 
 export type LiveUiConnectionListener = (connected: boolean) => void
+export type LiveUiUserLineListener = (line: string) => void
 
 export class LiveUiSession {
   readonly port: number
@@ -13,6 +14,7 @@ export class LiveUiSession {
   private wss: WebSocketServer | null = null
   private clients = new Set<WebSocket>()
   private listeners = new Set<LiveUiConnectionListener>()
+  private userLineListeners = new Set<LiveUiUserLineListener>()
   private mouthTimer: ReturnType<typeof setInterval> | undefined
   private electronChild: ChildProcess | null = null
 
@@ -36,6 +38,20 @@ export class LiveUiSession {
     }
   }
 
+  /** 渲染端通过 WebSocket 发送的用户输入（一行）。 */
+  onUserLine(fn: LiveUiUserLineListener): () => void {
+    this.userLineListeners.add(fn)
+    return () => {
+      this.userLineListeners.delete(fn)
+    }
+  }
+
+  private emitUserLine(line: string): void {
+    for (const f of this.userLineListeners) {
+      f(line)
+    }
+  }
+
   private emitConn(): void {
     const ok = this.clientConnected
     for (const f of this.listeners) f(ok)
@@ -50,6 +66,20 @@ export class LiveUiSession {
     wss.on('connection', (ws) => {
       this.clients.add(ws)
       this.emitConn()
+      ws.on('message', (buf) => {
+        try {
+          const raw = typeof buf === 'string' ? buf : buf.toString('utf8')
+          const parsed = JSON.parse(raw) as { type?: unknown; data?: unknown }
+          if (parsed?.type !== 'USER_INPUT' || !parsed.data || typeof parsed.data !== 'object') {
+            return
+          }
+          const line = (parsed.data as { line?: unknown }).line
+          if (typeof line !== 'string' || !line.trim()) return
+          this.emitUserLine(line.trimEnd())
+        } catch {
+          /* ignore invalid client frames */
+        }
+      })
       ws.on('close', () => {
         this.clients.delete(ws)
         this.emitConn()
@@ -81,6 +111,12 @@ export class LiveUiSession {
 
   sendAction(data: LiveUiActionMessage['data']): void {
     this.broadcast({ type: 'ACTION', data })
+  }
+
+  /** 将模型原始流发给渲染进程（含 [Happy] 等标签），由前端解析表情与气泡正文。 */
+  sendAssistantStream(fullRaw: string, reset = false): void {
+    const data: LiveUiAssistantStreamMessage['data'] = { fullRaw, reset }
+    this.broadcast({ type: 'ASSISTANT_STREAM', data })
   }
 
   startMouthPump(): void {

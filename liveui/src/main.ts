@@ -1,5 +1,11 @@
 import * as PIXI from 'pixi.js'
 import { Live2DModel, cubism4Ready } from 'pixi-live2d-display/cubism4'
+import {
+  createStreamLiveUiState,
+  processAssistantStreamChunk,
+  stripLiveUiKnownEmotionTagsEverywhere,
+  type StreamLiveUiState,
+} from '../../src/liveui/emotionParse.ts'
 
 declare global {
   interface Window {
@@ -19,7 +25,12 @@ type ActionMsg = {
   data: { expression?: string; motion?: string }
 }
 
-type Msg = SyncParam | ActionMsg
+type AssistantStreamMsg = {
+  type: 'ASSISTANT_STREAM'
+  data: { fullRaw: string; reset?: boolean }
+}
+
+type Msg = SyncParam | ActionMsg | AssistantStreamMsg
 
 const FACE_RADIUS = 110
 
@@ -48,6 +59,7 @@ function emotionToExpressionId(em: string): string {
     frown: 'exp_08',
     smirk: 'exp_04',
     disgust: 'exp_04',
+    blush: 'exp_04',
     fear: 'exp_02',
   }
   return map[e] ?? 'exp_01'
@@ -67,6 +79,9 @@ function setMouthFromModel(model: InstanceType<typeof Live2DModel>, value01: num
 async function bootstrap(): Promise<void> {
   const canvas = document.getElementById('app') as HTMLCanvasElement | null
   const chrome = document.getElementById('figure-chrome')
+  const speechBubble = document.getElementById('speech-bubble')
+  const speechBubbleText = document.getElementById('speech-bubble-text')
+  const userLineInput = document.getElementById('liveui-user-line') as HTMLInputElement | null
   if (!canvas || !chrome) return
 
   window.PIXI = PIXI
@@ -119,12 +134,77 @@ async function bootstrap(): Promise<void> {
       neutral: 0x6ec5ff,
       surprised: 0x99ffcc,
       frown: 0xaaaaaa,
+      blush: 0xffb3c6,
     }
     const fill = palette[expr] ?? 0x6ec5ff
     face.clear()
     face.beginFill(fill, 0.88)
     face.drawCircle(0, 0, FACE_RADIUS)
     face.endFill()
+  }
+
+  let assistantStreamState: StreamLiveUiState = createStreamLiveUiState()
+  let typewriterRaf: number | undefined
+  let bubbleTarget = ''
+  let bubbleShown = 0
+
+  const stopTypewriter = (): void => {
+    if (typewriterRaf !== undefined) {
+      cancelAnimationFrame(typewriterRaf)
+      typewriterRaf = undefined
+    }
+  }
+
+  const resetSpeechBubble = (): void => {
+    stopTypewriter()
+    bubbleTarget = ''
+    bubbleShown = 0
+    if (speechBubbleText) speechBubbleText.textContent = ''
+    speechBubble?.classList.remove('visible')
+    speechBubble?.setAttribute('aria-hidden', 'true')
+  }
+
+  const runTypewriterFrame = (): void => {
+    if (bubbleShown >= bubbleTarget.length) {
+      typewriterRaf = undefined
+      return
+    }
+    bubbleShown = Math.min(bubbleShown + 2, bubbleTarget.length)
+    if (speechBubbleText) speechBubbleText.textContent = bubbleTarget.slice(0, bubbleShown)
+    speechBubble?.classList.add('visible')
+    speechBubble?.setAttribute('aria-hidden', 'false')
+    typewriterRaf = requestAnimationFrame(runTypewriterFrame)
+  }
+
+  const ensureTypewriter = (): void => {
+    if (typewriterRaf !== undefined) return
+    if (!speechBubbleText) return
+    typewriterRaf = requestAnimationFrame(runTypewriterFrame)
+  }
+
+  const setBubbleFromDisplayText = (displayText: string): void => {
+    if (!speechBubbleText || !speechBubble) return
+    bubbleTarget = displayText
+    if (!displayText.trim()) {
+      resetSpeechBubble()
+      return
+    }
+    if (bubbleShown > bubbleTarget.length) bubbleShown = bubbleTarget.length
+    speechBubble.classList.add('visible')
+    speechBubble.setAttribute('aria-hidden', 'false')
+    ensureTypewriter()
+  }
+
+  const applyLive2dExpression = (em: string): void => {
+    expression = em
+    if (liveModel) {
+      const expId = emotionToExpressionId(em)
+      void liveModel.expression(expId).catch(() => {
+        void liveModel!.expression(0).catch(() => {})
+      })
+    } else {
+      applyPlaceholderExpression(em)
+    }
   }
 
   let hideChromeTimer: ReturnType<typeof setTimeout> | undefined
@@ -272,22 +352,33 @@ async function bootstrap(): Promise<void> {
       }
     } else if (msg.type === 'ACTION') {
       const em = msg.data?.expression
-      if (em) {
-        expression = em
-        if (liveModel) {
-          const expId = emotionToExpressionId(em)
-          void liveModel.expression(expId).catch(() => {
-            void liveModel!.expression(0).catch(() => {})
-          })
-        } else {
-          applyPlaceholderExpression(em)
-        }
-      }
+      if (em) applyLive2dExpression(em)
       const motion = msg.data?.motion
       if (motion && liveModel) {
         console.debug('[liveui] motion 指令（可扩展 motion 组映射）:', motion)
       }
+    } else if (msg.type === 'ASSISTANT_STREAM') {
+      const fullRaw = typeof msg.data?.fullRaw === 'string' ? msg.data.fullRaw : ''
+      if (msg.data?.reset) {
+        assistantStreamState = createStreamLiveUiState()
+        resetSpeechBubble()
+      }
+      const { displayText, newActions } = processAssistantStreamChunk(assistantStreamState, fullRaw)
+      for (const a of newActions) {
+        if (a.expression) applyLive2dExpression(a.expression)
+      }
+      setBubbleFromDisplayText(stripLiveUiKnownEmotionTagsEverywhere(displayText))
     }
+  })
+
+  userLineInput?.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'Enter') return
+    ev.preventDefault()
+    const v = userLineInput.value.trimEnd()
+    if (!v.trim()) return
+    if (socket.readyState !== WebSocket.OPEN) return
+    socket.send(JSON.stringify({ type: 'USER_INPUT', data: { line: v } }))
+    userLineInput.value = ''
   })
 
   app.ticker.add(() => {

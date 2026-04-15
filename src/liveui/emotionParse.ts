@@ -3,6 +3,14 @@ import type { LiveUiActionMessage } from './protocol.js'
 
 const LEADING_TAGS_RE = /^((\[[^\]]+\])\s*)+/
 
+/** 展示用：去掉正文中任意位置的 LiveUI 标准表情标签（与 system 提示中的五选一一致）。 */
+const KNOWN_EMO_TAG_ANYWHERE =
+  /\[(?:Happy|Sad|Angry|Thinking|Blush)\]\s*/gi
+
+export function stripLiveUiKnownEmotionTagsEverywhere(text: string): string {
+  return text.replace(KNOWN_EMO_TAG_ANYWHERE, '')
+}
+
 /** 解析 [tag] 内文本，忽略大小写（英文） */
 function mapTagInner(innerRaw: string): { expression?: string; motion?: string } | null {
   const inner = innerRaw.trim()
@@ -21,6 +29,8 @@ function mapTagInner(innerRaw: string): { expression?: string; motion?: string }
     think: { expression: 'thinking' },
     thinking: { expression: 'thinking' },
     思考: { expression: 'thinking' },
+    blush: { expression: 'blush' },
+    害羞: { expression: 'blush' },
     neutral: { expression: 'neutral' },
     calm: { expression: 'neutral' },
     平静: { expression: 'neutral' },
@@ -92,12 +102,12 @@ export function stripLeadingLiveUiTags(text: string): string {
   return text.slice(m[0].length)
 }
 
-/** 持久化前：去掉各条 assistant 文本消息行首的 LiveUI 标签（仅完整 `[...]` 前缀）。 */
+/** 持久化前：去掉 assistant 行首连续标签，并去掉正文中标准五类 [Happy] 等标记。 */
 export function stripLiveUiTagsFromMessages(messages: PersistedMessage[]): PersistedMessage[] {
   return messages.map((m) => {
     if (m.role !== 'assistant') return m
     if (typeof m.content !== 'string') return m
-    const next = stripLeadingLiveUiTags(m.content)
+    const next = stripLiveUiKnownEmotionTagsEverywhere(stripLeadingLiveUiTags(m.content))
     if (next === m.content) return m
     return { ...m, content: next }
   })

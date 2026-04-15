@@ -10,6 +10,7 @@ import {
   buildAgentSystemPrompt,
 } from '../prompt/loadProjectPrompt.js'
 import { buildSystemWithMemory } from '../prompt/systemBuilder.js'
+import { LIVE_UI_ASSISTANT_EXPRESSION_NUDGE } from '../prompt/liveUiExpressionNudge.js'
 import { compactSessionMessages } from '../llm/compactSession.js'
 import { resolvedCompactionSettings } from '../llm/compactionSettings.js'
 import { estimateMessagesTokens } from '../llm/estimateTokens.js'
@@ -32,6 +33,7 @@ import type { LiveUiSession } from '../liveui/wsSession.js'
 import {
   createStreamLiveUiState,
   processAssistantStreamChunk,
+  stripLiveUiKnownEmotionTagsEverywhere,
   stripLiveUiTagsFromMessages,
 } from '../liveui/emotionParse.js'
 
@@ -244,8 +246,10 @@ export function ChatApp({
   const buildSystem = useCallback(async (): Promise<string> => {
     void skillsEpoch
     void promptEpoch
-    return buildSystemWithMemory(config, cwd)
-  }, [config, cwd, skillsEpoch, promptEpoch])
+    const base = await buildSystemWithMemory(config, cwd)
+    if (!liveUi) return base
+    return `${base}\n\n${LIVE_UI_ASSISTANT_EXPRESSION_NUDGE}`
+  }, [config, cwd, skillsEpoch, promptEpoch, liveUi])
 
   const reloadAll = useCallback(async () => {
     try {
@@ -442,21 +446,21 @@ export function ChatApp({
               setThinkingSnap('')
               lastStreamDeltaAtRef.current = null
               busySubtextRef.current = '等待模型响应（多轮工具之间会重新请求）…'
+              liveUi?.sendAssistantStream('', true)
             },
             onTextDelta: (_delta, full) => {
               lastStreamDeltaAtRef.current = Date.now()
               busySubtextRef.current =
                 'SSE 流式中（久无新字时：可能在生成 tool 调用或网络慢）…'
               if (liveUi) {
-                const { displayText, newActions } = processAssistantStreamChunk(
+                liveUi.sendAssistantStream(full, false)
+                const { displayText } = processAssistantStreamChunk(
                   streamLiveUiRef.current,
                   full,
                 )
-                for (const a of newActions) {
-                  liveUi.sendAction(a)
-                }
-                liveUi.mouth.onDisplayText(displayText)
-                flushStream(displayText)
+                const clean = stripLiveUiKnownEmotionTagsEverywhere(displayText)
+                liveUi.mouth.onDisplayText(clean)
+                flushStream(clean)
               } else {
                 flushStream(full)
               }
@@ -502,6 +506,13 @@ export function ChatApp({
       sessionReady,
     ],
   )
+
+  useEffect(() => {
+    if (!liveUi) return
+    return liveUi.onUserLine((line) => {
+      void handleSubmit(line)
+    })
+  }, [liveUi, handleSubmit])
 
   const visibleCount = Math.max(4, rows - 14)
   const visible = messages.slice(-visibleCount)
@@ -638,16 +649,24 @@ export function ChatApp({
       ) : null}
 
       <Box marginTop={1} borderStyle="single" borderColor="cyan" paddingX={1}>
-        <Text color="cyan" bold>{'› '}</Text>
-        <TextInput
-          value={input}
-          focus={!busy && sessionReady}
-          onChange={setInput}
-          onSubmit={(v) => {
-            void handleSubmit(v)
-          }}
-          placeholder="输入…"
-        />
+        {liveUi ? (
+          <Text dimColor wrap="wrap">
+            输入已移至桌面 Live 窗口底部；此处不再接收键盘输入（仍显示状态与历史）。斜杠命令请在窗口输入框中输入，例如 /help /clear。
+          </Text>
+        ) : (
+          <>
+            <Text color="cyan" bold>{'› '}</Text>
+            <TextInput
+              value={input}
+              focus={!busy && sessionReady}
+              onChange={setInput}
+              onSubmit={(v) => {
+                void handleSubmit(v)
+              }}
+              placeholder="输入…"
+            />
+          </>
+        )}
       </Box>
     </Box>
   )
