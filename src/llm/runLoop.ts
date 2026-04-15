@@ -63,6 +63,8 @@ export type RunLoopOptions = {
   skipPermissions?: boolean
   editHistory?: EditHistory
   onToolDispatch?: (name: string) => void
+  /** 外部中断信号（语音打断等场景） */
+  signal?: AbortSignal
 }
 
 export async function runToolLoop(opts: RunLoopOptions): Promise<{
@@ -282,6 +284,17 @@ async function runAnthropic(
     let thinkingAcc = ''
     let lastEventAt = Date.now()
 
+    // ── 外部中断 ──
+    if (opts.signal?.aborted) {
+      agentDebug('signal already aborted before stream start')
+      break
+    }
+    const onAbort = () => {
+      agentDebug('external abort signal received, aborting stream')
+      stream.abort()
+    }
+    opts.signal?.addEventListener('abort', onAbort, { once: true })
+
     // ── SSE 流闲置 watchdog ──
     const idleCheck = setInterval(() => {
       if (Date.now() - lastEventAt > STREAM_IDLE_TIMEOUT_MS) {
@@ -365,6 +378,17 @@ async function runAnthropic(
       msg = final as unknown as Anthropic.Messages.Message
     } finally {
       clearInterval(idleCheck)
+      opts.signal?.removeEventListener('abort', onAbort)
+    }
+
+    if (opts.signal?.aborted) {
+      const textParts: string[] = []
+      for (const block of msg.content) {
+        if (block.type === 'text') textParts.push(block.text)
+      }
+      const partial = textParts.join('\n').trim()
+      if (partial) working.push({ role: 'assistant', content: partial })
+      break
     }
 
     agentDebug(
@@ -473,6 +497,7 @@ async function runOpenAI(
   const working: PersistedMessage[] = [...opts.messages]
 
   for (let step = 0; step < MAX_TOOL_STEPS; step++) {
+    if (opts.signal?.aborted) break
     agentDebug('openai step', step, 'request stream')
     opts.stream?.onStreamReset?.()
     const streamResp = await client.chat.completions.create({
@@ -495,6 +520,7 @@ async function runOpenAI(
     await withDeadline(
       (async () => {
         for await (const chunk of streamResp) {
+          if (opts.signal?.aborted) break
           const choice = chunk.choices[0]
           if (!choice) {
             continue
@@ -529,6 +555,11 @@ async function runOpenAI(
       LLM_TIMEOUT_MS,
       'OpenAI',
     )
+
+    if (opts.signal?.aborted) {
+      if (content.trim()) working.push({ role: 'assistant', content })
+      break
+    }
 
     const sorted = [...toolAcc.entries()]
       .sort((a, b) => a[0] - b[0])
@@ -672,6 +703,7 @@ async function runGemini(
   const working: PersistedMessage[] = [...opts.messages]
 
   for (let step = 0; step < MAX_TOOL_STEPS; step++) {
+    if (opts.signal?.aborted) break
     agentDebug('gemini step', step, 'request stream')
     opts.stream?.onStreamReset?.()
     const streamResult = await model.generateContentStream({
@@ -682,6 +714,7 @@ async function runGemini(
       (async () => {
         let acc = ''
         for await (const chunk of streamResult.stream) {
+          if (opts.signal?.aborted) break
           let piece = ''
           try {
             piece = chunk.text()

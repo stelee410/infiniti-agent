@@ -120,7 +120,7 @@ export function isLiveUiMessage(x: unknown): x is LiveUiMessage {
     const dd = d as { audioBase64?: unknown; format?: unknown; sampleRate?: unknown; sequence?: unknown }
     return typeof dd.audioBase64 === 'string' && typeof dd.sequence === 'number'
   }
-  if (o.type === 'AUDIO_RESET') return true
+  if (o.type === 'AUDIO_RESET' || o.type === 'INTERRUPT') return true
   if (o.type === 'TTS_STATUS' || o.type === 'ASR_STATUS') {
     const d = (x as { data?: unknown }).data
     if (!d || typeof d !== 'object') return false

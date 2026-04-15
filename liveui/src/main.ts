@@ -637,8 +637,10 @@ async function bootstrap(): Promise<void> {
       updateMicBtn()
     } else if (msg.type === 'ASR_RESULT') {
       const text = msg.data?.text
-      if (typeof text === 'string' && text.trim() && userLineInput) {
-        userLineInput.value = text.trim()
+      if (typeof text === 'string' && text.trim()) {
+        if (userLineInput && !voiceMode) {
+          userLineInput.value = text.trim()
+        }
         touchConvActivity()
       }
     } else if (msg.type === 'AUDIO_CHUNK') {
@@ -671,6 +673,8 @@ async function bootstrap(): Promise<void> {
         v === 'ready' || v === 'busy' || v === 'warn' || v === 'loading' ? v : 'ready'
       const wasBusy = statusPillVariant === 'busy' || statusPillVariant === 'loading'
       statusPillVariant = variant
+      llmBusy = variant === 'busy' || variant === 'loading'
+      if (!llmBusy) interruptSent = false
       statusPill.textContent = label
       statusPill.className = `liveui-status-pill liveui-status-pill--${variant}`
       if (wasBusy && variant === 'ready' && bubbleTarget.trim()) {
@@ -732,11 +736,22 @@ async function bootstrap(): Promise<void> {
     if (!ttsEnabled) resetAudioQueue()
   })
 
-  // ── 麦克风按钮：ASR 语音识别 ──
+  // ── 麦克风按钮：连续语音对话模式 ──
   let asrAvailable = false
-  let micRecording = false
+  let voiceMode = false
+  let micStream: MediaStream | null = null
   let mediaRecorder: MediaRecorder | null = null
   let micChunks: Blob[] = []
+  let micAnalyser: AnalyserNode | null = null
+  let micAudioCtx: AudioContext | null = null
+  let vadRaf: number | undefined
+  let isSpeaking = false
+  let hasSpoken = false
+  let silenceStart = 0
+  const SILENCE_THRESHOLD = 0.015
+  const SILENCE_TIMEOUT_MS = 1500
+  let llmBusy = false
+  let interruptSent = false
 
   const micBtn = document.getElementById('liveui-btn-mic') as HTMLButtonElement | null
   const micIconIdle = document.getElementById('liveui-mic-icon-idle')
@@ -744,65 +759,159 @@ async function bootstrap(): Promise<void> {
 
   const updateMicBtn = (): void => {
     if (!micBtn) return
-    micBtn.setAttribute('aria-pressed', String(micRecording))
-    micBtn.title = !asrAvailable ? '语音输入：不可用' : (micRecording ? '录音中…点击停止' : '点击开始语音输入')
-    if (micIconIdle) micIconIdle.style.display = micRecording ? 'none' : ''
-    if (micIconRecording) micIconRecording.style.display = micRecording ? '' : 'none'
+    micBtn.setAttribute('aria-pressed', String(voiceMode))
+    micBtn.title = !asrAvailable
+      ? '语音输入：不可用'
+      : voiceMode
+        ? '语音模式开启中…点击关闭'
+        : '点击进入语音对话模式'
+    if (micIconIdle) micIconIdle.style.display = voiceMode ? 'none' : ''
+    if (micIconRecording) micIconRecording.style.display = voiceMode ? '' : 'none'
   }
 
-  const stopRecording = (): void => {
+  const vadAnalyserData = new Float32Array(256)
+
+  const getRms = (): number => {
+    if (!micAnalyser) return 0
+    micAnalyser.getFloatTimeDomainData(vadAnalyserData)
+    let sum = 0
+    for (let i = 0; i < vadAnalyserData.length; i++) {
+      sum += vadAnalyserData[i]! * vadAnalyserData[i]!
+    }
+    return Math.sqrt(sum / vadAnalyserData.length)
+  }
+
+  const sendRecordedAudio = (): void => {
+    if (micChunks.length === 0) return
+    const blob = new Blob(micChunks, { type: 'audio/webm' })
+    micChunks = []
+    const reader = new FileReader()
+    reader.onloadend = () => {
+      const base64 = (reader.result as string).split(',')[1]
+      if (base64 && socket.readyState === WebSocket.OPEN) {
+        console.debug(`[liveui] 发送录音: ${blob.size} bytes`)
+        socket.send(JSON.stringify({ type: 'MIC_AUDIO', data: { audioBase64: base64, format: 'webm' } }))
+      }
+    }
+    reader.readAsDataURL(blob)
+  }
+
+  const startSegmentRecording = (): void => {
+    if (!micStream || mediaRecorder?.state === 'recording') return
+    micChunks = []
+    const mr = new MediaRecorder(micStream, { mimeType: 'audio/webm;codecs=opus' })
+    mediaRecorder = mr
+    mr.ondataavailable = (e) => {
+      if (e.data.size > 0) micChunks.push(e.data)
+    }
+    mr.onstop = () => {
+      sendRecordedAudio()
+    }
+    mr.start()
+    console.debug('[liveui] 开始录音片段')
+  }
+
+  const stopSegmentRecording = (): void => {
     if (mediaRecorder && mediaRecorder.state !== 'inactive') {
       mediaRecorder.stop()
+      mediaRecorder = null
     }
   }
 
-  const startRecording = async (): Promise<void> => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000, channelCount: 1 } })
-      micChunks = []
-      const mr = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' })
-      mediaRecorder = mr
+  const vadLoop = (): void => {
+    if (!voiceMode) return
+    const rms = getRms()
+    const now = Date.now()
 
-      mr.ondataavailable = (e) => {
-        if (e.data.size > 0) micChunks.push(e.data)
+    if (rms > SILENCE_THRESHOLD) {
+      if (llmBusy && !interruptSent) {
+        interruptSent = true
+        console.debug('[liveui] 检测到语音打断，发送 INTERRUPT')
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ type: 'INTERRUPT' }))
+        }
+        resetAudioQueue()
       }
 
-      mr.onstop = () => {
-        stream.getTracks().forEach((t) => t.stop())
-        micRecording = false
-        updateMicBtn()
-
-        if (micChunks.length === 0) return
-        const blob = new Blob(micChunks, { type: 'audio/webm' })
-        micChunks = []
-
-        const reader = new FileReader()
-        reader.onloadend = () => {
-          const base64 = (reader.result as string).split(',')[1]
-          if (base64 && socket.readyState === WebSocket.OPEN) {
-            console.debug(`[liveui] 发送录音: ${blob.size} bytes`)
-            socket.send(JSON.stringify({ type: 'MIC_AUDIO', data: { audioBase64: base64, format: 'webm' } }))
+      if (!isSpeaking) {
+        isSpeaking = true
+        hasSpoken = true
+        if (!llmBusy) startSegmentRecording()
+      }
+      silenceStart = 0
+    } else {
+      if (isSpeaking) {
+        if (silenceStart === 0) {
+          silenceStart = now
+        } else if (now - silenceStart >= SILENCE_TIMEOUT_MS) {
+          isSpeaking = false
+          if (hasSpoken) {
+            hasSpoken = false
+            stopSegmentRecording()
           }
         }
-        reader.readAsDataURL(blob)
       }
+    }
 
-      mr.start()
-      micRecording = true
+    vadRaf = requestAnimationFrame(vadLoop)
+  }
+
+  const enterVoiceMode = async (): Promise<void> => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { sampleRate: 16000, channelCount: 1 },
+      })
+      micStream = stream
+      micAudioCtx = new AudioContext()
+      const source = micAudioCtx.createMediaStreamSource(stream)
+      micAnalyser = micAudioCtx.createAnalyser()
+      micAnalyser.fftSize = 512
+      source.connect(micAnalyser)
+
+      voiceMode = true
+      isSpeaking = false
+      hasSpoken = false
+      silenceStart = 0
+      interruptSent = false
       updateMicBtn()
+      if (userLineInput) {
+        userLineInput.disabled = true
+        userLineInput.placeholder = '语音模式开启中…'
+      }
+      vadRaf = requestAnimationFrame(vadLoop)
     } catch (e) {
       console.warn('[liveui] 麦克风获取失败:', e)
-      micRecording = false
-      updateMicBtn()
+    }
+  }
+
+  const exitVoiceMode = (): void => {
+    voiceMode = false
+    if (vadRaf) { cancelAnimationFrame(vadRaf); vadRaf = undefined }
+    stopSegmentRecording()
+    if (micStream) {
+      micStream.getTracks().forEach((t) => t.stop())
+      micStream = null
+    }
+    if (micAudioCtx) {
+      void micAudioCtx.close()
+      micAudioCtx = null
+      micAnalyser = null
+    }
+    isSpeaking = false
+    hasSpoken = false
+    updateMicBtn()
+    if (userLineInput) {
+      userLineInput.disabled = false
+      userLineInput.placeholder = ''
     }
   }
 
   micBtn?.addEventListener('click', () => {
     if (!asrAvailable) return
-    if (micRecording) {
-      stopRecording()
+    if (voiceMode) {
+      exitVoiceMode()
     } else {
-      void startRecording()
+      void enterVoiceMode()
     }
   })
 

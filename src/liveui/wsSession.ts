@@ -14,6 +14,7 @@ import type { AsrEngine } from '../asr/whisperAsr.js'
 
 export type LiveUiConnectionListener = (connected: boolean) => void
 export type LiveUiUserLineListener = (line: string) => void
+export type LiveUiInterruptListener = () => void
 
 /** 渲染端点击 Live2D 头部 / 身体等，由 Node 转成一条合成用户消息请求模型回应 */
 export type LiveUiInteractionKind = 'head_pat' | 'body_poke'
@@ -27,6 +28,7 @@ export class LiveUiSession {
   private clients = new Set<WebSocket>()
   private listeners = new Set<LiveUiConnectionListener>()
   private userLineListeners = new Set<LiveUiUserLineListener>()
+  private interruptListeners = new Set<LiveUiInterruptListener>()
   private interactionListeners = new Set<LiveUiInteractionListener>()
   private mouthTimer: ReturnType<typeof setInterval> | undefined
   private electronChild: ChildProcess | null = null
@@ -89,6 +91,15 @@ export class LiveUiSession {
     }
   }
 
+  onInterrupt(fn: LiveUiInterruptListener): () => void {
+    this.interruptListeners.add(fn)
+    return () => { this.interruptListeners.delete(fn) }
+  }
+
+  private emitInterrupt(): void {
+    for (const f of this.interruptListeners) f()
+  }
+
   onInteraction(fn: LiveUiInteractionListener): () => void {
     this.interactionListeners.add(fn)
     return () => {
@@ -138,6 +149,11 @@ export class LiveUiSession {
           if (t === 'TTS_TOGGLE' && parsed.data && typeof parsed.data === 'object') {
             const enabled = (parsed.data as { enabled?: unknown }).enabled
             this.ttsEnabled = !!enabled
+            return
+          }
+          if (t === 'INTERRUPT') {
+            this.resetAudio()
+            this.emitInterrupt()
             return
           }
           if (t === 'MIC_AUDIO' && parsed.data && typeof parsed.data === 'object') {

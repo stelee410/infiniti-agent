@@ -81,6 +81,7 @@ export function ChatApp({
   const [slashIndex, setSlashIndex] = useState(0)
   const busyRef = useRef(false)
   busyRef.current = busy
+  const abortRef = useRef<AbortController | null>(null)
   const liveUiInteractionCooldownRef = useRef(0)
   const [notice, setNotice] = useState<string | null>(null)
   const [compacting, setCompacting] = useState(false)
@@ -394,6 +395,8 @@ export function ChatApp({
       resetStream()
       thinkingTextRef.current = ''
       setThinkingSnap('')
+      const ac = new AbortController()
+      abortRef.current = ac
       const userLine = raw
 
       let baseMessages = messages
@@ -446,6 +449,7 @@ export function ChatApp({
           mcp,
           skipPermissions: dangerouslySkipPermissions,
           editHistory: editHistoryRef.current,
+          signal: ac.signal,
           onToolDispatch: (name) => {
             busySubtextRef.current = `执行工具：${name}…`
           },
@@ -519,8 +523,11 @@ export function ChatApp({
         setMessages(out)
         await saveSession(cwd, out)
       } catch (e: unknown) {
-        setError(formatChatError(e))
+        if (!ac.signal.aborted) {
+          setError(formatChatError(e))
+        }
       } finally {
+        abortRef.current = null
         busySubtextRef.current = null
         resetStream()
         setBusy(false)
@@ -547,6 +554,17 @@ export function ChatApp({
       void handleSubmit(line)
     })
   }, [liveUi, handleSubmit])
+
+  useEffect(() => {
+    if (!liveUi) return
+    return liveUi.onInterrupt(() => {
+      const ac = abortRef.current
+      if (ac && !ac.signal.aborted) {
+        ac.abort()
+        liveUi.resetAudio()
+      }
+    })
+  }, [liveUi])
 
   useEffect(() => {
     if (!liveUi) return
