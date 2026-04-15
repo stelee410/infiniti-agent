@@ -3,11 +3,11 @@ const { app, BrowserWindow, Menu } = require('electron')
 const path = require('path')
 
 /**
- * 无边框透明叠层模式（与早期 LiveUI 一致）：
- *   INFINITI_LIVEUI_FRAMELESS=1
- * 默认：带系统标题栏 + 菜单，便于调试。
+ * 默认：无边框、透明、置顶（LiveUI 叠层）。
+ * 需要系统标题栏 + 菜单便于调试时：
+ *   INFINITI_LIVEUI_DEBUG_WINDOW=1
  */
-const frameless = process.env.INFINITI_LIVEUI_FRAMELESS === '1'
+const debugWindow = process.env.INFINITI_LIVEUI_DEBUG_WINDOW === '1'
 
 function buildMenu() {
   const isMac = process.platform === 'darwin'
@@ -60,13 +60,13 @@ function createWindow() {
 
   const win = new BrowserWindow({
     title: 'Infiniti LiveUI',
-    width: frameless ? 420 : 520,
-    height: frameless ? 640 : 780,
-    frame: !frameless,
-    transparent: frameless,
-    backgroundColor: frameless ? undefined : '#1a1d24',
-    alwaysOnTop: frameless,
-    hasShadow: !frameless,
+    width: debugWindow ? 520 : 420,
+    height: debugWindow ? 780 : 640,
+    frame: debugWindow,
+    transparent: !debugWindow,
+    backgroundColor: debugWindow ? '#1a1d24' : undefined,
+    alwaysOnTop: !debugWindow,
+    hasShadow: debugWindow,
     resizable: true,
     show: true,
     webPreferences: {
@@ -77,7 +77,7 @@ function createWindow() {
     },
   })
 
-  if (frameless) {
+  if (!debugWindow) {
     win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
   }
 
@@ -93,7 +93,7 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
-  if (!frameless) {
+  if (debugWindow) {
     Menu.setApplicationMenu(buildMenu())
   }
   createWindow()

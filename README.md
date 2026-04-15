@@ -38,7 +38,7 @@ infiniti-agent
 
 LiveUI 窗口为无边框透明窗：**鼠标移到人物（Live2D 或占位圆）上**会浮出半透明控制条，点击 **「⋮⋮ 拖动」** 即可拖动窗口；移开后面板短时淡出。
 
-**Electron 调试窗口（默认）**：带系统标题栏与 **视图** 菜单（重新加载、开发者工具、缩放等）。恢复早期无边框置顶叠层：`INFINITI_LIVEUI_FRAMELESS=1`。启动时自动打开 DevTools（独立窗口）：`INFINITI_LIVEUI_DEVTOOLS=1`；使用 `infiniti-agent live` 且带 **`--debug`** 时也会自动为该变量赋值。
+**Electron 窗口（默认）**：无边框、**透明**、置顶叠层。需要标题栏 + **视图** 菜单（重新加载、开发者工具、缩放等）时：`INFINITI_LIVEUI_DEBUG_WINDOW=1`。启动时自动打开 DevTools（独立窗口）：`INFINITI_LIVEUI_DEVTOOLS=1`；`infiniti-agent live` 带 **`--debug`** 时也会自动设置 DevTools。
 
 渲染依赖 **Live2D Cubism Core**：已内置在 `liveui/public/live2dcubismcore.min.js`（构建时复制到 `dist/`），`index.html` 以**相对路径** `./live2dcubismcore.min.js` 加载，避免 Electron `file://` 下绝对路径 `/xxx.js` 指向磁盘根目录导致加载失败。模型入口为配置解析出的 `file:` 路径（`.model3.json`）。
 
