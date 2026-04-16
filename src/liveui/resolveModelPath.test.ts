@@ -2,7 +2,11 @@ import { mkdirSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { describe, expect, it } from 'vitest'
-import { resolveLive2dModelForUi, resolveModelDictUrlToFilesystem } from './resolveModelPath.js'
+import {
+  resolveLive2dModelForUi,
+  resolveModelDictUrlToFilesystem,
+  resolveSpriteExpressionDirForUi,
+} from './resolveModelPath.js'
 
 describe('resolveModelDictUrlToFilesystem', () => {
   it('maps /live2d-models/... to live2dModelsDir root', () => {
@@ -66,6 +70,30 @@ describe('resolveLive2dModelForUi', () => {
         live2dModelName: 'mao',
       })
       expect(r?.model3JsonPath).toBe(model)
+    } finally {
+      rmSync(cwd, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('resolveSpriteExpressionDirForUi', () => {
+  it('returns file URL for existing directory', () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'infiniti-spr-'))
+    const dir = join(cwd, 'expr')
+    mkdirSync(dir, { recursive: true })
+    try {
+      const r = resolveSpriteExpressionDirForUi(cwd, { spriteExpressions: { dir: './expr' } })
+      expect(r?.dirFileUrl.startsWith('file:')).toBe(true)
+      expect(r?.dirFileUrl.endsWith('/')).toBe(true)
+    } finally {
+      rmSync(cwd, { recursive: true, force: true })
+    }
+  })
+
+  it('returns null when dir missing', () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'infiniti-spr2-'))
+    try {
+      expect(resolveSpriteExpressionDirForUi(cwd, { spriteExpressions: { dir: './nope' } })).toBeNull()
     } finally {
       rmSync(cwd, { recursive: true, force: true })
     }

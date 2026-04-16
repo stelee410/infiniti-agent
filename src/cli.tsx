@@ -30,7 +30,9 @@ import { createMinimaxTts } from './tts/minimaxTts.js'
 import { createWhisperAsr } from './asr/whisperAsr.js'
 import { createSherpaOnnxAsr } from './asr/sherpaOnnxAsr.js'
 import { spawnLiveElectron } from './liveui/spawnRenderer.js'
-import { resolveLive2dModelForUi } from './liveui/resolveModelPath.js'
+import { buildLiveUiVoiceMicEnvJson, VOICE_MIC_DEFAULT_SPEECH_RMS_THRESHOLD } from './liveui/voiceMicEnv.js'
+import { runTestAsr, parseTestAsrRms, parseTestAsrInt } from './cli/testAsr.js'
+import { resolveLive2dModelForUi, resolveSpriteExpressionDirForUi } from './liveui/resolveModelPath.js'
 import { runAddLlm, runSelectLlm } from './cli/llmCli.js'
 
 const cwd = process.cwd()
@@ -53,6 +55,10 @@ async function runChatTui(
     disableThinking?: boolean
     liveUi?: LiveUiSession | null
     liveUiModel3FileUrl?: string
+    /** `live` 且配置了 `spriteExpressions.dir` 时注入 Electron（`INFINITI_LIVEUI_SPRITE_EXPRESSION_DIR`） */
+    liveUiSpriteExpressionDirFileUrl?: string
+    /** `live` 时注入麦克 VAD（JSON → Electron `INFINITI_LIVEUI_VOICE_MIC`） */
+    liveUiVoiceMicJson?: string
   } = {},
 ): Promise<void> {
   if (!configExistsSync(cwd)) {
@@ -90,7 +96,11 @@ async function runChatTui(
         liveUi.setAsrEngine(await createSherpaOnnxAsr(cfg.asr))
         console.error(`[liveui] sherpa-onnx ASR 已启用 (model: ${cfg.asr.model})`)
       }
-      const child = spawnLiveElectron(liveUi.port, opts.liveUiModel3FileUrl)
+      const child = spawnLiveElectron(liveUi.port, {
+        model3FileUrl: opts.liveUiModel3FileUrl,
+        spriteExpressionDirFileUrl: opts.liveUiSpriteExpressionDirFileUrl,
+        voiceMicJson: opts.liveUiVoiceMicJson,
+      })
       liveUi.setElectronChild(child)
       if (!child) {
         console.error('[liveui] Electron 未启动：已启动 WebSocket，可稍后自行对接渲染端。')
@@ -323,9 +333,19 @@ async function main(): Promise<void> {
         process.exit(2)
       }
 
+      const spriteResolved = resolveSpriteExpressionDirForUi(cwd, cfg.liveUi)
+      for (const w of spriteResolved?.warnings ?? []) {
+        console.error(`[liveui] ${w}`)
+      }
+
       const resolved = resolveLive2dModelForUi(cwd, cfg.liveUi)
       for (const w of resolved?.warnings ?? []) {
         console.error(`[liveui] ${w}`)
+      }
+
+      const useSprite = Boolean(spriteResolved?.dirFileUrl)
+      if (useSprite) {
+        console.error(`[liveui] 已启用 spriteExpressions（PNG），不使用 Live2D 模型 URL`)
       }
 
       const liveUi = new LiveUiSession(port)
@@ -333,8 +353,35 @@ async function main(): Promise<void> {
         skipPermissions,
         disableThinking,
         liveUi,
-        liveUiModel3FileUrl: resolved?.model3FileUrl,
+        liveUiModel3FileUrl: useSprite ? undefined : resolved?.model3FileUrl,
+        liveUiSpriteExpressionDirFileUrl: spriteResolved?.dirFileUrl,
+        liveUiVoiceMicJson: buildLiveUiVoiceMicEnvJson(cfg.liveUi),
       })
+    })
+
+  program
+    .command('test_asr')
+    .description(
+      '麦克风 RMS 分段测试：用 ffmpeg 采集音频，按 --rms 与静音切段调用 config 中的 ASR；stdout 输出识别文本并以 <停顿> 连接（Ctrl+C 结束）。需已安装 ffmpeg。',
+    )
+    .option('--rms <n>', 'RMS 阈值（与 liveUi.voiceMicSpeechRmsThreshold 一致）')
+    .option('--silence-ms <n>', '静音判停时长（毫秒）', '1500')
+    .option('--min-chunk-ms <n>', '最短送识别片段（毫秒）', '250')
+    .action(async (cmdOpts: { rms?: string; silenceMs?: string; minChunkMs?: string }) => {
+      if (!configExistsSync(cwd)) {
+        console.error('尚未配置。请先运行: infiniti-agent init 或 infiniti-agent migrate')
+        process.exit(2)
+      }
+      const rms = parseTestAsrRms(cmdOpts.rms, VOICE_MIC_DEFAULT_SPEECH_RMS_THRESHOLD)
+      const silenceMs = parseTestAsrInt(cmdOpts.silenceMs, 1500, '--silence-ms', 200, 12000)
+      const minChunkMs = parseTestAsrInt(cmdOpts.minChunkMs, 250, '--min-chunk-ms', 80, 5000)
+      try {
+        const code = await runTestAsr(cwd, { rms, silenceMs, minChunkMs })
+        process.exit(code)
+      } catch (e) {
+        console.error((e as Error).message)
+        process.exit(1)
+      }
     })
 
   program

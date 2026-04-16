@@ -60,15 +60,95 @@
       #speech-bubble.visible {
         opacity: 1;
       }
-      #speech-bubble-text {
+      #speech-bubble-text.liveui-md-root {
         margin: 0;
-        font: 15px/1.6 system-ui, -apple-system, 'Segoe UI', sans-serif;
+        font: 15px/1.55 system-ui, -apple-system, 'Segoe UI', sans-serif;
         color: rgba(255, 255, 255, 0.92);
-        white-space: pre-wrap;
         word-break: break-word;
         user-select: none;
         max-height: 40vh;
         overflow-y: auto;
+      }
+      .liveui-md-root :where(p, ul, ol, pre, h1, h2, h3, h4, h5, h6, blockquote, table, hr) {
+        margin: 0.45em 0;
+      }
+      .liveui-md-root :first-child {
+        margin-top: 0;
+      }
+      .liveui-md-root :last-child {
+        margin-bottom: 0;
+      }
+      .liveui-md-root h1 {
+        font-size: 1.2em;
+        font-weight: 700;
+        line-height: 1.25;
+      }
+      .liveui-md-root h2 {
+        font-size: 1.1em;
+        font-weight: 650;
+        line-height: 1.3;
+      }
+      .liveui-md-root h3,
+      .liveui-md-root h4 {
+        font-size: 1.02em;
+        font-weight: 600;
+      }
+      .liveui-md-root ul,
+      .liveui-md-root ol {
+        padding-left: 1.35em;
+      }
+      .liveui-md-root li {
+        margin: 0.15em 0;
+      }
+      .liveui-md-root a {
+        color: #7dd3fc;
+        text-decoration: underline;
+        text-underline-offset: 2px;
+      }
+      .liveui-md-root blockquote {
+        margin-left: 0;
+        padding-left: 0.75em;
+        border-left: 3px solid rgba(125, 211, 252, 0.45);
+        color: rgba(255, 255, 255, 0.78);
+      }
+      .liveui-md-root hr {
+        border: none;
+        border-top: 1px solid rgba(255, 255, 255, 0.14);
+      }
+      .liveui-md-root pre {
+        padding: 8px 10px;
+        border-radius: 8px;
+        background: rgba(0, 0, 0, 0.38);
+        font-size: 12px;
+        line-height: 1.45;
+        max-height: 22vh;
+        overflow: auto;
+      }
+      .liveui-md-root code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 0.88em;
+        background: rgba(0, 0, 0, 0.35);
+        padding: 0.12em 0.38em;
+        border-radius: 4px;
+      }
+      .liveui-md-root pre code {
+        background: transparent;
+        padding: 0;
+        font-size: inherit;
+      }
+      .liveui-md-root table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.88em;
+      }
+      .liveui-md-root th,
+      .liveui-md-root td {
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        padding: 0.28em 0.45em;
+        text-align: left;
+      }
+      .liveui-md-root th {
+        background: rgba(255, 255, 255, 0.06);
       }
       #liveui-control-bar {
         box-sizing: border-box;
@@ -338,7 +418,7 @@
   </head>
   <body>
     <div id="speech-bubble" aria-hidden="true">
-      <p id="speech-bubble-text"></p>
+      <div id="speech-bubble-text" class="liveui-md-root"></div>
     </div>
     <div id="liveui-bottom-dock">
       <div

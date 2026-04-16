@@ -22,10 +22,18 @@ function resolveElectronCliJs(): string | null {
   }
 }
 
+export type LiveUiElectronSpawnOptions = {
+  model3FileUrl?: string
+  /** 含尾斜杠的 `file:` URL，指向含 `exp_01.png`…的目录 */
+  spriteExpressionDirFileUrl?: string
+  /** JSON：`{ speechRmsThreshold, silenceEndMs, suppressInterruptDuringTts }` */
+  voiceMicJson?: string
+}
+
 /**
  * 启动 Electron 渲染进程（liveui 包）。需已安装 `electron`（根目录或 liveui 的 node_modules）。
  */
-export function spawnLiveElectron(port: number, model3FileUrl?: string): ChildProcess | null {
+export function spawnLiveElectron(port: number, opts?: LiveUiElectronSpawnOptions): ChildProcess | null {
   const main = join(PACKAGE_ROOT, 'liveui', 'electron-main.cjs')
   if (!existsSync(main)) {
     console.error(`[liveui] 未找到 Electron 入口: ${main}`)
@@ -47,7 +55,11 @@ export function spawnLiveElectron(port: number, model3FileUrl?: string): ChildPr
     env: {
       ...process.env,
       INFINITI_LIVEUI_PORT: String(port),
-      ...(model3FileUrl ? { INFINITI_LIVEUI_MODEL3_FILE_URL: model3FileUrl } : {}),
+      ...(opts?.model3FileUrl ? { INFINITI_LIVEUI_MODEL3_FILE_URL: opts.model3FileUrl } : {}),
+      ...(opts?.spriteExpressionDirFileUrl
+        ? { INFINITI_LIVEUI_SPRITE_EXPRESSION_DIR: opts.spriteExpressionDirFileUrl }
+        : {}),
+      ...(opts?.voiceMicJson ? { INFINITI_LIVEUI_VOICE_MIC: opts.voiceMicJson } : {}),
     },
     detached: false,
     stdio: 'ignore',

@@ -5,7 +5,7 @@ const LEADING_TAGS_RE = /^((\[[^\]]+\])\s*)+/
 
 /** 展示用：去掉正文中任意位置的 LiveUI 标准表情标签（与 system 提示中的五选一一致）。 */
 const KNOWN_EMO_TAG_ANYWHERE =
-  /\[(?:Happy|Sad|Angry|Thinking|Blush)\]\s*/gi
+  /\[(?:Happy|Joy|Sad|Sadness|Fear|Angry|Anger|Thinking|Think|Blush|Smirk|Disgust|Neutral|Calm|Surprise|Surprised|Frown)\]\s*/gi
 
 export function stripLiveUiKnownEmotionTagsEverywhere(text: string): string {
   return text.replace(KNOWN_EMO_TAG_ANYWHERE, '')
@@ -22,19 +22,25 @@ function mapTagInner(innerRaw: string): { expression?: string; motion?: string }
     joy: { expression: 'happy' },
     开心: { expression: 'happy' },
     sad: { expression: 'sad' },
+    sadness: { expression: 'sad' },
     unhappy: { expression: 'sad' },
+    fear: { expression: 'sad' },
     悲伤: { expression: 'sad' },
     angry: { expression: 'angry' },
+    anger: { expression: 'angry' },
     生气: { expression: 'angry' },
     think: { expression: 'thinking' },
     thinking: { expression: 'thinking' },
     思考: { expression: 'thinking' },
     blush: { expression: 'blush' },
     害羞: { expression: 'blush' },
+    smirk: { expression: 'smirk' },
+    disgust: { expression: 'disgust' },
     neutral: { expression: 'neutral' },
     calm: { expression: 'neutral' },
     平静: { expression: 'neutral' },
     surprise: { expression: 'surprised' },
+    surprised: { expression: 'surprised' },
     惊讶: { expression: 'surprised' },
     frown: { expression: 'frown' },
     皱眉: { expression: 'frown' },

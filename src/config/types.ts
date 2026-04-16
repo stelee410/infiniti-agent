@@ -55,6 +55,15 @@ export type CompactionConfig = {
  * 或直接指定离线下载的 model3：
  * `"live2dModel3Json": "./live2d-models/mao_pro/runtime/mao_pro.model3.json"`
  */
+/** PNG 精灵表情（如 `live2d-models/luna/expression/exp_01.png`），与流式标签 / Live2D expression 名对齐。 */
+export type LiveUiSpriteExpressionsConfig = {
+  /**
+   * 含 `exp_01.png` … `exp_08.png` 的目录（相对当前工作目录）。
+   * 设置且路径有效时，LiveUI **仅**用该目录下 PNG 切换表情，**不再加载** `live2dModel3Json` / model_dict 的 Cubism 模型。
+   */
+  dir?: string
+}
+
 export type LiveUiConfig = {
   /** WebSocket 端口；`infiniti-agent live` 未传 `--port` 时使用 */
   port?: number
@@ -72,6 +81,21 @@ export type LiveUiConfig = {
   live2dModelName?: string
   /** 直接指向 `.model3.json` 的绝对路径，或相对 cwd 的路径（优先级最高） */
   live2dModel3Json?: string
+
+  /**
+   * 语音模式：麦克风流 RMS 高于该值视为「在说话」（开始录音段 / 可触发打断）。
+   * 未配置时默认约为 `0.015 × 1.3`；嘈杂环境可调高（如 `0.04`～`0.08`）。
+   */
+  voiceMicSpeechRmsThreshold?: number
+  /** 说完一段后静音满多少毫秒再结束本段并送 ASR（毫秒，约 200～12000） */
+  voiceMicSilenceEndMs?: number
+  /**
+   * 为 `true`（默认）时：TTS 正在本机播放期间不因麦克 RMS 发送 `INTERRUPT`，减轻串音误打断。
+   */
+  voiceMicSuppressInterruptDuringTts?: boolean
+
+  /** 静态 PNG 表情目录（Luna 等），与 `emotionParse` / LiveUI 内 `emotionToExpressionId` 映射一致 */
+  spriteExpressions?: LiveUiSpriteExpressionsConfig
 }
 
 /**

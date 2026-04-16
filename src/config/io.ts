@@ -167,6 +167,24 @@ function parseLiveUiConfig(raw: unknown): LiveUiConfig | undefined {
   if (typeof u.live2dModel3Json === 'string' && u.live2dModel3Json.trim()) {
     out.live2dModel3Json = u.live2dModel3Json.trim()
   }
+  if (typeof u.voiceMicSpeechRmsThreshold === 'number' && Number.isFinite(u.voiceMicSpeechRmsThreshold)) {
+    const t = u.voiceMicSpeechRmsThreshold
+    if (t > 0 && t <= 0.35) out.voiceMicSpeechRmsThreshold = t
+  }
+  if (typeof u.voiceMicSilenceEndMs === 'number' && Number.isFinite(u.voiceMicSilenceEndMs)) {
+    const ms = Math.round(u.voiceMicSilenceEndMs)
+    if (ms >= 200 && ms <= 12000) out.voiceMicSilenceEndMs = ms
+  }
+  if (typeof u.voiceMicSuppressInterruptDuringTts === 'boolean') {
+    out.voiceMicSuppressInterruptDuringTts = u.voiceMicSuppressInterruptDuringTts
+  }
+  const se = u.spriteExpressions
+  if (se && typeof se === 'object') {
+    const s = se as Record<string, unknown>
+    if (typeof s.dir === 'string' && s.dir.trim()) {
+      out.spriteExpressions = { dir: s.dir.trim() }
+    }
+  }
   return Object.keys(out).length ? out : undefined
 }
 

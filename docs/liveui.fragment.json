@@ -3,6 +3,9 @@
     "port": 8080,
     "live2dModelsDir": "./live2d-models",
     "live2dModelDict": "./model_dict.json",
-    "live2dModelName": "mao_pro"
+    "live2dModelName": "mao_pro",
+    "voiceMicSpeechRmsThreshold": 0.0195,
+    "voiceMicSilenceEndMs": 1500,
+    "voiceMicSuppressInterruptDuringTts": true
   }
 }

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
 import { isAbsolute, join, normalize, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { LiveUiConfig } from '../config/types.js'
@@ -52,6 +52,38 @@ export type ResolvedLive2dModel = {
   model3FileUrl: string
   /** 非致命提示（如文件尚不存在） */
   warnings: string[]
+}
+
+/** `spriteExpressions.dir` 解析为带尾斜杠的 `file:` URL，供渲染端 `new URL('exp_01.png', base)` 拼接 */
+export type ResolvedSpriteExpressionDir = {
+  dirFileUrl: string
+  warnings: string[]
+}
+
+/**
+ * 解析 `liveUi.spriteExpressions.dir`（相对 cwd），供 Electron 注入 `INFINITI_LIVEUI_SPRITE_EXPRESSION_DIR`。
+ */
+export function resolveSpriteExpressionDirForUi(
+  cwd: string,
+  liveUi?: LiveUiConfig,
+): ResolvedSpriteExpressionDir | null {
+  const warnings: string[] = []
+  const raw = liveUi?.spriteExpressions?.dir?.trim()
+  if (!raw) return null
+
+  const abs = normalize(resolve(cwd, expandUserPath(raw)))
+  if (!existsSync(abs)) {
+    warnings.push(`spriteExpressions.dir 路径不存在: ${abs}`)
+    return null
+  }
+  if (!statSync(abs).isDirectory()) {
+    warnings.push(`spriteExpressions.dir 不是目录: ${abs}`)
+    return null
+  }
+
+  const href = pathToFileURL(abs).href
+  const dirFileUrl = href.endsWith('/') ? href : `${href}/`
+  return { dirFileUrl, warnings }
 }
 
 /**

@@ -32,8 +32,9 @@ export async function createSherpaOnnxAsr(cfg: SherpaOnnxAsrConfig): Promise<Asr
   return {
     async transcribe(audioBuffer: Buffer, format: string): Promise<string> {
       const id = randomBytes(6).toString('hex')
-      const inputPath = join(tmpdir(), `infiniti-asr-${id}.${format}`)
-      const wavPath = join(tmpdir(), `infiniti-asr-${id}.wav`)
+      /* 输入与输出必须不同路径：format 为 wav 时若同名 ffmpeg 会报「cannot edit in-place」 */
+      const inputPath = join(tmpdir(), `infiniti-asr-${id}-src.${format}`)
+      const wavPath = join(tmpdir(), `infiniti-asr-${id}-norm.wav`)
 
       try {
         writeFileSync(inputPath, audioBuffer)

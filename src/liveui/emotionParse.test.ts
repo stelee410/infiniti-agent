@@ -22,6 +22,13 @@ describe('processAssistantStreamChunk', () => {
     expect(b.newActions).toEqual([])
     expect(b.displayText).toBe('abc')
   })
+
+  it('maps Fear and Smirk to expressions for sprite / Live2D', () => {
+    const st = createStreamLiveUiState()
+    expect(processAssistantStreamChunk(st, '[Fear]x').newActions).toEqual([{ expression: 'sad' }])
+    const st2 = createStreamLiveUiState()
+    expect(processAssistantStreamChunk(st2, '[Smirk]y').newActions).toEqual([{ expression: 'smirk' }])
+  })
 })
 
 describe('stripLeadingLiveUiTags', () => {

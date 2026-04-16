@@ -7,6 +7,13 @@ import {
   type StreamLiveUiState,
 } from '../../src/liveui/emotionParse.ts'
 import type { LiveUiStatusVariant } from '../../src/liveui/protocol.ts'
+import type { LiveUiVoiceMicWire } from '../../src/liveui/voiceMicEnv.ts'
+import {
+  VOICE_MIC_DEFAULT_SILENCE_END_MS,
+  VOICE_MIC_DEFAULT_SPEECH_RMS_THRESHOLD,
+  VOICE_MIC_DEFAULT_SUPPRESS_INTERRUPT_DURING_TTS,
+} from '../../src/liveui/voiceMicEnv.ts'
+import { renderLiveUiBubbleMarkdown } from './bubbleMarkdown.ts'
 import { FIGURE_LAYOUT } from './figureLayoutConfig.ts'
 import {
   HIT_BODY_RE,
@@ -20,6 +27,9 @@ declare global {
     infinitiLiveUi?: {
       port: string
       model3FileUrl: string
+      /** 含尾斜杠的 `file:` URL，指向含 `exp_01.png`…的目录（与 CLI `spriteExpressions.dir` 一致） */
+      spriteExpressionDirFileUrl?: string
+      voiceMic?: Partial<LiveUiVoiceMicWire>
       setIgnoreMouseEvents?: (ignore: boolean, opts?: { forward?: boolean }) => void
     }
     /** pixi-live2d-display 依赖全局 PIXI.Ticker */
@@ -170,7 +180,9 @@ function setMouthFromModel(model: InstanceType<typeof Live2DModel>, value01: num
 async function bootstrap(): Promise<void> {
   const canvas = document.getElementById('app') as HTMLCanvasElement | null
   const speechBubble = document.getElementById('speech-bubble')
-  const speechBubbleText = document.getElementById('speech-bubble-text')
+  const speechBubbleText = document.getElementById(
+    'speech-bubble-text',
+  ) as HTMLElement | null
   const statusPill = document.getElementById('liveui-status-pill')
   const userLineInput = document.getElementById('liveui-user-line') as HTMLTextAreaElement | null
   if (!canvas) return
@@ -202,6 +214,12 @@ async function bootstrap(): Promise<void> {
   mouth.position.set(face.x, face.y + 38)
 
   let liveModel: InstanceType<typeof Live2DModel> | null = null
+  /** PNG 表情精灵（`spriteExpressions.dir`）；与 Live2D 二选一，由预加载环境变量决定 */
+  let expressionSprite: PIXI.Sprite | null = null
+  /** `file:` 基址，含尾斜杠，用于 `new URL('exp_XX.png', base)` */
+  let spriteExpressionDirFileUrl = ''
+  let spriteNaturalW = 1024
+  let spriteNaturalH = 1024
   /** 模型在 scale=1 时的本地包围尺寸，用于缩放计算（勿用 liveModel.width：会含当前 scale，Resize 时会越算越大） */
   let liveModelNaturalW = 400
   let liveModelNaturalH = 600
@@ -258,6 +276,27 @@ async function bootstrap(): Promise<void> {
       if (b2.bottom > soleCeiling) {
         liveModel.position.y -= b2.bottom - soleCeiling
       }
+    } else if (expressionSprite) {
+      const uw = spriteNaturalW
+      const uh = spriteNaturalH
+      const scaleVerticalBudget = Math.max(
+        100,
+        Math.round(H * FIGURE_LAYOUT.modelScaleViewportHeightFraction),
+      )
+      const s = Math.min(
+        (W * FIGURE_LAYOUT.modelWidthScreenFraction) / uw,
+        (scaleVerticalBudget * FIGURE_LAYOUT.modelHeightScaleFraction) / uh,
+      )
+      expressionSprite.scale.set(s, s)
+      expressionSprite.position.set(W / 2, H / 2)
+      const b = expressionSprite.getBounds()
+      expressionSprite.position.y += targetFootY - b.bottom
+      expressionSprite.position.y += footNudgeMax
+      const b2 = expressionSprite.getBounds()
+      if (b2.bottom > soleCeiling) {
+        expressionSprite.position.y -= b2.bottom - soleCeiling
+      }
+      mouth.position.set(b2.x + b2.width / 2, b2.bottom + 10)
     } else {
       let fy = targetFootY - FACE_RADIUS + footNudgeMax
       if (fy + FACE_RADIUS > soleCeiling) {
@@ -298,10 +337,17 @@ async function bootstrap(): Promise<void> {
     face.endFill()
   }
 
+  /** 气泡内「展出」速度：约 9 字/秒，偏慢于扫读，便于跟读；落后太多时倍速追赶 SSE。 */
+  const BUBBLE_READING_CHARS_PER_SEC = 9
+  /** 长文溢出时纵向滚动速度（px/s），约 4～5 行/秒（15px·1.6 行高）。 */
+  const BUBBLE_SCROLL_PX_PER_SEC = 112
+
   let assistantStreamState: StreamLiveUiState = createStreamLiveUiState()
   let typewriterRaf: number | undefined
   let bubbleTarget = ''
   let bubbleShown = 0
+  let twLastPerf = 0
+  let twCarry = 0
   let bubbleAutoDismissTimer: ReturnType<typeof setTimeout> | undefined
   let bubbleIsStreaming = false
 
@@ -315,11 +361,15 @@ async function bootstrap(): Promise<void> {
     speechBubble.style.bottom = `${window.innerHeight - barRect.top + gap}px`
   }
 
-  /** 根据文字量估算阅读时间（毫秒）：中文约 5 字/秒，英文约 4 词/秒，最少 3 秒，最多 15 秒。 */
+  /**
+   * 气泡自动隐藏延迟：与 BUBBLE_READING_CHARS_PER_SEC 展出的总时长对齐，再加几秒余韵；
+   * 上限避免极长回复一直占屏（仍可在就绪态手动看历史，此处只控制淡出）。
+   */
   const estimateReadTimeMs = (text: string): number => {
     const chars = text.replace(/\s+/g, '').length
-    const ms = Math.max(3000, Math.min(15000, chars * 200))
-    return ms
+    const revealMs = (chars / BUBBLE_READING_CHARS_PER_SEC) * 1000 * 1.35
+    const tailMs = 9000
+    return Math.max(5000, Math.min(180000, revealMs + tailMs))
   }
 
   const clearBubbleDismiss = (): void => {
@@ -352,29 +402,74 @@ async function bootstrap(): Promise<void> {
     clearBubbleDismiss()
     bubbleTarget = ''
     bubbleShown = 0
+    twLastPerf = 0
+    twCarry = 0
     bubbleIsStreaming = true
-    if (speechBubbleText) speechBubbleText.textContent = ''
+    if (speechBubbleText) {
+      speechBubbleText.innerHTML = ''
+      speechBubbleText.scrollTop = 0
+    }
     speechBubble?.classList.remove('visible')
     speechBubble?.setAttribute('aria-hidden', 'true')
   }
 
-  const runTypewriterFrame = (): void => {
-    if (bubbleShown >= bubbleTarget.length) {
+  const runBubbleReadingFrame = (): void => {
+    if (!speechBubbleText || !speechBubble) {
       typewriterRaf = undefined
       return
     }
-    bubbleShown = Math.min(bubbleShown + 2, bubbleTarget.length)
-    if (speechBubbleText) speechBubbleText.textContent = bubbleTarget.slice(0, bubbleShown)
-    speechBubble?.classList.add('visible')
-    speechBubble?.setAttribute('aria-hidden', 'false')
+    const now = performance.now()
+    const dt = twLastPerf ? Math.min(50, Math.max(0, now - twLastPerf)) : 0
+    twLastPerf = now
+
+    let needMoreFrames = false
+
+    if (bubbleShown < bubbleTarget.length) {
+      const behind = bubbleTarget.length - bubbleShown
+      let cps = BUBBLE_READING_CHARS_PER_SEC
+      if (behind > 220) cps *= 4
+      else if (behind > 120) cps *= 2.6
+      else if (behind > 55) cps *= 1.65
+      twCarry += (dt / 1000) * cps
+      const add = Math.floor(twCarry)
+      twCarry -= add
+      if (add > 0) {
+        bubbleShown = Math.min(bubbleShown + add, bubbleTarget.length)
+        speechBubbleText.innerHTML = renderLiveUiBubbleMarkdown(
+          bubbleTarget.slice(0, bubbleShown),
+        )
+      }
+      needMoreFrames = bubbleShown < bubbleTarget.length
+    }
+
+    const el = speechBubbleText
+    const maxScroll = el.scrollHeight - el.clientHeight
+    if (maxScroll > 0) {
+      const lag = maxScroll - el.scrollTop
+      if (lag > 0.75) {
+        const step = Math.min(lag, BUBBLE_SCROLL_PX_PER_SEC * (dt / 1000) + lag * 0.14)
+        el.scrollTop += step
+        needMoreFrames = needMoreFrames || maxScroll - el.scrollTop > 0.75
+      }
+    }
+
+    speechBubble.classList.add('visible')
+    speechBubble.setAttribute('aria-hidden', 'false')
     positionBubbleOverFigure()
-    typewriterRaf = requestAnimationFrame(runTypewriterFrame)
+
+    if (needMoreFrames) {
+      typewriterRaf = requestAnimationFrame(runBubbleReadingFrame)
+    } else {
+      typewriterRaf = undefined
+      twLastPerf = 0
+    }
   }
 
   const ensureTypewriter = (): void => {
     if (typewriterRaf !== undefined) return
     if (!speechBubbleText) return
-    typewriterRaf = requestAnimationFrame(runTypewriterFrame)
+    twLastPerf = performance.now()
+    typewriterRaf = requestAnimationFrame(runBubbleReadingFrame)
   }
 
   const setBubbleFromDisplayText = (displayText: string): void => {
@@ -386,30 +481,60 @@ async function bootstrap(): Promise<void> {
     }
     clearBubbleDismiss()
     if (bubbleShown > bubbleTarget.length) bubbleShown = bubbleTarget.length
+    speechBubbleText.innerHTML = renderLiveUiBubbleMarkdown(
+      bubbleTarget.slice(0, bubbleShown),
+    )
     speechBubble.classList.add('visible')
     speechBubble.setAttribute('aria-hidden', 'false')
     positionBubbleOverFigure()
     ensureTypewriter()
   }
 
-  const applyLive2dExpression = (em: string): void => {
-    expression = em
-    if (liveModel) {
-      const expId = emotionToExpressionId(em)
-      void liveModel.expression(expId).catch(() => {
-        void liveModel!.expression(0).catch(() => {})
-      })
-    } else {
-      applyPlaceholderExpression(em)
-    }
-  }
-
-  const modelUrl = window.infinitiLiveUi?.model3FileUrl?.trim() ?? ''
-
   const wireHover = (target: PIXI.Container): void => {
     target.interactive = true
     target.cursor = 'default'
   }
+
+  const rawSpriteUrl = window.infinitiLiveUi?.spriteExpressionDirFileUrl?.trim() ?? ''
+  if (rawSpriteUrl) {
+    spriteExpressionDirFileUrl = rawSpriteUrl.endsWith('/') ? rawSpriteUrl : `${rawSpriteUrl}/`
+  }
+
+  const spritePngUrl = (expBase: string): string =>
+    new URL(`${expBase}.png`, spriteExpressionDirFileUrl).href
+
+  const loadSpritePngTexture = (url: string): Promise<PIXI.Texture> =>
+    new Promise((resolve, reject) => {
+      const img = new Image()
+      img.onload = () => resolve(PIXI.Texture.from(img))
+      img.onerror = () => reject(new Error(`load failed: ${url}`))
+      img.src = url
+    })
+
+  if (spriteExpressionDirFileUrl) {
+    try {
+      const tex = await loadSpritePngTexture(spritePngUrl(emotionToExpressionId('neutral')))
+      const sp = new PIXI.Sprite(tex)
+      expressionSprite = sp
+      sp.anchor.set(0.5, 0.5)
+      spriteNaturalW = Math.max(tex.width, 1)
+      spriteNaturalH = Math.max(tex.height, 1)
+      app.stage.removeChild(face)
+      app.stage.removeChild(mouth)
+      app.stage.addChild(sp)
+      app.stage.addChild(mouth)
+      redrawPlaceholderMouth()
+      layoutFigureInStage()
+      wireHover(sp)
+      console.debug('[liveui] spriteExpressions PNG 已加载', spriteExpressionDirFileUrl)
+    } catch (e) {
+      console.warn('[liveui] spriteExpressions 首帧失败，回退 Live2D/占位', e)
+      expressionSprite = null
+      spriteExpressionDirFileUrl = ''
+    }
+  }
+
+  const modelUrl = expressionSprite ? '' : (window.infinitiLiveUi?.model3FileUrl?.trim() ?? '')
 
   if (modelUrl) {
     try {
@@ -438,13 +563,44 @@ async function bootstrap(): Promise<void> {
       wireHover(face)
       layoutFigureInStage()
     }
-  } else {
+  } else if (!expressionSprite) {
     app.stage.addChild(face)
     app.stage.addChild(mouth)
     applyPlaceholderExpression('neutral')
     redrawPlaceholderMouth()
     wireHover(face)
     layoutFigureInStage()
+  }
+
+  const applyLive2dExpression = (em: string): void => {
+    expression = em
+    if (expressionSprite && spriteExpressionDirFileUrl) {
+      const base = emotionToExpressionId(em)
+      const url = spritePngUrl(base)
+      void loadSpritePngTexture(url)
+        .then((tex) => {
+          if (!expressionSprite) {
+            tex.destroy(true)
+            return
+          }
+          const prev = expressionSprite.texture
+          expressionSprite.texture = tex
+          spriteNaturalW = Math.max(tex.width, 1)
+          spriteNaturalH = Math.max(tex.height, 1)
+          layoutFigureInStage()
+          if (prev && prev !== tex) prev.destroy(true)
+        })
+        .catch((e) => console.warn('[liveui] 表情 PNG 加载失败', base, e))
+      return
+    }
+    if (liveModel) {
+      const expId = emotionToExpressionId(em)
+      void liveModel.expression(expId).catch(() => {
+        void liveModel!.expression(0).catch(() => {})
+      })
+    } else {
+      applyPlaceholderExpression(em)
+    }
   }
 
   window.addEventListener('resize', () => {
@@ -594,6 +750,14 @@ async function bootstrap(): Promise<void> {
           void tryBodyPokeMotion(liveModel!)
           sendLiveUiInteraction('body_poke')
         }
+      })
+    } else if (expressionSprite) {
+      expressionSprite.cursor = 'pointer'
+      expressionSprite.on('pointertap', (e: PIXI.InteractionEvent) => {
+        const lp = e.data.getLocalPosition(expressionSprite!)
+        const head = lp.y < -spriteNaturalH * 0.12
+        applyLive2dExpression(head ? 'blush' : 'angry')
+        sendLiveUiInteraction(head ? 'head_pat' : 'body_poke')
       })
     } else {
       face.cursor = 'pointer'
@@ -913,6 +1077,28 @@ async function bootstrap(): Promise<void> {
   })
 
   // ── 麦克风按钮：连续语音对话模式 ──
+  const resolveVoiceMicWire = (): LiveUiVoiceMicWire => {
+    const vm = window.infinitiLiveUi?.voiceMic
+    const speech =
+      typeof vm?.speechRmsThreshold === 'number' &&
+      Number.isFinite(vm.speechRmsThreshold) &&
+      vm.speechRmsThreshold > 0
+        ? Math.min(0.35, Math.max(0.001, vm.speechRmsThreshold))
+        : VOICE_MIC_DEFAULT_SPEECH_RMS_THRESHOLD
+    const silence =
+      typeof vm?.silenceEndMs === 'number' && Number.isFinite(vm.silenceEndMs)
+        ? Math.min(12000, Math.max(200, Math.round(vm.silenceEndMs)))
+        : VOICE_MIC_DEFAULT_SILENCE_END_MS
+    const suppress =
+      vm?.suppressInterruptDuringTts === false
+        ? false
+        : VOICE_MIC_DEFAULT_SUPPRESS_INTERRUPT_DURING_TTS
+    return { speechRmsThreshold: speech, silenceEndMs: silence, suppressInterruptDuringTts: suppress }
+  }
+  const voiceMic = resolveVoiceMicWire()
+  /** 已进入说话段后略低于 speech 门限，避免字间弱音被当成静音 */
+  const vadRmsRelease = Math.max(0.004, Math.min(voiceMic.speechRmsThreshold * 0.48, voiceMic.speechRmsThreshold - 1e-6))
+
   let asrAvailable = false
   let voiceMode = false
   let micStream: MediaStream | null = null
@@ -924,10 +1110,12 @@ async function bootstrap(): Promise<void> {
   let isSpeaking = false
   let hasSpoken = false
   let silenceStart = 0
-  const SILENCE_THRESHOLD = 0.015
-  const SILENCE_TIMEOUT_MS = 1500
   let llmBusy = false
   let interruptSent = false
+
+  /** 进入「在说话」前需连续满足频谱门控的帧数，抑制突发噪声误触 */
+  let vadSpeechLikelyStreak = 0
+  const VAD_SPEECH_START_FRAMES = 2
 
   const micBtn = document.getElementById('liveui-btn-mic') as HTMLButtonElement | null
   const micIconIdle = document.getElementById('liveui-mic-icon-idle')
@@ -945,16 +1133,86 @@ async function bootstrap(): Promise<void> {
     if (micIconRecording) micIconRecording.style.display = voiceMode ? '' : 'none'
   }
 
-  const vadAnalyserData = new Float32Array(256)
+  /** 须与 AnalyserNode.fftSize 一致，否则 getFloatTimeDomainData 行为未定义 */
+  const VAD_FFT_SIZE = 512
+  const vadTimeDomain = new Float32Array(VAD_FFT_SIZE)
+  const vadFreqBytes = new Uint8Array(VAD_FFT_SIZE / 2)
 
-  const getRms = (): number => {
-    if (!micAnalyser) return 0
-    micAnalyser.getFloatTimeDomainData(vadAnalyserData)
-    let sum = 0
-    for (let i = 0; i < vadAnalyserData.length; i++) {
-      sum += vadAnalyserData[i]! * vadAnalyserData[i]!
+  /** 人声大致集中频段（Hz），用于相对全带的能量占比 */
+  const VAD_SPEECH_FMIN = 300
+  const VAD_SPEECH_FMAX = 3400
+  /** 频段能量占全带比例下限：过低多为低频轰鸣或高频嘶声 */
+  const VAD_MIN_SPEECH_BAND_RATIO = 0.33
+  /**
+   * 语音带内频谱平坦度上限（几何均值/算术均值）。
+   * 接近 1 多为宽带噪声；人声有共振峰，通常更低。
+   */
+  const VAD_MAX_SPEECH_FLATNESS = 0.62
+  /** 安静时语音带能量 EMA；用于简易「相对噪声底」判别 */
+  let vadNoiseSpeechBandEma = 1e-10
+  const VAD_NOISE_EMA = 0.06
+  /** 当前帧语音带功率相对噪声底的最小倍数（线性） */
+  const VAD_MIN_SPEECH_TO_NOISE = 2.0
+
+  /**
+   * 单帧：时域 RMS + 频谱人声特征（频段占比、平坦度、相对噪声底）。
+   * 避免重复拉取 Analyser 数据，保证 RMS 与频谱同一时刻。
+   */
+  const computeVadFrame = (): { rms: number; spectralOk: boolean } => {
+    if (!micAnalyser || !micAudioCtx) return { rms: 0, spectralOk: false }
+
+    micAnalyser.getFloatTimeDomainData(vadTimeDomain)
+    let sumSq = 0
+    for (let i = 0; i < vadTimeDomain.length; i++) {
+      const s = vadTimeDomain[i]!
+      sumSq += s * s
     }
-    return Math.sqrt(sum / vadAnalyserData.length)
+    const rms = Math.sqrt(sumSq / vadTimeDomain.length)
+
+    const sr = micAudioCtx.sampleRate
+    const n = micAnalyser.frequencyBinCount
+    if (vadFreqBytes.length < n) return { rms, spectralOk: false }
+    micAnalyser.getByteFrequencyData(vadFreqBytes.subarray(0, n))
+
+    const binFromHz = (hz: number) => Math.floor((hz * VAD_FFT_SIZE) / sr)
+    const start = Math.max(1, binFromHz(VAD_SPEECH_FMIN))
+    const end = Math.min(n - 1, binFromHz(VAD_SPEECH_FMAX))
+    if (end <= start) return { rms, spectralOk: true }
+
+    let totalPow = 0
+    for (let i = 1; i < n; i++) {
+      const v = vadFreqBytes[i]! / 255
+      totalPow += v * v
+    }
+    if (totalPow < 1e-8) return { rms, spectralOk: false }
+
+    let speechPow = 0
+    let logSum = 0
+    const bandBins = end - start + 1
+    for (let i = start; i <= end; i++) {
+      const v = vadFreqBytes[i]! / 255
+      const p = v * v + 1e-12
+      speechPow += p
+      logSum += Math.log(p)
+    }
+    const amean = speechPow / bandBins
+    const gmean = Math.exp(logSum / bandBins)
+    const flatness = amean > 0 ? gmean / amean : 1
+    if (!Number.isFinite(flatness)) return { rms, spectralOk: false }
+
+    const bandRatio = speechPow / totalPow
+    const ratioOk = bandRatio >= VAD_MIN_SPEECH_BAND_RATIO
+    const flatOk = flatness <= VAD_MAX_SPEECH_FLATNESS
+
+    if (rms < voiceMic.speechRmsThreshold * 0.55) {
+      vadNoiseSpeechBandEma =
+        (1 - VAD_NOISE_EMA) * vadNoiseSpeechBandEma + VAD_NOISE_EMA * speechPow
+    }
+    const snrOk =
+      speechPow >= VAD_MIN_SPEECH_TO_NOISE * vadNoiseSpeechBandEma ||
+      vadNoiseSpeechBandEma < 1e-6
+
+    return { rms, spectralOk: ratioOk && flatOk && snrOk }
   }
 
   const sendRecordedAudio = (): void => {
@@ -996,19 +1254,33 @@ async function bootstrap(): Promise<void> {
 
   const vadLoop = (): void => {
     if (!voiceMode) return
-    const rms = getRms()
+    const { rms, spectralOk } = computeVadFrame()
     const now = Date.now()
 
-    if (rms > SILENCE_THRESHOLD) {
-      if (llmBusy && !interruptSent) {
-        interruptSent = true
-        console.debug('[liveui] 检测到语音打断，发送 INTERRUPT')
-        if (socket.readyState === WebSocket.OPEN) {
-          socket.send(JSON.stringify({ type: 'INTERRUPT' }))
-        }
-        resetAudioQueue()
-      }
+    const rmsStart = rms > voiceMic.speechRmsThreshold
+    const rmsHold = rms > vadRmsRelease
 
+    const blockInterruptForTtsPlayback =
+      voiceMic.suppressInterruptDuringTts && (audioPlaying || ttsActive)
+    if (llmBusy && !interruptSent && !blockInterruptForTtsPlayback && rmsStart && spectralOk) {
+      interruptSent = true
+      console.debug('[liveui] 检测到语音打断，发送 INTERRUPT')
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: 'INTERRUPT' }))
+      }
+      resetAudioQueue()
+    }
+
+    let voiced = false
+    if (isSpeaking) {
+      voiced = rmsHold
+    } else {
+      if (rmsStart && spectralOk) vadSpeechLikelyStreak += 1
+      else vadSpeechLikelyStreak = 0
+      voiced = vadSpeechLikelyStreak >= VAD_SPEECH_START_FRAMES
+    }
+
+    if (voiced) {
       if (!isSpeaking) {
         isSpeaking = true
         hasSpoken = true
@@ -1019,8 +1291,9 @@ async function bootstrap(): Promise<void> {
       if (isSpeaking) {
         if (silenceStart === 0) {
           silenceStart = now
-        } else if (now - silenceStart >= SILENCE_TIMEOUT_MS) {
+        } else if (now - silenceStart >= voiceMic.silenceEndMs) {
           isSpeaking = false
+          vadSpeechLikelyStreak = 0
           if (hasSpoken) {
             hasSpoken = false
             stopSegmentRecording()
@@ -1041,7 +1314,7 @@ async function bootstrap(): Promise<void> {
       micAudioCtx = new AudioContext()
       const source = micAudioCtx.createMediaStreamSource(stream)
       micAnalyser = micAudioCtx.createAnalyser()
-      micAnalyser.fftSize = 512
+      micAnalyser.fftSize = VAD_FFT_SIZE
       source.connect(micAnalyser)
 
       voiceMode = true
@@ -1049,6 +1322,8 @@ async function bootstrap(): Promise<void> {
       hasSpoken = false
       silenceStart = 0
       interruptSent = false
+      vadSpeechLikelyStreak = 0
+      vadNoiseSpeechBandEma = 1e-10
       updateMicBtn()
       if (userLineInput) {
         userLineInput.disabled = true
@@ -1123,7 +1398,7 @@ async function bootstrap(): Promise<void> {
   })
 
   app.ticker.add(() => {
-    if (!liveModel) {
+    if (!liveModel && !expressionSprite) {
       const t = performance.now() / 1000
       face.scale.set(1 + Math.sin(t * 2.2) * 0.012)
     }
@@ -1139,6 +1414,9 @@ async function bootstrap(): Promise<void> {
       if (dom && dom.closest('#liveui-control-bar')) return true
       if (liveModel) {
         const b = liveModel.getBounds()
+        if (ex >= b.x && ex <= b.x + b.width && ey >= b.y && ey <= b.y + b.height) return true
+      } else if (expressionSprite) {
+        const b = expressionSprite.getBounds()
         if (ex >= b.x && ex <= b.x + b.width && ey >= b.y && ey <= b.y + b.height) return true
       } else {
         const dx = ex - face.x
