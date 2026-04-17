@@ -1,14 +1,22 @@
 import type { PersistedMessage } from '../llm/persisted.js'
 import type { LiveUiActionMessage } from './protocol.js'
+import {
+  buildStripKnownEmotionTagsRegex,
+  type SpriteExpressionManifestV1,
+} from './spriteExpressionManifestCore.js'
 
 const LEADING_TAGS_RE = /^((\[[^\]]+\])\s*)+/
 
-/** 展示用：去掉正文中任意位置的 LiveUI 标准表情标签（与 system 提示中的五选一一致）。 */
-const KNOWN_EMO_TAG_ANYWHERE =
-  /\[(?:Happy|Joy|Sad|Sadness|Fear|Angry|Anger|Thinking|Think|Blush|Smirk|Disgust|Neutral|Calm|Surprise|Surprised|Frown)\]\s*/gi
+/** 无 manifest 时与历史行为一致 */
+const DEFAULT_STRIP_KNOWN_EMO_TAGS = buildStripKnownEmotionTagsRegex(null)
 
-export function stripLiveUiKnownEmotionTagsEverywhere(text: string): string {
-  return text.replace(KNOWN_EMO_TAG_ANYWHERE, '')
+/** 展示用：去掉正文中任意位置的 LiveUI 标准表情标签（可与 expressions.json 扩展标签对齐）。 */
+export function stripLiveUiKnownEmotionTagsEverywhere(
+  text: string,
+  manifest?: SpriteExpressionManifestV1 | null,
+): string {
+  const re = manifest ? buildStripKnownEmotionTagsRegex(manifest) : DEFAULT_STRIP_KNOWN_EMO_TAGS
+  return text.replace(re, '')
 }
 
 /** 解析 [tag] 内文本，忽略大小写（英文） */
@@ -109,11 +117,14 @@ export function stripLeadingLiveUiTags(text: string): string {
 }
 
 /** 持久化前：去掉 assistant 行首连续标签，并去掉正文中标准五类 [Happy] 等标记。 */
-export function stripLiveUiTagsFromMessages(messages: PersistedMessage[]): PersistedMessage[] {
+export function stripLiveUiTagsFromMessages(
+  messages: PersistedMessage[],
+  manifest?: SpriteExpressionManifestV1 | null,
+): PersistedMessage[] {
   return messages.map((m) => {
     if (m.role !== 'assistant') return m
     if (typeof m.content !== 'string') return m
-    const next = stripLiveUiKnownEmotionTagsEverywhere(stripLeadingLiveUiTags(m.content))
+    const next = stripLiveUiKnownEmotionTagsEverywhere(stripLeadingLiveUiTags(m.content), manifest)
     if (next === m.content) return m
     return { ...m, content: next }
   })

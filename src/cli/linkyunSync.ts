@@ -43,6 +43,12 @@ function apiV1(base: string, path: string): string {
   return `${normalizeApiBase(base)}/api/v1${p}`
 }
 
+/** 在 URL 后追加 t=时间戳，避免 CDN / 代理返回旧缓存。 */
+function withNoCacheTimestamp(url: string): string {
+  const t = Date.now()
+  return url.includes('?') ? `${url}&t=${t}` : `${url}?t=${t}`
+}
+
 async function readPasswordHidden(prompt: string): Promise<string> {
   const stdin = input
   const stdout = output
@@ -301,7 +307,7 @@ export async function runLinkyunSync(cwd: string, opts: LinkyunSyncOptions = {})
     const downloads: string[] = []
 
     if (avatarFile) {
-      const avatarUrl = apiV1(apiBase, `/avatars/${encodeURIComponent(avatarFile)}`)
+      const avatarUrl = withNoCacheTimestamp(apiV1(apiBase, `/avatars/${encodeURIComponent(avatarFile)}`))
       const img = await getBinary(avatarUrl)
       if (img.ok && img.buf.length > 0) {
         const ext = avatarFile.includes('.') ? avatarFile.slice(avatarFile.lastIndexOf('.')) : '.jpg'
@@ -314,7 +320,7 @@ export async function runLinkyunSync(cwd: string, opts: LinkyunSyncOptions = {})
     }
 
     if (sheetFile) {
-      const sheetUrl = apiV1(apiBase, `/character-sheets/${encodeURIComponent(sheetFile)}`)
+      const sheetUrl = withNoCacheTimestamp(apiV1(apiBase, `/character-sheets/${encodeURIComponent(sheetFile)}`))
       const img = await getBinary(sheetUrl)
       if (img.ok && img.buf.length > 0) {
         const safeName = sheetFile.replace(/[/\\]/g, '_')

@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { join } from 'node:path'
-import { appendFileSync } from 'node:fs'
 import { Box, Text, useApp, useInput } from 'ink'
 import TextInput from 'ink-text-input'
 import chokidar from 'chokidar'
@@ -12,6 +11,10 @@ import {
 } from '../prompt/loadProjectPrompt.js'
 import { buildSystemWithMemory } from '../prompt/systemBuilder.js'
 import { LIVE_UI_ASSISTANT_EXPRESSION_NUDGE } from '../prompt/liveUiExpressionNudge.js'
+import {
+  buildLiveUiExpressionNudgeFromManifest,
+  tryReadSpriteExpressionManifestSync,
+} from '../liveui/spriteExpressionManifest.js'
 import { compactSessionMessages } from '../llm/compactSession.js'
 import { resolvedCompactionSettings } from '../llm/compactionSettings.js'
 import { estimateMessagesTokens } from '../llm/estimateTokens.js'
@@ -100,6 +103,11 @@ export function ChatApp({
   const slashFiltered = useMemo(
     () => filterSlashItems(slashItems, input),
     [slashItems, input],
+  )
+
+  const expressionManifest = useMemo(
+    () => tryReadSpriteExpressionManifestSync(cwd, config.liveUi),
+    [cwd, config.liveUi, promptEpoch],
   )
 
   const visibleStreamText = useMemo(() => {
@@ -242,6 +250,8 @@ export function ChatApp({
       join(cwd, 'AGENT.md'),
       join(cwd, 'AGENTS.md'),
     ]
+    const seDir = config.liveUi?.spriteExpressions?.dir?.trim()
+    if (seDir) paths.push(join(cwd, seDir, 'expressions.json'))
     const w = chokidar.watch(paths, {
       ignoreInitial: true,
       persistent: true,
@@ -253,14 +263,16 @@ export function ChatApp({
     return () => {
       void w.close()
     }
-  }, [cwd])
+  }, [cwd, config.liveUi?.spriteExpressions?.dir])
 
   const buildSystem = useCallback(async (): Promise<string> => {
     void skillsEpoch
     void promptEpoch
     const base = await buildSystemWithMemory(config, cwd)
     if (!liveUi) return base
-    return `${base}\n\n${LIVE_UI_ASSISTANT_EXPRESSION_NUDGE}`
+    const m = tryReadSpriteExpressionManifestSync(cwd, config.liveUi)
+    const nudge = m ? buildLiveUiExpressionNudgeFromManifest(m) : LIVE_UI_ASSISTANT_EXPRESSION_NUDGE
+    return `${base}\n\n${nudge}`
   }, [config, cwd, skillsEpoch, promptEpoch, liveUi])
 
   const reloadAll = useCallback(async () => {
@@ -477,13 +489,11 @@ export function ChatApp({
                   streamLiveUiRef.current,
                   full,
                 )
-                const clean = stripLiveUiKnownEmotionTagsEverywhere(displayText)
+                const clean = stripLiveUiKnownEmotionTagsEverywhere(displayText, expressionManifest)
                 liveUi.mouth.onDisplayText(clean)
                 flushStream(clean)
-                appendFileSync('/tmp/infiniti-tts.log', `[${new Date().toISOString()}] onTextDelta: hasTts=${liveUi.hasTts}, clean="${clean.slice(0, 30)}"\n`)
                 if (liveUi.hasTts) {
                   const sentences = splitSentences(clean)
-                  appendFileSync('/tmp/infiniti-tts.log', `[${new Date().toISOString()}] sentences: ${sentences.length}, ttsSent: ${ttsSentRef.current}\n`)
                   for (let si = ttsSentRef.current; si < sentences.length - 1; si++) {
                     liveUi.enqueueTts(sentences[si]!)
                   }
@@ -509,11 +519,11 @@ export function ChatApp({
             },
           },
         })
-        const out = liveUi ? stripLiveUiTagsFromMessages(outRaw) : outRaw
+        const out = liveUi ? stripLiveUiTagsFromMessages(outRaw, expressionManifest) : outRaw
         if (liveUi?.hasTts) {
           const lastMsg = outRaw[outRaw.length - 1]
           if (lastMsg?.role === 'assistant' && lastMsg.content) {
-            const clean = stripLiveUiKnownEmotionTagsEverywhere(lastMsg.content)
+            const clean = stripLiveUiKnownEmotionTagsEverywhere(lastMsg.content, expressionManifest)
             const sentences = splitSentences(clean)
             for (let si = ttsSentRef.current; si < sentences.length; si++) {
               liveUi.enqueueTts(sentences[si]!)
@@ -539,6 +549,7 @@ export function ChatApp({
       config,
       cwd,
       exit,
+      expressionManifest,
       flushStream,
       liveUi,
       mcp,

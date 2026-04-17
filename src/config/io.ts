@@ -5,6 +5,7 @@ import { constants } from 'fs'
 import { GLOBAL_AGENT_DIR, GLOBAL_CONFIG_PATH, localConfigPath, localAgentDir } from '../paths.js'
 import type {
   AsrConfig,
+  AvatarGenConfig,
   CompactionConfig,
   InfinitiConfig,
   LiveUiConfig,
@@ -40,6 +41,11 @@ export function configExistsSync(cwd?: string): boolean {
 function resolveConfigPath(cwd?: string): string {
   if (cwd && existsSync(localConfigPath(cwd))) return localConfigPath(cwd)
   return GLOBAL_CONFIG_PATH
+}
+
+/** 供 CLI 日志：当前 cwd 下实际读取的 config.json 路径 */
+export function getInfinitiConfigPath(cwd?: string): string {
+  return resolveConfigPath(cwd)
 }
 
 export async function loadConfig(cwd?: string): Promise<InfinitiConfig> {
@@ -123,6 +129,7 @@ export async function loadConfig(cwd?: string): Promise<InfinitiConfig> {
   const liveUi = parseLiveUiConfig(o.liveUi)
   const tts = parseTtsConfig(o.tts)
   const asr = parseAsrConfig(o.asr)
+  const avatarGen = parseAvatarGenConfig(o.avatarGen)
 
   return {
     version: 1,
@@ -144,7 +151,20 @@ export async function loadConfig(cwd?: string): Promise<InfinitiConfig> {
     ...(liveUi ? { liveUi } : {}),
     ...(tts ? { tts } : {}),
     ...(asr ? { asr } : {}),
+    ...(avatarGen ? { avatarGen } : {}),
   }
+}
+
+function parseAvatarGenConfig(raw: unknown): AvatarGenConfig | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const u = raw as Record<string, unknown>
+  const out: AvatarGenConfig = {}
+  if (typeof u.baseUrl === 'string' && u.baseUrl.trim()) out.baseUrl = u.baseUrl.trim()
+  if (typeof u.apiKey === 'string' && u.apiKey.trim()) out.apiKey = u.apiKey.trim()
+  if (typeof u.model === 'string' && u.model.trim()) out.model = u.model.trim()
+  if (typeof u.aspectRatio === 'string' && u.aspectRatio.trim()) out.aspectRatio = u.aspectRatio.trim()
+  if (typeof u.imageSize === 'string' && u.imageSize.trim()) out.imageSize = u.imageSize.trim()
+  return Object.keys(out).length ? out : undefined
 }
 
 function parseLiveUiConfig(raw: unknown): LiveUiConfig | undefined {
@@ -181,8 +201,10 @@ function parseLiveUiConfig(raw: unknown): LiveUiConfig | undefined {
   const se = u.spriteExpressions
   if (se && typeof se === 'object') {
     const s = se as Record<string, unknown>
-    if (typeof s.dir === 'string' && s.dir.trim()) {
-      out.spriteExpressions = { dir: s.dir.trim() }
+    const dir = typeof s.dir === 'string' && s.dir.trim() ? s.dir.trim() : undefined
+    const manifest = typeof s.manifest === 'string' && s.manifest.trim() ? s.manifest.trim() : undefined
+    if (dir || manifest) {
+      out.spriteExpressions = { ...(dir ? { dir } : {}), ...(manifest ? { manifest } : {}) }
     }
   }
   return Object.keys(out).length ? out : undefined

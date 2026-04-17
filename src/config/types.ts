@@ -62,6 +62,24 @@ export type LiveUiSpriteExpressionsConfig = {
    * 设置且路径有效时，LiveUI **仅**用该目录下 PNG 切换表情，**不再加载** `live2dModel3Json` / model_dict 的 Cubism 模型。
    */
   dir?: string
+  /**
+   * 表情 manifest（`expressions.json`）路径，相对 cwd。
+   * 省略且 `dir` 下存在 `expressions.json` 时会自动读取。
+   */
+  manifest?: string
+}
+
+/**
+ * `generate_avatar` 等使用的 OpenRouter 兼容图像 API（Nano Banana / Gemini Flash Image 等）。
+ * `apiKey` 优先级：`avatarGen.apiKey` → 环境变量 `INFINITI_OPENROUTER_API_KEY` / `OPENROUTER_API_KEY` → 当前默认 LLM profile 的 `apiKey`。
+ */
+export type AvatarGenConfig = {
+  baseUrl?: string
+  apiKey?: string
+  /** 默认 `google/gemini-3-pro-image-preview`（Nano Banana Pro / Gemini 3 Pro Image）；可改为 `google/gemini-3.1-flash-image-preview`（Nano Banana 2）等 */
+  model?: string
+  aspectRatio?: string
+  imageSize?: string
 }
 
 export type LiveUiConfig = {
@@ -137,6 +155,7 @@ export type InfinitiConfig = {
   liveUi?: LiveUiConfig
   tts?: TtsConfig
   asr?: AsrConfig
+  avatarGen?: AvatarGenConfig
 }
 
 /**

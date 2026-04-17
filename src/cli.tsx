@@ -35,6 +35,8 @@ import { runTestAsr, parseTestAsrRms, parseTestAsrInt } from './cli/testAsr.js'
 import { resolveLive2dModelForUi, resolveSpriteExpressionDirForUi } from './liveui/resolveModelPath.js'
 import { runAddLlm, runSelectLlm } from './cli/llmCli.js'
 import { runLinkyunSync } from './cli/linkyunSync.js'
+import { runGenerateAvatar } from './cli/generateAvatar.js'
+import { runSetLiveAgent } from './cli/setLiveAgent.js'
 
 const cwd = process.cwd()
 
@@ -439,9 +441,43 @@ async function main(): Promise<void> {
     })
 
   program
+    .command('generate_avatar')
+    .description(
+      '根据 .infiniti-agent/ref/<agent>/ 的头像与设定稿，经 OpenRouter 图像 API 生成半身像与各表情 PNG；最后将 half_body 与各 exp 做边缘连通背景透明（默认 Nano Banana Pro：google/gemini-3-pro-image-preview；可用 avatarGen.model 或 INFINITI_AVATAR_GEN_MODEL 覆盖）',
+    )
+    .requiredOption('--agent <code>', 'LinkYun Agent code（与 sync 后 ref 目录名一致，如 jess）')
+    .option('--out <dir>', '表情输出目录（默认 live2d-models/<agent>/expression）')
+    .option('--skip-half-body', '跳过新半身像，复用输出目录已有 half_body.png')
+    .option('--no-transparentize', '跳过最后一步：将 half_body / 各 exp PNG 的背景改为透明')
+    .action(async (cmd: { agent: string; out?: string; skipHalfBody?: boolean; noTransparentize?: boolean }) => {
+      try {
+        await runGenerateAvatar(cwd, {
+          agent: cmd.agent,
+          outDir: cmd.out,
+          skipHalfBody: cmd.skipHalfBody,
+          noTransparentize: cmd.noTransparentize,
+        })
+      } catch (e) {
+        console.error((e as Error).message)
+        process.exit(2)
+      }
+    })
+
+  program
+    .command('set_live_agent')
+    .description(
+      '将 LiveUI 形象设为指定 agent：写入 liveUi.spriteExpressions.dir = ./live2d-models/<code>/expression（与 generate_avatar 输出一致）',
+    )
+    .argument('<code>', 'Agent 代号，如 jess')
+    .action(async (code: string) => {
+      await runSetLiveAgent(cwd, code)
+      if (process.exitCode === 2) process.exit(2)
+    })
+
+  program
     .command('sync')
     .description(
-      '登录 LinkYun，选择 AI Agent，将 system prompt 写入 SOUL.md，并下载头像与角色设定到 .infinit-agent/ref/<Agent Code>/',
+      '登录 LinkYun，选择 AI Agent，将 system prompt 写入 SOUL.md，并下载头像与角色设定到 .infiniti-agent/ref/<Agent Code>/',
     )
     .option(
       '--api-base <url>',

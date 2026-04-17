@@ -21,6 +21,16 @@ import {
   LIVE2D_BODY_POKE_MOTIONS,
   LIVE2D_IDLE,
 } from './interactionConfig.ts'
+import {
+  buildEmotionToSpriteIdFromManifest,
+  parseSpriteExpressionManifest,
+  type SpriteExpressionManifestV1,
+} from '../../src/liveui/spriteExpressionManifestCore.ts'
+
+/** 由 expressions.json 注入，覆盖默认 exp_xx 映射 */
+let spriteEmotionToIdOverride: Record<string, string> | null = null
+/** 与 sprite 同源 manifest，用于气泡去标签正则 */
+let streamManifestForStrip: SpriteExpressionManifestV1 | null = null
 
 declare global {
   interface Window {
@@ -115,6 +125,7 @@ function readPort(): string {
 /** 将 TUI 情感名映射到 mao_pro 等模型的 expression 名（model3 内 Name 字段） */
 function emotionToExpressionId(em: string): string {
   const e = em.toLowerCase().trim()
+  if (spriteEmotionToIdOverride?.[e]) return spriteEmotionToIdOverride[e]!
   const map: Record<string, string> = {
     happy: 'exp_03',
     joy: 'exp_03',
@@ -498,6 +509,23 @@ async function bootstrap(): Promise<void> {
   const rawSpriteUrl = window.infinitiLiveUi?.spriteExpressionDirFileUrl?.trim() ?? ''
   if (rawSpriteUrl) {
     spriteExpressionDirFileUrl = rawSpriteUrl.endsWith('/') ? rawSpriteUrl : `${rawSpriteUrl}/`
+  }
+
+  spriteEmotionToIdOverride = null
+  streamManifestForStrip = null
+  if (spriteExpressionDirFileUrl) {
+    try {
+      const mr = await fetch(new URL('expressions.json', spriteExpressionDirFileUrl))
+      if (mr.ok) {
+        const raw = await mr.json()
+        const m = parseSpriteExpressionManifest(raw)
+        spriteEmotionToIdOverride = buildEmotionToSpriteIdFromManifest(m)
+        streamManifestForStrip = m
+        console.debug('[liveui] 已加载 expressions.json 表情映射')
+      }
+    } catch (e) {
+      console.debug('[liveui] 无 expressions.json 或解析失败，使用内置 exp 映射', e)
+    }
   }
 
   const spritePngUrl = (expBase: string): string =>
@@ -979,7 +1007,7 @@ async function bootstrap(): Promise<void> {
       for (const a of newActions) {
         if (a.expression) applyLive2dExpression(a.expression)
       }
-      setBubbleFromDisplayText(stripLiveUiKnownEmotionTagsEverywhere(displayText))
+      setBubbleFromDisplayText(stripLiveUiKnownEmotionTagsEverywhere(displayText, streamManifestForStrip))
       touchConvActivity()
     } else if (msg.type === 'STATUS_PILL' && statusPill) {
       const label = typeof msg.data?.label === 'string' ? msg.data.label : '就绪'
