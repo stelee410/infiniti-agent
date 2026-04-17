@@ -1,27 +1,43 @@
 import { execFileSync } from 'node:child_process'
-import { writeFileSync, unlinkSync, readFileSync } from 'node:fs'
+import { writeFileSync, unlinkSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { isAbsolute, join, resolve } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import type { SherpaOnnxAsrConfig } from '../config/types.js'
 import type { AsrEngine } from './whisperAsr.js'
 
+function resolveSherpaPath(p: string, cwd: string): string {
+  const t = p.trim()
+  return t && isAbsolute(t) ? t : resolve(cwd, t)
+}
+
 /**
  * 本地 sherpa-onnx SenseVoice ASR 引擎。
  * 用 ffmpeg 将 webm 转 16kHz mono WAV，再用 sherpa-onnx-node 离线识别。
+ *
+ * `cfg.model` / `cfg.tokens` 相对路径按 `cwd`（一般为项目根）解析，避免进程 cwd 与配置不一致时找不到 `./models/...`。
  */
-export async function createSherpaOnnxAsr(cfg: SherpaOnnxAsrConfig): Promise<AsrEngine> {
+export async function createSherpaOnnxAsr(cfg: SherpaOnnxAsrConfig, cwd = process.cwd()): Promise<AsrEngine> {
+  const modelPath = resolveSherpaPath(cfg.model, cwd)
+  const tokensPath = resolveSherpaPath(cfg.tokens, cwd)
+  if (!existsSync(tokensPath)) {
+    throw new Error(`sherpa-onnx: tokens 文件不存在: ${tokensPath}`)
+  }
+  if (!existsSync(modelPath)) {
+    throw new Error(`sherpa-onnx: model 文件不存在: ${modelPath}`)
+  }
+
   const imported = await import('sherpa-onnx-node')
   const sherpa = (imported as any).default ?? imported
 
   const recognizer = new sherpa.OfflineRecognizer({
     modelConfig: {
       senseVoice: {
-        model: cfg.model,
+        model: modelPath,
         useInverseTextNormalization: true,
         language: cfg.lang ?? 'auto',
       },
-      tokens: cfg.tokens,
+      tokens: tokensPath,
       numThreads: cfg.numThreads ?? 4,
       debug: false,
     },

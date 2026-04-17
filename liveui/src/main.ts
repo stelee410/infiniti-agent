@@ -1059,9 +1059,14 @@ async function bootstrap(): Promise<void> {
 
   const updateSpeakerBtn = (): void => {
     if (!speakerBtn) return
+    speakerBtn.disabled = !ttsAvailable
     const on = ttsEnabled && ttsAvailable
     speakerBtn.setAttribute('aria-pressed', String(on))
-    speakerBtn.title = on ? '语音回复：已开启' : (ttsAvailable ? '语音回复：已关闭' : '语音回复：不可用')
+    speakerBtn.title = !ttsAvailable
+      ? '语音回复：未配置 TTS（需在 config 中配置 minimax）'
+      : on
+        ? '语音回复：已开启'
+        : '语音回复：已关闭'
     if (speakerIconOn) speakerIconOn.style.display = on ? '' : 'none'
     if (speakerIconOff) speakerIconOff.style.display = on ? 'none' : ''
   }
@@ -1123,9 +1128,10 @@ async function bootstrap(): Promise<void> {
 
   const updateMicBtn = (): void => {
     if (!micBtn) return
+    micBtn.disabled = !asrAvailable
     micBtn.setAttribute('aria-pressed', String(voiceMode))
     micBtn.title = !asrAvailable
-      ? '语音输入：不可用'
+      ? '语音输入：未配置 ASR（需在 config 中配置 whisper 或 sherpa_onnx）'
       : voiceMode
         ? '语音模式开启中…点击关闭'
         : '点击进入语音对话模式'
@@ -1365,6 +1371,9 @@ async function bootstrap(): Promise<void> {
       void enterVoiceMode()
     }
   })
+
+  updateMicBtn()
+  updateSpeakerBtn()
 
   // ── 手掌按钮：随机动作 ──
   let randomMotionBusy = false

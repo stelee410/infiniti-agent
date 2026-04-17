@@ -34,6 +34,7 @@ import { buildLiveUiVoiceMicEnvJson, VOICE_MIC_DEFAULT_SPEECH_RMS_THRESHOLD } fr
 import { runTestAsr, parseTestAsrRms, parseTestAsrInt } from './cli/testAsr.js'
 import { resolveLive2dModelForUi, resolveSpriteExpressionDirForUi } from './liveui/resolveModelPath.js'
 import { runAddLlm, runSelectLlm } from './cli/llmCli.js'
+import { runLinkyunSync } from './cli/linkyunSync.js'
 
 const cwd = process.cwd()
 
@@ -86,15 +87,38 @@ async function runChatTui(
       await liveUi.start()
       liveUi.startMouthPump()
       if (cfg.tts?.provider === 'minimax') {
-        liveUi.setTtsEngine(createMinimaxTts(cfg.tts))
-        console.error(`[liveui] MiniMax TTS 已启用 (model: ${cfg.tts.model ?? 'speech-02-turbo'}, voice: ${cfg.tts.voiceId ?? 'female-shaonv'})`)
+        try {
+          liveUi.setTtsEngine(createMinimaxTts(cfg.tts))
+          console.error(
+            `[liveui] MiniMax TTS 已启用 (model: ${cfg.tts.model ?? 'speech-02-turbo'}, voice: ${cfg.tts.voiceId ?? 'female-shaonv'})`,
+          )
+        } catch (e) {
+          console.warn(`[liveui] TTS 未启用（配置或初始化失败）: ${(e as Error).message}`)
+          liveUi.setTtsEngine(null)
+        }
+      } else {
+        liveUi.setTtsEngine(null)
       }
       if (cfg.asr?.provider === 'whisper') {
-        liveUi.setAsrEngine(createWhisperAsr(cfg.asr))
-        console.error(`[liveui] Whisper ASR 已启用 (model: ${cfg.asr.model ?? 'whisper-large-v3-turbo'}, baseUrl: ${cfg.asr.baseUrl})`)
+        try {
+          liveUi.setAsrEngine(createWhisperAsr(cfg.asr))
+          console.error(
+            `[liveui] Whisper ASR 已启用 (model: ${cfg.asr.model ?? 'whisper-large-v3-turbo'}, baseUrl: ${cfg.asr.baseUrl})`,
+          )
+        } catch (e) {
+          console.warn(`[liveui] ASR 未启用（Whisper 初始化失败）: ${(e as Error).message}`)
+          liveUi.setAsrEngine(null)
+        }
       } else if (cfg.asr?.provider === 'sherpa_onnx') {
-        liveUi.setAsrEngine(await createSherpaOnnxAsr(cfg.asr))
-        console.error(`[liveui] sherpa-onnx ASR 已启用 (model: ${cfg.asr.model})`)
+        try {
+          liveUi.setAsrEngine(await createSherpaOnnxAsr(cfg.asr, cwd))
+          console.error(`[liveui] sherpa-onnx ASR 已启用 (model: ${cfg.asr.model})`)
+        } catch (e) {
+          console.warn(`[liveui] ASR 未启用（sherpa-onnx 加载失败）: ${(e as Error).message}`)
+          liveUi.setAsrEngine(null)
+        }
+      } else {
+        liveUi.setAsrEngine(null)
       }
       const child = spawnLiveElectron(liveUi.port, {
         model3FileUrl: opts.liveUiModel3FileUrl,
@@ -412,6 +436,28 @@ async function main(): Promise<void> {
     .description('从 SOUL.md 提取邮件配置，生成 mail-poller.sh 邮件轮询守护脚本')
     .action(async () => {
       await runLink(cwd)
+    })
+
+  program
+    .command('sync')
+    .description(
+      '登录 LinkYun，选择 AI Agent，将 system prompt 写入 SOUL.md，并下载头像与角色设定到 .infinit-agent/ref/<Agent Code>/',
+    )
+    .option(
+      '--api-base <url>',
+      'API 根地址（不含 /api/v1；省略时在终端询问，直接 Enter 为 https://api.linkyun.co）',
+    )
+    .option('--workspace <code>', '指定 X-Workspace-Code（默认使用登录接口返回的工作空间）')
+    .action(async (cmd: { apiBase?: string; workspace?: string }) => {
+      try {
+        await runLinkyunSync(cwd, {
+          apiBase: cmd.apiBase,
+          workspaceCode: cmd.workspace,
+        })
+      } catch (e) {
+        console.error((e as Error).message)
+        process.exit(2)
+      }
     })
 
   const skill = program.command('skill').description('当前项目的 Skills（存储在 .infiniti-agent/skills/）')

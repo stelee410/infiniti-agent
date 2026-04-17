@@ -47,6 +47,13 @@ export function localErrorLogPath(cwd: string): string {
   return join(cwd, LOCAL_DIR_NAME, 'error.log')
 }
 
+/** LinkYun `sync` 暂存目录：`.infinit-agent/ref/<agentCode>/`（与项目配置目录 `.infiniti-agent` 分离） */
+const LINKYUN_REF_AGENT_DIR = '.infinit-agent'
+
+export function localLinkyunRefDir(cwd: string, agentCode: string): string {
+  return join(cwd, LINKYUN_REF_AGENT_DIR, 'ref', agentCode)
+}
+
 export function expandUserPath(p: string): string {
   if (p.startsWith('~/') || p === '~') {
     return join(homedir(), p.slice(1).replace(/^\//, '') || '')

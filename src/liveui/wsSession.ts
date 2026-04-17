@@ -1,6 +1,5 @@
 import { type ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
-import { appendFileSync } from 'node:fs'
 import { WebSocketServer, WebSocket } from 'ws'
 import type {
   LiveUiActionMessage,
@@ -48,7 +47,6 @@ export class LiveUiSession {
 
   setTtsEngine(engine: TtsEngine | null): void {
     this.ttsEngine = engine
-    appendFileSync('/tmp/infiniti-tts.log', `[${new Date().toISOString()}] setTtsEngine: engine=${engine != null}, hasTts=${this.hasTts}\n`)
     this.broadcastTtsStatus()
   }
 
@@ -150,13 +148,9 @@ export class LiveUiSession {
     wss.on('connection', (ws) => {
       this.clients.add(ws)
       this.emitConn()
-      if (this.ttsEngine) {
-        const status = JSON.stringify({ type: 'TTS_STATUS', data: { available: true } })
-        if (ws.readyState === WebSocket.OPEN) ws.send(status)
-      }
-      if (this.asrEngine) {
-        const status = JSON.stringify({ type: 'ASR_STATUS', data: { available: true } })
-        if (ws.readyState === WebSocket.OPEN) ws.send(status)
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'TTS_STATUS', data: { available: this.ttsEngine != null } }))
+        ws.send(JSON.stringify({ type: 'ASR_STATUS', data: { available: this.asrEngine != null } }))
       }
       ws.on('message', (buf) => {
         try {
@@ -258,17 +252,13 @@ export class LiveUiSession {
    * 串行排队，不阻塞调用方。
    */
   enqueueTts(text: string): void {
-    appendFileSync('/tmp/infiniti-tts.log', `[${new Date().toISOString()}] enqueueTts called: engine=${this.ttsEngine != null}, enabled=${this.ttsEnabled}, text="${text.slice(0, 40)}"\n`)
     if (!this.ttsEngine || !this.ttsEnabled || !text.trim()) return
     const seq = this.ttsSequence++
     const engine = this.ttsEngine
-    appendFileSync('/tmp/infiniti-tts.log', `[${new Date().toISOString()}] TTS 排队 #${seq}: "${text.slice(0, 40)}"\n`)
     this.ttsPending = this.ttsPending.then(async () => {
       try {
         const buf = await engine.synthesize(text)
-        appendFileSync('/tmp/infiniti-tts.log', `[${new Date().toISOString()}] TTS #${seq}: 合成完成 ${buf.length} bytes\n`)
         if (buf.length === 0) return
-        appendFileSync('/tmp/infiniti-tts.log', `[${new Date().toISOString()}] TTS #${seq}: 广播到 ${this.clients.size} 个客户端\n`)
         this.broadcast({
           type: 'AUDIO_CHUNK',
           data: {
@@ -279,7 +269,7 @@ export class LiveUiSession {
           },
         })
       } catch (e) {
-        appendFileSync('/tmp/infiniti-tts.log', `[${new Date().toISOString()}] TTS #${seq}: 合成失败: ${(e as Error).message}\n`)
+        console.warn(`[liveui] TTS 合成失败: ${(e as Error).message}`)
       }
     })
   }
@@ -288,15 +278,13 @@ export class LiveUiSession {
     if (!this.asrEngine) return
     try {
       const buf = Buffer.from(audioBase64, 'base64')
-      appendFileSync('/tmp/infiniti-tts.log', `[asr] 收到音频: ${buf.length} bytes, format=${format}\n`)
       const text = await this.asrEngine.transcribe(buf, format)
-      appendFileSync('/tmp/infiniti-tts.log', `[asr] 识别结果: "${text}"\n`)
       if (!text.trim()) return
       const result = JSON.stringify({ type: 'ASR_RESULT', data: { text: text.trim() } })
       if (ws.readyState === WebSocket.OPEN) ws.send(result)
       this.emitUserLine(text.trim())
     } catch (e) {
-      appendFileSync('/tmp/infiniti-tts.log', `[asr] 识别失败: ${(e as Error).message}\n`)
+      console.warn(`[liveui] ASR 识别失败: ${(e as Error).message}`)
     }
   }
 

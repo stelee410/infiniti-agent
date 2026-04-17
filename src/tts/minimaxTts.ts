@@ -1,4 +1,3 @@
-import { appendFileSync } from 'node:fs'
 import type { TtsConfig } from '../config/types.js'
 
 const DEFAULT_MODEL = 'speech-02-turbo'
@@ -101,9 +100,7 @@ export function createMinimaxTts(cfg: TtsConfig): TtsEngine {
         }
       }
 
-      const result = Buffer.concat(chunks)
-      appendFileSync('/tmp/infiniti-tts.log', `[tts] 合成: "${text.slice(0, 30)}" → ${result.length} bytes, ${chunks.length} chunks\n`)
-      return result
+      return Buffer.concat(chunks)
     },
   }
 }
