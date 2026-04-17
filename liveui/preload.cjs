@@ -44,4 +44,8 @@ contextBridge.exposeInMainWorld('infinitiLiveUi', {
   setIgnoreMouseEvents: (ignore, opts) => {
     ipcRenderer.send('set-ignore-mouse-events', ignore, opts)
   },
+  /** 首帧布局后收紧窗口高度（仅 height） */
+  compactWindowHeight: (height) => {
+    ipcRenderer.send('liveui-compact-height', { height })
+  },
 })

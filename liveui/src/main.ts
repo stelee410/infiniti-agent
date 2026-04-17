@@ -43,6 +43,8 @@ declare global {
       /** `infiniti-agent live --zoom <n>` 注入：人物显示缩放（0.4 ~ 1.5），1 = 不缩放 */
       figureZoom?: number
       setIgnoreMouseEvents?: (ignore: boolean, opts?: { forward?: boolean }) => void
+      /** Electron：首帧后按人物包围盒收紧窗口高度 */
+      compactWindowHeight?: (height: number) => void
     }
     /** pixi-live2d-display 依赖全局 PIXI.Ticker */
     PIXI: typeof PIXI
@@ -332,6 +334,35 @@ async function bootstrap(): Promise<void> {
     }
   }
 
+  /**
+   * 只做一件事：在「当前 layout」下读人物 getBounds()，若头顶留白明显则把窗口高度减掉一截。
+   * 不调 window.resize、不迭代 shrink；精灵/Live2D 各在加载完成后各调度一次（+ 表情换图宽高比大变时）。
+   */
+  const scheduleCompactWindowHeight = (): void => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const c = window.infinitiLiveUi?.compactWindowHeight
+        if (typeof c !== 'function') return
+        const fig = expressionSprite ?? liveModel
+        if (!fig) return
+        layoutFigureInStage()
+        const b = fig.getBounds()
+        const bar = document.getElementById('liveui-control-bar')
+        const dockBottom = bar ? Math.ceil(bar.getBoundingClientRect().bottom) : 0
+        const minH = Math.max(360, dockBottom + 8)
+        const topGoal = 10
+        const shrink = Math.max(0, Math.floor(b.top - topGoal))
+        const nextH = Math.max(minH, Math.min(1000, window.innerHeight - shrink))
+        if (Math.abs(nextH - window.innerHeight) < 10) return
+        try {
+          c(nextH)
+        } catch {
+          /* main 不可用 */
+        }
+      })
+    })
+  }
+
   let mouthOpen = 0
   let expression = 'neutral'
 
@@ -583,6 +614,7 @@ async function bootstrap(): Promise<void> {
       app.stage.addChild(mouth)
       redrawPlaceholderMouth()
       layoutFigureInStage()
+      scheduleCompactWindowHeight()
       wireHover(sp)
       console.debug('[liveui] spriteExpressions PNG 已加载', spriteExpressionDirFileUrl)
     } catch (e) {
@@ -608,6 +640,7 @@ async function bootstrap(): Promise<void> {
       liveModelNaturalH = Math.max(nb.height, 1)
       app.stage.addChild(liveModel)
       layoutFigureInStage()
+      scheduleCompactWindowHeight()
       wireHover(liveModel)
       void liveModel.motion('Idle', 0).catch(() => {})
       console.debug('[liveui] Live2D Cubism4 模型已加载', modelUrl)
@@ -643,9 +676,14 @@ async function bootstrap(): Promise<void> {
           }
           const prev = expressionSprite.texture
           expressionSprite.texture = tex
+          const prevAspect = spriteNaturalH > 0 ? spriteNaturalW / spriteNaturalH : 0
           spriteNaturalW = Math.max(tex.width, 1)
           spriteNaturalH = Math.max(tex.height, 1)
+          const newAspect = spriteNaturalW / spriteNaturalH
           layoutFigureInStage()
+          if (Math.abs(newAspect - prevAspect) > 0.02) {
+            scheduleCompactWindowHeight()
+          }
           if (prev && prev !== tex) prev.destroy(true)
         })
         .catch((e) => console.warn('[liveui] 表情 PNG 加载失败', base, e))

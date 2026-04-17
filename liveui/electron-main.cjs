@@ -61,7 +61,8 @@ function createWindow() {
   const win = new BrowserWindow({
     title: 'Infiniti LiveUI',
     width: debugWindow ? 520 : 420,
-    height: debugWindow ? 780 : 640,
+    /** 非 debug 略低于 640；人物加载后渲染端还可再收紧一次 */
+    height: debugWindow ? 780 : 580,
     frame: debugWindow,
     transparent: !debugWindow,
     backgroundColor: debugWindow ? '#1a1d24' : undefined,
@@ -93,6 +94,18 @@ function createWindow() {
   ipcMain.on('set-ignore-mouse-events', (_e, ignore, opts) => {
     try {
       win.setIgnoreMouseEvents(ignore, opts ?? {})
+    } catch { /* window may be destroyed */ }
+  })
+
+  /** 仅调高度：由渲染端在首帧布局后请求一次，去掉头顶大块留白（不设复杂循环） */
+  ipcMain.on('liveui-compact-height', (_e, payload) => {
+    try {
+      const h = payload && Number.isFinite(payload.height) ? Math.round(payload.height) : 0
+      if (h <= 0) return
+      const [, curH] = win.getSize()
+      const nextH = Math.max(360, Math.min(1000, h))
+      if (nextH === curH) return
+      win.setSize(win.getSize()[0], nextH)
     } catch { /* window may be destroyed */ }
   })
 
