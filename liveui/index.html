@@ -63,11 +63,23 @@
       #speech-bubble-text.liveui-md-root {
         margin: 0;
         font: 15px/1.55 system-ui, -apple-system, 'Segoe UI', sans-serif;
-        color: rgba(255, 255, 255, 0.92);
+        color: rgba(255, 255, 255, 0.95);
         word-break: break-word;
         user-select: none;
-        max-height: 40vh;
+        /* 电影字幕：固定 3 行可视区，超出由 typewriter 平滑向上滚动；
+           隐藏滚动条但仍允许 JS 设置 scrollTop。 */
+        max-height: calc(15px * 1.55 * 3 + 0.2em);
         overflow-y: auto;
+        overflow-x: hidden;
+        scrollbar-width: none;
+        text-shadow:
+          0 1px 2px rgba(0, 0, 0, 0.55),
+          0 0 6px rgba(0, 0, 0, 0.45);
+      }
+      #speech-bubble-text.liveui-md-root::-webkit-scrollbar {
+        display: none;
+        width: 0;
+        height: 0;
       }
       .liveui-md-root :where(p, ul, ol, pre, h1, h2, h3, h4, h5, h6, blockquote, table, hr) {
         margin: 0.45em 0;

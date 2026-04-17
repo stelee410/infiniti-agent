@@ -62,6 +62,8 @@ async function runChatTui(
     liveUiSpriteExpressionDirFileUrl?: string
     /** `live` 时注入麦克 VAD（JSON → Electron `INFINITI_LIVEUI_VOICE_MIC`） */
     liveUiVoiceMicJson?: string
+    /** `live --zoom` 注入：人物显示缩放（0.4 ~ 1.5），不影响控制条/输入框 */
+    liveUiFigureZoom?: number
   } = {},
 ): Promise<void> {
   if (!configExistsSync(cwd)) {
@@ -126,6 +128,7 @@ async function runChatTui(
         model3FileUrl: opts.liveUiModel3FileUrl,
         spriteExpressionDirFileUrl: opts.liveUiSpriteExpressionDirFileUrl,
         voiceMicJson: opts.liveUiVoiceMicJson,
+        figureZoom: opts.liveUiFigureZoom,
       })
       liveUi.setElectronChild(child)
       if (!child) {
@@ -335,7 +338,11 @@ async function main(): Promise<void> {
     .command('live')
     .description('LiveUI：本地 WebSocket + Electron 透明渲染 + TUI（需 npm run build 生成 liveui/dist）')
     .option('-p, --port <port>', 'WebSocket 端口（覆盖 config.json 中 liveUi.port）')
-    .action(async (cmdOpts: { port?: string }) => {
+    .option(
+      '--zoom <n>',
+      '人物显示缩放（0.4 ~ 1.5；0.9 = 90%、0.8 = 80%；不影响控制条/输入框）',
+    )
+    .action(async (cmdOpts: { port?: string; zoom?: string }) => {
       if (!configExistsSync(cwd)) {
         console.error('尚未配置。请先运行: infiniti-agent init 或 infiniti-agent migrate')
         process.exit(2)
@@ -374,6 +381,18 @@ async function main(): Promise<void> {
         console.error(`[liveui] 已启用 spriteExpressions（PNG），不使用 Live2D 模型 URL`)
       }
 
+      let figureZoom: number | undefined
+      const zoomRaw = cmdOpts.zoom?.trim()
+      if (zoomRaw) {
+        const z = Number(zoomRaw)
+        if (!Number.isFinite(z) || z < 0.4 || z > 1.5) {
+          console.error('[live] --zoom 取值需在 0.4 ~ 1.5 之间，例如 0.9 表示 90%。')
+          process.exit(2)
+        }
+        figureZoom = z
+        console.error(`[liveui] 人物缩放: ${(z * 100).toFixed(0)}%`)
+      }
+
       const liveUi = new LiveUiSession(port)
       await runChatTui({
         skipPermissions,
@@ -382,6 +401,7 @@ async function main(): Promise<void> {
         liveUiModel3FileUrl: useSprite ? undefined : resolved?.model3FileUrl,
         liveUiSpriteExpressionDirFileUrl: spriteResolved?.dirFileUrl,
         liveUiVoiceMicJson: buildLiveUiVoiceMicEnvJson(cfg.liveUi),
+        liveUiFigureZoom: figureZoom,
       })
     })
 

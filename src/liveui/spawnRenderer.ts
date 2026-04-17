@@ -28,6 +28,11 @@ export type LiveUiElectronSpawnOptions = {
   spriteExpressionDirFileUrl?: string
   /** JSON：`{ speechRmsThreshold, silenceEndMs, suppressInterruptDuringTts }` */
   voiceMicJson?: string
+  /**
+   * 人物显示缩放系数（0.4 ~ 1.5）。仅作用于 Live2D / 精灵图本身，不影响控制条 / 输入框尺寸。
+   * 通过 `INFINITI_LIVEUI_FIGURE_ZOOM` 注入渲染进程，由 `figureLayoutConfig` 处乘到 widthFraction 上。
+   */
+  figureZoom?: number
 }
 
 /**
@@ -60,6 +65,9 @@ export function spawnLiveElectron(port: number, opts?: LiveUiElectronSpawnOption
         ? { INFINITI_LIVEUI_SPRITE_EXPRESSION_DIR: opts.spriteExpressionDirFileUrl }
         : {}),
       ...(opts?.voiceMicJson ? { INFINITI_LIVEUI_VOICE_MIC: opts.voiceMicJson } : {}),
+      ...(typeof opts?.figureZoom === 'number' && Number.isFinite(opts.figureZoom)
+        ? { INFINITI_LIVEUI_FIGURE_ZOOM: String(opts.figureZoom) }
+        : {}),
     },
     detached: false,
     stdio: 'ignore',

@@ -40,6 +40,8 @@ declare global {
       /** 含尾斜杠的 `file:` URL，指向含 `exp_01.png`…的目录（与 CLI `spriteExpressions.dir` 一致） */
       spriteExpressionDirFileUrl?: string
       voiceMic?: Partial<LiveUiVoiceMicWire>
+      /** `infiniti-agent live --zoom <n>` 注入：人物显示缩放（0.4 ~ 1.5），1 = 不缩放 */
+      figureZoom?: number
       setIgnoreMouseEvents?: (ignore: boolean, opts?: { forward?: boolean }) => void
     }
     /** pixi-live2d-display 依赖全局 PIXI.Ticker */
@@ -267,6 +269,16 @@ async function bootstrap(): Promise<void> {
       Math.round(H * FIGURE_LAYOUT.footNudgeScreenFraction),
     )
 
+    /**
+     * `infiniti-agent live --zoom <n>` 注入的人物缩放系数。仅作用于 Live2D / 精灵，
+     * 不影响控制条/输入框（它们是独立 DOM）。范围 0.4 ~ 1.5，缺省 1。
+     */
+    const figureZoom = (() => {
+      const z = window.infinitiLiveUi?.figureZoom
+      if (typeof z !== 'number' || !Number.isFinite(z)) return 1
+      return Math.max(0.4, Math.min(1.5, z))
+    })()
+
     if (liveModel) {
       const uw = liveModelNaturalW
       const uh = liveModelNaturalH
@@ -274,10 +286,11 @@ async function bootstrap(): Promise<void> {
         100,
         Math.round(H * FIGURE_LAYOUT.modelScaleViewportHeightFraction),
       )
-      const s = Math.min(
+      const sBase = Math.min(
         (W * FIGURE_LAYOUT.modelWidthScreenFraction) / uw,
         (scaleVerticalBudget * FIGURE_LAYOUT.modelHeightScaleFraction) / uh,
       )
+      const s = sBase * figureZoom
       liveModel.scale.set(s, s)
       liveModel.position.set(W / 2, H / 2)
       const b = liveModel.getBounds()
@@ -294,10 +307,11 @@ async function bootstrap(): Promise<void> {
         100,
         Math.round(H * FIGURE_LAYOUT.modelScaleViewportHeightFraction),
       )
-      const s = Math.min(
+      const sBase = Math.min(
         (W * FIGURE_LAYOUT.modelWidthScreenFraction) / uw,
         (scaleVerticalBudget * FIGURE_LAYOUT.modelHeightScaleFraction) / uh,
       )
+      const s = sBase * figureZoom
       expressionSprite.scale.set(s, s)
       expressionSprite.position.set(W / 2, H / 2)
       const b = expressionSprite.getBounds()
@@ -317,6 +331,7 @@ async function bootstrap(): Promise<void> {
       mouth.position.set(face.x, face.y + 38)
     }
   }
+
   let mouthOpen = 0
   let expression = 'neutral'
 
@@ -348,10 +363,13 @@ async function bootstrap(): Promise<void> {
     face.endFill()
   }
 
-  /** 气泡内「展出」速度：约 9 字/秒，偏慢于扫读，便于跟读；落后太多时倍速追赶 SSE。 */
-  const BUBBLE_READING_CHARS_PER_SEC = 9
-  /** 长文溢出时纵向滚动速度（px/s），约 4～5 行/秒（15px·1.6 行高）。 */
-  const BUBBLE_SCROLL_PX_PER_SEC = 112
+  /**
+   * 气泡内「展出」速度：约 7 字/秒，接近电影字幕节奏（中文 6~8 字/秒），便于跟读；
+   * SSE 落后过多时温和提速，避免一口气甩完导致字幕一闪而过。
+   */
+  const BUBBLE_READING_CHARS_PER_SEC = 7
+  /** 三行字幕滚动速度（px/s），约每秒滚一行（15px × 1.55 ≈ 23px/行）。 */
+  const BUBBLE_SCROLL_PX_PER_SEC = 28
 
   let assistantStreamState: StreamLiveUiState = createStreamLiveUiState()
   let typewriterRaf: number | undefined
@@ -434,13 +452,14 @@ async function bootstrap(): Promise<void> {
     twLastPerf = now
 
     let needMoreFrames = false
+    let typedThisFrame = false
 
     if (bubbleShown < bubbleTarget.length) {
       const behind = bubbleTarget.length - bubbleShown
       let cps = BUBBLE_READING_CHARS_PER_SEC
-      if (behind > 220) cps *= 4
-      else if (behind > 120) cps *= 2.6
-      else if (behind > 55) cps *= 1.65
+      if (behind > 320) cps *= 2.2
+      else if (behind > 180) cps *= 1.6
+      else if (behind > 90) cps *= 1.25
       twCarry += (dt / 1000) * cps
       const add = Math.floor(twCarry)
       twCarry -= add
@@ -449,6 +468,7 @@ async function bootstrap(): Promise<void> {
         speechBubbleText.innerHTML = renderLiveUiBubbleMarkdown(
           bubbleTarget.slice(0, bubbleShown),
         )
+        typedThisFrame = true
       }
       needMoreFrames = bubbleShown < bubbleTarget.length
     }
@@ -456,11 +476,21 @@ async function bootstrap(): Promise<void> {
     const el = speechBubbleText
     const maxScroll = el.scrollHeight - el.clientHeight
     if (maxScroll > 0) {
-      const lag = maxScroll - el.scrollTop
-      if (lag > 0.75) {
-        const step = Math.min(lag, BUBBLE_SCROLL_PX_PER_SEC * (dt / 1000) + lag * 0.14)
-        el.scrollTop += step
-        needMoreFrames = needMoreFrames || maxScroll - el.scrollTop > 0.75
+      if (typedThisFrame || needMoreFrames) {
+        /**
+         * typewriter 还在出字时，最新一行必须在可视区底部（电影字幕：新字总在最下方）。
+         * 直接 snap 到底，避免「字打出来但被 max-height 裁掉」的死角。
+         */
+        el.scrollTop = maxScroll
+      } else {
+        const lag = maxScroll - el.scrollTop
+        if (lag > 0.75) {
+          /** 已经停笔但 scroll 还没到位时，按字幕节奏平滑补完最后一段。 */
+          const catchup = lag > 60 ? lag * 0.04 : 0
+          const step = Math.min(lag, BUBBLE_SCROLL_PX_PER_SEC * (dt / 1000) + catchup)
+          el.scrollTop += step
+          needMoreFrames = maxScroll - el.scrollTop > 0.75
+        }
       }
     }
 

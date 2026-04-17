@@ -32,7 +32,10 @@ export const FIGURE_LAYOUT = {
    */
   minPlatformTopScreenFraction: 0.36,
 
-  /** 模型最大宽度占画布宽的比例（水平留白） */
+  /**
+   * 模型最大宽度占画布宽的比例（水平留白）。
+   * 想整体调小/大请用 `infiniti-agent live --zoom <n>`，渲染端会乘到这个值上。
+   */
   modelWidthScreenFraction: 0.92,
 
   /** 用「从画布顶到脚底可用高度」算缩放时的系数，略小于 1 留一点顶边余量 */
