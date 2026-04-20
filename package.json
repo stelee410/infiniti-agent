@@ -17,7 +17,9 @@
     "liveui/preload.cjs"
   ],
   "workspaces": [
-    "liveui"
+    "liveui",
+    "real2d-preview",
+    "jess-mesh-lab"
   ],
   "bin": {
     "infiniti-agent": "dist/cli.js"
@@ -30,7 +32,15 @@
     "dev:cli": "tsx src/cli.tsx --cli",
     "start": "node dist/cli.js",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "real2d:check": "tsx src/cli.tsx real2d check",
+    "real2d:accept_ws": "tsx src/cli.tsx real2d accept_ws",
+    "real2d:preview": "npm run dev -w infiniti-agent-real2d-preview",
+    "real2d:ws": "tsx src/cli.tsx real2d ws",
+    "real2d:drive_demo": "tsx src/cli.tsx real2d drive_demo",
+    "jess:lab:prep": "tsx scripts/jess-transparentize-expressions.ts && tsx scripts/jess-vowel-nudge.ts",
+    "jess:lab:nudge": "tsx scripts/jess-vowel-nudge.ts",
+    "jess:lab:dev": "npm run dev -w infiniti-agent-jess-mesh-lab"
   },
   "repository": {
     "type": "git",

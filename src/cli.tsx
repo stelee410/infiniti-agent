@@ -37,6 +37,7 @@ import { runAddLlm, runSelectLlm } from './cli/llmCli.js'
 import { runLinkyunSync } from './cli/linkyunSync.js'
 import { runGenerateAvatar } from './cli/generateAvatar.js'
 import { runSetLiveAgent } from './cli/setLiveAgent.js'
+import { registerReal2dCli } from './cli/real2dAccept.js'
 
 const cwd = process.cwd()
 
@@ -404,6 +405,8 @@ async function main(): Promise<void> {
         liveUiFigureZoom: figureZoom,
       })
     })
+
+  registerReal2dCli(program)
 
   program
     .command('test_asr')

@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>real2d 预览 · Hybrid Mesh</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #1a1d24;
+        color: #c8d0e0;
+        font: 13px/1.45 system-ui, sans-serif;
+      }
+      #hud {
+        position: fixed;
+        left: 12px;
+        top: 12px;
+        max-width: min(420px, 92vw);
+        padding: 10px 12px;
+        background: rgba(0, 0, 0, 0.55);
+        border-radius: 8px;
+        pointer-events: none;
+        white-space: pre-wrap;
+      }
+      #wrap {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 100%;
+        padding: 16px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="hud">加载中…</div>
+    <div id="wrap"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Jess · Mesh 口型实验室</title>
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font: 14px/1.5 system-ui, sans-serif;
+        color: #e8ecf4;
+        background: repeating-conic-gradient(#2a2f3a 0% 25%, #232830 0% 50%) 50% / 24px 24px;
+      }
+      #panel {
+        max-width: 920px;
+        margin: 0 auto;
+        padding: 16px;
+      }
+      h1 {
+        font-size: 1.15rem;
+        font-weight: 600;
+        margin: 0 0 8px;
+      }
+      .hint {
+        font-size: 12px;
+        color: #9aa4b5;
+        margin-bottom: 12px;
+      }
+      textarea {
+        width: 100%;
+        min-height: 88px;
+        padding: 10px 12px;
+        border-radius: 8px;
+        border: 1px solid #3d4655;
+        background: #1a1f28;
+        color: #e8ecf4;
+        resize: vertical;
+      }
+      .row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+        margin-top: 10px;
+      }
+      button {
+        padding: 8px 18px;
+        border-radius: 8px;
+        border: none;
+        background: #3b7ddd;
+        color: #fff;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      button.secondary {
+        background: #3d4655;
+      }
+      #status {
+        font-size: 12px;
+        color: #9aa4b5;
+        flex: 1;
+        min-width: 200px;
+      }
+      #canvas-wrap {
+        display: flex;
+        justify-content: center;
+        padding: 12px 0 24px;
+      }
+      #canvas-wrap canvas {
+        border-radius: 12px;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+      }
+    </style>
+  </head>
+  <body>
+    <div id="panel">
+      <h1>Jess · Mesh 口型实验室</h1>
+      <p class="hint">
+        底图：<code>exp_calm</code>（透明 PNG 优先）。在仓库根执行
+        <code>npm run jess:lab:prep</code> 生成 <code>expression_web</code> 并复制到本页
+        <code>public/jess/</code>。闭嘴 <code>exp_calm</code>；张嘴按字符切换
+        <code>exp_speaking_a/e/i/o/u</code>，mesh 只做弱抖动。无语音文件。
+      </p>
+      <textarea id="speech" placeholder="输入中文或英文，例如：Hello 今天天气真好"></textarea>
+      <div class="row">
+        <button type="button" id="play">播放口型</button>
+        <button type="button" id="stop" class="secondary">停止</button>
+        <span id="status">就绪</span>
+      </div>
+    </div>
+    <div id="canvas-wrap"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

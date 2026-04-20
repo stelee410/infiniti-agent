@@ -1,0 +1,30 @@
+{
+  "reference": "exp_calm.png",
+  "refSize": {
+    "w": 2528,
+    "h": 1682
+  },
+  "nudgePx": {
+    "a": {
+      "dx": 2,
+      "dy": -1
+    },
+    "e": {
+      "dx": -27,
+      "dy": 7
+    },
+    "i": {
+      "dx": -29,
+      "dy": 5
+    },
+    "o": {
+      "dx": -28,
+      "dy": 7
+    },
+    "u": {
+      "dx": -28,
+      "dy": 7
+    }
+  },
+  "method": "hair-top + median-x"
+}
