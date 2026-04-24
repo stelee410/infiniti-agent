@@ -65,6 +65,8 @@ npm run setup:liveui -- ~/your-project
 
 将 Open-LLM-VTuber 的 `live2d-models` 文件夹拷到项目根下的 `live2d-models/`，与 `model_dict.json` 中的 `url` 一致即可校验通过。
 
+**TTS（`config.tts`）**：除 MiniMax、MOSS-TTS-Nano 外，可选用 **[VoxCPM2](https://github.com/OpenBMB/VoxCPM)**。推荐流程：`./scripts/setup-voxcpm-venv.sh`（创建 `third_party/voxcpm-venv` 并安装依赖）→ `./scripts/download-voxcpm-model.sh`（拉取 `openbmb/VoxCPM2` 到 `./models/VoxCPM2`，需已登录 Hugging Face 或设置 `HF_TOKEN`）→ `./scripts/start-voxcpm-tts-serve.sh --port 8810`。配置中设置 `"provider": "voxcpm"` 与 `"baseUrl": "http://127.0.0.1:8810"`；可选 `referenceAudioPath`、`controlInstruction` 等见 `src/config/types.ts` 的 `VoxcpmTtsConfig`。国内可设环境变量 `HF_ENDPOINT=https://hf-mirror.com` 再执行下载脚本。
+
 **常用选项：**
 
 ```bash
