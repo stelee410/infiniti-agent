@@ -73,7 +73,13 @@ type StatusPillMsg = {
 
 type AudioChunkMsg = {
   type: 'AUDIO_CHUNK'
-  data: { audioBase64: string; format: string; sampleRate: number; sequence: number }
+  data: {
+    audioBase64: string
+    format: string
+    sampleRate: number
+    sequence: number
+    channels?: number
+  }
 }
 
 type AudioResetMsg = { type: 'AUDIO_RESET' }
@@ -871,26 +877,74 @@ async function bootstrap(): Promise<void> {
   let ttsAvailable = false
 
   // ── 音频播放系统（TTS AUDIO_CHUNK） ──
+  type QueuedAudio = { kind: 'encoded'; buf: ArrayBuffer } | { kind: 'decoded'; buffer: AudioBuffer }
+
   let audioCtx: AudioContext | null = null
   let audioPlaying = false
-  const audioQueue: ArrayBuffer[] = []
+  const audioQueue: QueuedAudio[] = []
   let audioMouthRaf: number | undefined
   let audioSource: AudioBufferSourceNode | null = null
   let audioAnalyser: AnalyserNode | null = null
   const audioAnalyserData = new Uint8Array(256)
   let ttsActive = false
 
+  /** PCM 流式：按 AudioContext 时间线首尾相接，避免多块 BufferSource 链式播放的缝隙与裂音 */
+  let pcmTailTime = 0
+  /**
+   * 新一轮 TTS 的首块排程前增加短暂 playout lead，给网络/解码留一点余量，减轻 underrun 断续感。
+   * AUDIO_RESET 时复位。
+   */
+  let pcmPlayheadPrimed = false
+  const PCM_STREAM_PLAYOUT_LEAD_SEC = 0.1
+  let pcmScheduleChain: Promise<void> = Promise.resolve()
+  let activePcmSources = 0
+  const activePcmSourceNodes: AudioBufferSourceNode[] = []
+  let ttsPcmAnalyser: AnalyserNode | null = null
+
   const ensureAudioCtx = (): AudioContext => {
     if (!audioCtx) {
       audioCtx = new AudioContext()
       console.debug('[liveui] AudioContext 已创建, state:', audioCtx.state)
     }
-    if (audioCtx.state === 'suspended') {
-      void audioCtx.resume().then(() => {
-        console.debug('[liveui] AudioContext resumed')
-      })
-    }
     return audioCtx
+  }
+
+  const ensureTtsPcmAnalyser = (ctx: AudioContext): AnalyserNode => {
+    if (!ttsPcmAnalyser || ttsPcmAnalyser.context !== ctx) {
+      ttsPcmAnalyser = ctx.createAnalyser()
+      ttsPcmAnalyser.fftSize = 512
+      ttsPcmAnalyser.connect(ctx.destination)
+    }
+    return ttsPcmAnalyser
+  }
+
+  function base64ToArrayBuffer(b64: string): ArrayBuffer {
+    const bin = atob(b64)
+    const len = bin.length
+    const bytes = new Uint8Array(len)
+    for (let i = 0; i < len; i++) bytes[i] = bin.charCodeAt(i) & 0xff
+    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+  }
+
+  /** MOSS generate-stream：pcm_s16le 交织 → AudioBuffer（不经过 decodeAudioData）。 */
+  function pcmS16leToAudioBuffer(
+    ctx: AudioContext,
+    pcmAb: ArrayBuffer,
+    sampleRate: number,
+    channels: number,
+  ): AudioBuffer {
+    const dv = new DataView(pcmAb)
+    const frameBytes = 2 * channels
+    const frameCount = Math.floor(pcmAb.byteLength / frameBytes)
+    const buf = ctx.createBuffer(channels, frameCount, sampleRate)
+    let o = 0
+    for (let i = 0; i < frameCount; i++) {
+      for (let ch = 0; ch < channels; ch++) {
+        buf.getChannelData(ch)[i] = dv.getInt16(o, true) / 32768
+        o += 2
+      }
+    }
+    return buf
   }
 
   const setMouthFromAudio = (): void => {
@@ -914,59 +968,178 @@ async function bootstrap(): Promise<void> {
     }
   }
 
+  const finishTtsPlaybackIfIdle = (): void => {
+    if (activePcmSources > 0) return
+    /* 非 PCM 路径仍由单个 audioSource 驱动，勿在此处抢停 */
+    if (audioSource) return
+    pcmTailTime = 0
+    if (audioQueue.length > 0) {
+      audioPlaying = false
+      playNextInQueue()
+      return
+    }
+    pcmTailTime = 0
+    pcmPlayheadPrimed = false
+    if (audioMouthRaf) cancelAnimationFrame(audioMouthRaf)
+    audioMouthRaf = undefined
+    audioAnalyser = null
+    mouthOpen = 0
+    if (liveModel) setMouthFromModel(liveModel, 0)
+    else redrawPlaceholderMouth()
+    audioPlaying = false
+    ttsActive = false
+  }
+
+  const schedulePcmChunk = (decoded: AudioBuffer): void => {
+    const ctx = ensureAudioCtx()
+    const src = ctx.createBufferSource()
+    src.buffer = decoded
+    const analyser = ensureTtsPcmAnalyser(ctx)
+    src.connect(analyser)
+    audioAnalyser = analyser
+
+    pcmScheduleChain = pcmScheduleChain.then(async () => {
+      try {
+        if (ctx.state === 'suspended') {
+          await ctx.resume()
+          console.debug('[liveui] AudioContext resumed, state:', ctx.state)
+        }
+      } catch (e) {
+        console.warn('[liveui] AudioContext.resume 失败（可点击页面后再试）:', e)
+      }
+
+      const now = ctx.currentTime
+      let t0: number
+      if (!pcmPlayheadPrimed) {
+        t0 = now + PCM_STREAM_PLAYOUT_LEAD_SEC
+        pcmPlayheadPrimed = true
+      } else {
+        t0 = pcmTailTime > 0 ? Math.max(now, pcmTailTime) : now
+      }
+      pcmTailTime = t0 + decoded.duration
+      activePcmSources++
+      ttsActive = true
+      audioPlaying = true
+      if (audioMouthRaf === undefined) {
+        audioMouthRaf = requestAnimationFrame(setMouthFromAudio)
+      }
+      console.debug(
+        `[liveui] PCM 已排程 @${t0.toFixed(3)}s, 时长 ${decoded.duration.toFixed(3)}s, sr=${decoded.sampleRate}, ch=${decoded.numberOfChannels}`,
+      )
+
+      activePcmSourceNodes.push(src)
+      src.onended = () => {
+        const i = activePcmSourceNodes.indexOf(src)
+        if (i >= 0) activePcmSourceNodes.splice(i, 1)
+        activePcmSources = Math.max(0, activePcmSources - 1)
+        audioPlaying = activePcmSources > 0
+        finishTtsPlaybackIfIdle()
+      }
+      try {
+        src.start(t0)
+      } catch (e) {
+        console.warn('[liveui] PCM start 失败:', e)
+        const j = activePcmSourceNodes.indexOf(src)
+        if (j >= 0) activePcmSourceNodes.splice(j, 1)
+        activePcmSources = Math.max(0, activePcmSources - 1)
+        finishTtsPlaybackIfIdle()
+      }
+    })
+  }
+
   const playNextInQueue = (): void => {
     if (audioPlaying || audioQueue.length === 0) return
-    const buf = audioQueue.shift()!
+    const item = audioQueue.shift()!
     audioPlaying = true
     ttsActive = true
     const ctx = ensureAudioCtx()
 
-    void ctx.decodeAudioData(buf).then((decoded) => {
-      console.debug(`[liveui] 音频解码成功: ${decoded.duration.toFixed(2)}s, sampleRate: ${decoded.sampleRate}`)
-      const src = ctx.createBufferSource()
-      src.buffer = decoded
-      const analyser = ctx.createAnalyser()
-      analyser.fftSize = 512
-      src.connect(analyser)
-      analyser.connect(ctx.destination)
-      audioSource = src
-      audioAnalyser = analyser
-      audioMouthRaf = requestAnimationFrame(setMouthFromAudio)
-      src.onended = () => {
-        audioPlaying = false
-        audioSource = null
-        audioAnalyser = null
-        if (audioMouthRaf) cancelAnimationFrame(audioMouthRaf)
-        audioMouthRaf = undefined
-        mouthOpen = 0
-        if (liveModel) setMouthFromModel(liveModel, 0)
-        else redrawPlaceholderMouth()
-        if (audioQueue.length > 0) {
-          playNextInQueue()
-        } else {
-          ttsActive = false
+    void (async () => {
+      try {
+        if (ctx.state === 'suspended') {
+          await ctx.resume()
+          console.debug('[liveui] AudioContext resumed, state:', ctx.state)
         }
+      } catch (e) {
+        console.warn('[liveui] AudioContext.resume 失败（可点击页面后再试）:', e)
       }
-      src.start()
-    }).catch((e) => {
-      console.warn('[liveui] 音频解码失败:', e)
-      audioPlaying = false
-      ttsActive = false
-      playNextInQueue()
-    })
+
+      try {
+        let decoded: AudioBuffer
+        if (item.kind === 'decoded') {
+          decoded = item.buffer
+          console.debug(
+            `[liveui] PCM 块播放: ${decoded.duration.toFixed(3)}s, sr=${decoded.sampleRate}, ch=${decoded.numberOfChannels}`,
+          )
+        } else {
+          pcmTailTime = 0
+          decoded = await ctx.decodeAudioData(item.buf.slice(0))
+          console.debug(`[liveui] 音频解码成功: ${decoded.duration.toFixed(2)}s, sampleRate: ${decoded.sampleRate}`)
+        }
+        const src = ctx.createBufferSource()
+        src.buffer = decoded
+        const analyser = ctx.createAnalyser()
+        analyser.fftSize = 512
+        src.connect(analyser)
+        analyser.connect(ctx.destination)
+        audioSource = src
+        audioAnalyser = analyser
+        audioMouthRaf = requestAnimationFrame(setMouthFromAudio)
+        src.onended = () => {
+          audioPlaying = false
+          audioSource = null
+          audioAnalyser = null
+          if (audioMouthRaf) cancelAnimationFrame(audioMouthRaf)
+          audioMouthRaf = undefined
+          mouthOpen = 0
+          if (liveModel) setMouthFromModel(liveModel, 0)
+          else redrawPlaceholderMouth()
+          if (audioQueue.length > 0) {
+            playNextInQueue()
+          } else {
+            ttsActive = false
+          }
+        }
+        src.start()
+      } catch (e) {
+        console.warn('[liveui] 音频解码/播放失败:', e)
+        audioPlaying = false
+        ttsActive = false
+        playNextInQueue()
+      }
+    })()
   }
 
-  const enqueueAudioChunk = (base64: string): void => {
-    const bin = atob(base64)
-    const bytes = new Uint8Array(bin.length)
-    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
-    console.debug(`[liveui] 收到音频块: ${bytes.length} bytes, 队列: ${audioQueue.length}`)
-    audioQueue.push(bytes.buffer)
-    playNextInQueue()
+  const enqueueAudioChunk = (data: AudioChunkMsg['data']): void => {
+    const ctx = ensureAudioCtx()
+    if (data.format === 'pcm_s16le') {
+      const ch = typeof data.channels === 'number' ? data.channels : 2
+      const pcmAb = base64ToArrayBuffer(data.audioBase64)
+      console.debug(`[liveui] 收到 PCM 块: ${pcmAb.byteLength} bytes, ch=${ch}, 队列: ${audioQueue.length}`)
+      const decoded = pcmS16leToAudioBuffer(ctx, pcmAb, data.sampleRate, ch)
+      schedulePcmChunk(decoded)
+    } else {
+      const pcmAb = base64ToArrayBuffer(data.audioBase64)
+      console.debug(`[liveui] 收到音频块: ${pcmAb.byteLength} bytes (${data.format}), 队列: ${audioQueue.length}`)
+      audioQueue.push({ kind: 'encoded', buf: pcmAb })
+      playNextInQueue()
+    }
   }
 
   const resetAudioQueue = (): void => {
     audioQueue.length = 0
+    pcmTailTime = 0
+    pcmPlayheadPrimed = false
+    pcmScheduleChain = Promise.resolve()
+    for (const s of activePcmSourceNodes) {
+      try {
+        s.stop()
+      } catch {
+        /* ignore */
+      }
+    }
+    activePcmSourceNodes.length = 0
+    activePcmSources = 0
     if (audioSource) {
       try { audioSource.stop() } catch { /* ignore */ }
       audioSource = null
@@ -1055,7 +1228,7 @@ async function bootstrap(): Promise<void> {
       slashRows = next
       renderLiveSlashMenu()
     } else if (msg.type === 'AUDIO_CHUNK') {
-      if (ttsEnabled) enqueueAudioChunk(msg.data.audioBase64)
+      if (ttsEnabled && msg.data) enqueueAudioChunk(msg.data)
     } else if (msg.type === 'AUDIO_RESET') {
       resetAudioQueue()
     } else if (msg.type === 'ACTION') {
@@ -1159,7 +1332,7 @@ async function bootstrap(): Promise<void> {
     const on = ttsEnabled && ttsAvailable
     speakerBtn.setAttribute('aria-pressed', String(on))
     speakerBtn.title = !ttsAvailable
-      ? '语音回复：未配置 TTS（需在 config 中配置 minimax）'
+      ? '语音回复：未配置 TTS（config.tts：minimax 或 moss_tts_nano）'
       : on
         ? '语音回复：已开启'
         : '语音回复：已关闭'

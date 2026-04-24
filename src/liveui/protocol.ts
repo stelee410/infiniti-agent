@@ -37,15 +37,17 @@ export type LiveUiStatusPillMessage = {
 
 /**
  * TTS 音频块（server → client）。
- * audioBase64 为完整一句话的 mp3 编码（base64）；客户端按 sequence 顺序播放。
+ * - mp3 / wav：audioBase64 交给 decodeAudioData。
+ * - pcm_s16le：little-endian int16 交织多声道原始块；需 sampleRate + channels。
  */
 export type LiveUiAudioChunkMessage = {
   type: 'AUDIO_CHUNK'
   data: {
     audioBase64: string
-    format: 'mp3'
+    format: 'mp3' | 'wav' | 'pcm_s16le'
     sampleRate: number
     sequence: number
+    channels?: number
   }
 }
 
@@ -136,8 +138,22 @@ export function isLiveUiMessage(x: unknown): x is LiveUiMessage {
   if (o.type === 'AUDIO_CHUNK') {
     const d = (x as { data?: unknown }).data
     if (!d || typeof d !== 'object') return false
-    const dd = d as { audioBase64?: unknown; format?: unknown; sampleRate?: unknown; sequence?: unknown }
-    return typeof dd.audioBase64 === 'string' && typeof dd.sequence === 'number'
+    const dd = d as {
+      audioBase64?: unknown
+      format?: unknown
+      sampleRate?: unknown
+      sequence?: unknown
+      channels?: unknown
+    }
+    if (typeof dd.audioBase64 !== 'string' || typeof dd.sequence !== 'number') return false
+    if (typeof dd.sampleRate !== 'number' || !Number.isFinite(dd.sampleRate)) return false
+    const fmt = dd.format
+    if (fmt !== 'mp3' && fmt !== 'wav' && fmt !== 'pcm_s16le') return false
+    if (fmt === 'pcm_s16le') {
+      const c = dd.channels
+      if (typeof c !== 'number' || (c !== 1 && c !== 2)) return false
+    }
+    return true
   }
   if (o.type === 'AUDIO_RESET' || o.type === 'INTERRUPT') return true
   if (o.type === 'TTS_STATUS' || o.type === 'ASR_STATUS') {

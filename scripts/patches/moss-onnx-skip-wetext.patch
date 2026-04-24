@@ -1,0 +1,19 @@
+--- a/app_onnx.py
++++ b/app_onnx.py
+@@ -603,8 +603,14 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
+         level=logging.INFO,
+     )
+ 
+-    text_normalizer_manager = WeTextProcessingManager()
+-    text_normalizer_manager.start()
++    # 无 OpenFst / WeTextProcessing 时（常见 macOS 仅 pip 环境）：跳过 tn 依赖，由客户端请求里关闭 enable_text_normalization。
++    skip_wetext = os.environ.get("MOSS_TTS_SKIP_WETEXT", "").strip().lower() in ("1", "true", "yes")
++    if skip_wetext:
++        logging.warning("MOSS_TTS_SKIP_WETEXT: WeTextProcessing disabled (no Chinese TN graphs).")
++        text_normalizer_manager = None
++    else:
++        text_normalizer_manager = WeTextProcessingManager()
++        text_normalizer_manager.start()
+     output_dir = Path(args.output_dir).expanduser().resolve()
+     runtime = OnnxNanoTTSServiceAdapter(
+         model_dir=args.model_dir,

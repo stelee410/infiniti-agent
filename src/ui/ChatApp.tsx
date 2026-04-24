@@ -33,6 +33,7 @@ import {
   filterSlashItems,
   type SlashItem,
 } from './slashCompletions.js'
+import { parseSpeakCommandLine } from '../liveui/speakCommandLine.js'
 import type { LiveUiInteractionKind, LiveUiSession } from '../liveui/wsSession.js'
 import type { LiveUiStatusVariant } from '../liveui/protocol.js'
 import {
@@ -42,10 +43,14 @@ import {
   stripLiveUiTagsFromMessages,
 } from '../liveui/emotionParse.js'
 
-const SENTENCE_RE = /(?<=[。！？.!?\n])\s*/
+/** 句末 + 中英逗号/顿号/分号：流式时更早切段 enqueueTts，减轻「字都打完了才开始出声」。 */
+const SENTENCE_RE = /(?<=[。！？；、.!?\n，,])\s*/
 
 function splitSentences(text: string): string[] {
-  return text.split(SENTENCE_RE).filter((s) => s.trim().length > 0)
+  return text
+    .split(SENTENCE_RE)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0)
 }
 
 type Props = {
@@ -297,6 +302,29 @@ export function ChatApp({
         return
       }
 
+      const speakText = parseSpeakCommandLine(raw)
+      if (speakText !== undefined) {
+        if (!liveUi) {
+          setError('当前不是 Live 模式，无法使用 /speak（请用 infiniti-agent live）')
+          setInput('')
+          return
+        }
+        if (!liveUi.hasTts) {
+          setError('未配置 TTS，无法 /speak')
+          setInput('')
+          return
+        }
+        if (!speakText.trim()) {
+          setError('/speak 后请输入要朗读的文本，例如：/speak 你好，这是音色测试')
+          setInput('')
+          return
+        }
+        liveUi.resetAudio()
+        liveUi.enqueueTts(speakText.trim())
+        setInput('')
+        return
+      }
+
       if (busyRef.current) return
 
       if (raw === '/exit' || raw === '/quit') {
@@ -325,7 +353,7 @@ export function ChatApp({
       }
       if (raw === '/help') {
         setError(
-          '输入 / 可补全：斜杠命令与全部工具（↑↓ Tab）。命令: /exit /clear /reload /memory /undo /compact /permission — 改文件/bash/HTTP 默认需确认（Y 允许 · A 本次会话始终允许该工具 · N 拒绝）；启动时加 --dangerously-skip-permissions 可跳过所有确认。/permission 查看当前状态。/compact 压缩较早历史。卡死排查：INFINITI_AGENT_DEBUG=1。',
+          '输入 / 可补全：斜杠命令与全部工具（↑↓ Tab）。命令: /exit /clear /reload /memory /undo /compact /permission /speak — /speak 后接正文仅 TTS 朗读、不写会话（Live 下测音色）。改文件/bash/HTTP 默认需确认（Y 允许 · A 本次会话始终允许该工具 · N 拒绝）；启动时加 --dangerously-skip-permissions 可跳过所有确认。/permission 查看当前状态。/compact 压缩较早历史。卡死排查：INFINITI_AGENT_DEBUG=1。',
         )
         setInput('')
         return

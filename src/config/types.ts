@@ -179,7 +179,7 @@ export function resolveLlmProfile(config: InfinitiConfig, profileName?: string):
 }
 
 /** MiniMax TTS 配置（同时用于 LiveUI 语音合成）。 */
-export type TtsConfig = {
+export type MinimaxTtsConfig = {
   provider: 'minimax'
   apiKey: string
   /** MiniMax GroupId（必填，可在 https://platform.minimaxi.com 获取） */
@@ -195,6 +195,27 @@ export type TtsConfig = {
   /** 音调 -12–12 */
   pitch?: number
 }
+
+/**
+ * 本地 [MOSS-TTS-Nano](https://github.com/OpenMOSS/MOSS-TTS-Nano) Web Demo（`moss-tts-nano serve` / `python app.py`）HTTP 接口。
+ * 需先在本机启动服务（默认 http://127.0.0.1:18083），并配置参考音频或内置 demo。
+ */
+export type MossTtsNanoConfig = {
+  provider: 'moss_tts_nano'
+  /** 服务根 URL，无尾斜杠，如 http://127.0.0.1:18083 */
+  baseUrl: string
+  /**
+   * 语音克隆参考 wav（相对当前工作目录或绝对路径）。
+   * 与 demoId 二选一即可；若两者都配，会同时上传文件并传 demo_id（以服务端解析为准）。
+   */
+  promptAudioPath?: string
+  /** 使用服务端 `assets/demo.jsonl` 中的 demo_id（无上传时使用） */
+  demoId?: string
+  /** 单句合成超时（毫秒），默认 120000 */
+  timeoutMs?: number
+}
+
+export type TtsConfig = MinimaxTtsConfig | MossTtsNanoConfig
 
 /** 云端 Whisper ASR 配置（OpenAI-compatible）。 */
 export type WhisperAsrConfig = {

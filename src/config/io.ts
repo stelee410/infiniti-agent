@@ -258,16 +258,38 @@ function parseCompactionConfig(raw: unknown): CompactionConfig | undefined {
 function parseTtsConfig(raw: unknown): TtsConfig | undefined {
   if (!raw || typeof raw !== 'object') return undefined
   const t = raw as Record<string, unknown>
-  if (t.provider !== 'minimax') return undefined
-  if (typeof t.apiKey !== 'string' || !t.apiKey.trim()) return undefined
-  if (typeof t.groupId !== 'string' || !t.groupId.trim()) return undefined
-  const out: TtsConfig = { provider: 'minimax', apiKey: t.apiKey.trim(), groupId: t.groupId.trim() }
-  if (typeof t.model === 'string' && t.model.trim()) out.model = t.model.trim()
-  if (typeof t.voiceId === 'string' && t.voiceId.trim()) out.voiceId = t.voiceId.trim()
-  if (typeof t.speed === 'number' && t.speed > 0) out.speed = t.speed
-  if (typeof t.vol === 'number' && t.vol > 0) out.vol = t.vol
-  if (typeof t.pitch === 'number') out.pitch = t.pitch
-  return out
+  if (t.provider === 'minimax') {
+    if (typeof t.apiKey !== 'string' || !t.apiKey.trim()) return undefined
+    if (typeof t.groupId !== 'string' || !t.groupId.trim()) return undefined
+    const out: TtsConfig = { provider: 'minimax', apiKey: t.apiKey.trim(), groupId: t.groupId.trim() }
+    if (typeof t.model === 'string' && t.model.trim()) out.model = t.model.trim()
+    if (typeof t.voiceId === 'string' && t.voiceId.trim()) out.voiceId = t.voiceId.trim()
+    if (typeof t.speed === 'number' && t.speed > 0) out.speed = t.speed
+    if (typeof t.vol === 'number' && t.vol > 0) out.vol = t.vol
+    if (typeof t.pitch === 'number') out.pitch = t.pitch
+    return out
+  }
+  if (t.provider === 'moss_tts_nano') {
+    if (typeof t.baseUrl !== 'string' || !t.baseUrl.trim()) return undefined
+    const prompt =
+      typeof t.promptAudioPath === 'string' && t.promptAudioPath.trim()
+        ? t.promptAudioPath.trim()
+        : undefined
+    const demo = typeof t.demoId === 'string' && t.demoId.trim() ? t.demoId.trim() : undefined
+    if (!prompt && !demo) {
+      throw new ConfigError(
+        'tts.provider 为 moss_tts_nano 时须设置 promptAudioPath 或 demoId（见 MOSS-TTS-Nano README）',
+      )
+    }
+    const out: TtsConfig = { provider: 'moss_tts_nano', baseUrl: t.baseUrl.trim() }
+    if (prompt) out.promptAudioPath = prompt
+    if (demo) out.demoId = demo
+    if (typeof t.timeoutMs === 'number' && t.timeoutMs >= 5000 && Number.isFinite(t.timeoutMs)) {
+      out.timeoutMs = Math.floor(t.timeoutMs)
+    }
+    return out
+  }
+  return undefined
 }
 
 function parseAsrConfig(raw: unknown): AsrConfig | undefined {

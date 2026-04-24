@@ -11,6 +11,9 @@ dist/
 # ASR / TTS 模型文件（体积过大，不纳入 Git）
 models/
 
+# MOSS-TTS-Nano 源码克隆（仅本地 serve / pip install -e 用）
+third_party/MOSS-TTS-Nano/
+
 # Live2D 模型资源（体积较大，本地从 Open-LLM-VTuber 同步，默认不提交）
 live2d-models/**
 !live2d-models/README.txt
@@ -20,3 +23,6 @@ AGENT.md
 AGENTS.md
 CLAUDE.md
 .claude/
+
+# 本地工具 / 实验用 Python venv（勿提交）
+tools/

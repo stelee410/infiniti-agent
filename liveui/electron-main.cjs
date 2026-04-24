@@ -2,6 +2,9 @@
 const { app, BrowserWindow, Menu, ipcMain } = require('electron')
 const path = require('path')
 
+// LiveUI TTS：Web Audio 在无用户手势时默认 suspended；放宽策略以便首包语音可播。
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required')
+
 /**
  * 默认：无边框、透明、置顶（LiveUI 叠层）。
  * 需要系统标题栏 + 菜单便于调试时：

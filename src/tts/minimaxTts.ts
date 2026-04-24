@@ -1,14 +1,12 @@
-import type { TtsConfig } from '../config/types.js'
+import type { MinimaxTtsConfig } from '../config/types.js'
+import type { TtsEngine } from './engine.js'
 
 const DEFAULT_MODEL = 'speech-02-turbo'
 const DEFAULT_VOICE_ID = 'female-shaonv'
 
-export interface TtsEngine {
-  /** 将文本合成为 mp3 Buffer；调用方负责排队。 */
-  synthesize(text: string): Promise<Buffer>
-}
+export type { TtsEngine, TtsSynthesisResult } from './engine.js'
 
-export function createMinimaxTts(cfg: TtsConfig): TtsEngine {
+export function createMinimaxTts(cfg: MinimaxTtsConfig): TtsEngine {
   const model = cfg.model ?? DEFAULT_MODEL
   const voiceId = cfg.voiceId ?? DEFAULT_VOICE_ID
   const speed = cfg.speed ?? 1.0
@@ -17,7 +15,7 @@ export function createMinimaxTts(cfg: TtsConfig): TtsEngine {
   const endpoint = `https://api.minimax.chat/v1/t2a_v2?GroupId=${cfg.groupId}`
 
   return {
-    async synthesize(text: string): Promise<Buffer> {
+    async synthesize(text: string) {
       const body = {
         model,
         text,
@@ -100,7 +98,8 @@ export function createMinimaxTts(cfg: TtsConfig): TtsEngine {
         }
       }
 
-      return Buffer.concat(chunks)
+      const data = Buffer.concat(chunks)
+      return { data, format: 'mp3' as const, sampleRate: 32000 }
     },
   }
 }

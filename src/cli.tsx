@@ -27,6 +27,7 @@ import { readPackageVersion } from './packageRoot.js'
 import { runLink } from './link.js'
 import { LiveUiSession } from './liveui/wsSession.js'
 import { createMinimaxTts } from './tts/minimaxTts.js'
+import { createMossTtsNano } from './tts/mossTtsNano.js'
 import { createWhisperAsr } from './asr/whisperAsr.js'
 import { createSherpaOnnxAsr } from './asr/sherpaOnnxAsr.js'
 import { spawnLiveElectron } from './liveui/spawnRenderer.js'
@@ -98,6 +99,14 @@ async function runChatTui(
           )
         } catch (e) {
           console.warn(`[liveui] TTS 未启用（配置或初始化失败）: ${(e as Error).message}`)
+          liveUi.setTtsEngine(null)
+        }
+      } else if (cfg.tts?.provider === 'moss_tts_nano') {
+        try {
+          liveUi.setTtsEngine(createMossTtsNano(cfg.tts, cwd))
+          console.error(`[liveui] MOSS-TTS-Nano 已启用 (baseUrl: ${cfg.tts.baseUrl})`)
+        } catch (e) {
+          console.warn(`[liveui] TTS 未启用（MOSS-TTS-Nano 初始化失败）: ${(e as Error).message}`)
           liveUi.setTtsEngine(null)
         }
       } else {

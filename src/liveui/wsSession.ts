@@ -4,12 +4,15 @@ import { WebSocketServer, WebSocket } from 'ws'
 import type {
   LiveUiActionMessage,
   LiveUiAssistantStreamMessage,
+  LiveUiAudioChunkMessage,
   LiveUiMessage,
   LiveUiSlashCompletionItem,
   LiveUiStatusVariant,
 } from './protocol.js'
+import { parseSpeakCommandLine } from './speakCommandLine.js'
 import { StreamMouthEstimator } from './streamMouth.js'
-import type { TtsEngine } from '../tts/minimaxTts.js'
+import type { TtsEngine } from '../tts/engine.js'
+import { markdownToTtsPlainText } from '../tts/markdownToTtsPlainText.js'
 import type { AsrEngine } from '../asr/whisperAsr.js'
 
 export type LiveUiConnectionListener = (connected: boolean) => void
@@ -160,7 +163,16 @@ export class LiveUiSession {
           if (t === 'USER_INPUT' && parsed.data && typeof parsed.data === 'object') {
             const line = (parsed.data as { line?: unknown }).line
             if (typeof line !== 'string' || !line.trim()) return
-            this.emitUserLine(line.trimEnd())
+            const trimmed = line.trimEnd()
+            const speakText = parseSpeakCommandLine(trimmed)
+            if (speakText !== undefined) {
+              if (speakText) {
+                this.resetAudio()
+                this.enqueueTts(speakText)
+              }
+              return
+            }
+            this.emitUserLine(trimmed)
             return
           }
           if (t === 'USER_COMPOSER' && parsed.data && typeof parsed.data === 'object') {
@@ -253,23 +265,45 @@ export class LiveUiSession {
    */
   enqueueTts(text: string): void {
     if (!this.ttsEngine || !this.ttsEnabled || !text.trim()) return
-    const seq = this.ttsSequence++
+    const plain = markdownToTtsPlainText(text)
+    if (!plain.trim()) return
     const engine = this.ttsEngine
     this.ttsPending = this.ttsPending.then(async () => {
       try {
-        const buf = await engine.synthesize(text)
-        if (buf.length === 0) return
+        if (engine.synthesizeStream) {
+          await engine.synthesizeStream(plain, async (out) => {
+            if (out.data.length === 0) return
+            const chunkSeq = this.ttsSequence++
+            const payload: LiveUiAudioChunkMessage['data'] = {
+              audioBase64: out.data.toString('base64'),
+              format: out.format,
+              sampleRate: out.sampleRate,
+              sequence: chunkSeq,
+            }
+            if (out.format === 'pcm_s16le' && out.channels != null) {
+              payload.channels = out.channels
+            }
+            this.broadcast({ type: 'AUDIO_CHUNK', data: payload })
+          })
+          return
+        }
+        const seq = this.ttsSequence++
+        const out = await engine.synthesize(plain)
+        if (out.data.length === 0) return
         this.broadcast({
           type: 'AUDIO_CHUNK',
           data: {
-            audioBase64: buf.toString('base64'),
-            format: 'mp3',
-            sampleRate: 32000,
+            audioBase64: out.data.toString('base64'),
+            format: out.format,
+            sampleRate: out.sampleRate,
             sequence: seq,
           },
         })
       } catch (e) {
         console.warn(`[liveui] TTS 合成失败: ${(e as Error).message}`)
+        if (process.env.INFINITI_AGENT_DEBUG === '1') {
+          console.warn((e as Error).stack)
+        }
       }
     })
   }

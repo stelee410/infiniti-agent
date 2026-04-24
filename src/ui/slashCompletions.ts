@@ -71,6 +71,13 @@ const COMMAND_ITEMS: SlashItem[] = [
     insert: '/help ',
   },
   {
+    id: '/speak',
+    kind: 'command',
+    label: '/speak',
+    desc: '仅 TTS 朗读其后文本（不写会话，Live 测音色）',
+    insert: '/speak ',
+  },
+  {
     id: '/undo',
     kind: 'command',
     label: '/undo',
