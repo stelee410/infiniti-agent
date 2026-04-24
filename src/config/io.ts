@@ -289,6 +289,28 @@ function parseTtsConfig(raw: unknown): TtsConfig | undefined {
     }
     return out
   }
+  if (t.provider === 'voxcpm') {
+    if (typeof t.baseUrl !== 'string' || !t.baseUrl.trim()) return undefined
+    const out: TtsConfig = { provider: 'voxcpm', baseUrl: t.baseUrl.trim() }
+    if (typeof t.referenceAudioPath === 'string' && t.referenceAudioPath.trim()) {
+      out.referenceAudioPath = t.referenceAudioPath.trim()
+    }
+    if (typeof t.controlInstruction === 'string' && t.controlInstruction.trim()) {
+      out.controlInstruction = t.controlInstruction.trim()
+    }
+    if (typeof t.cfgValue === 'number' && Number.isFinite(t.cfgValue) && t.cfgValue > 0) {
+      out.cfgValue = t.cfgValue
+    }
+    if (typeof t.inferenceTimesteps === 'number' && t.inferenceTimesteps >= 1) {
+      out.inferenceTimesteps = Math.floor(t.inferenceTimesteps)
+    }
+    if (typeof t.normalize === 'boolean') out.normalize = t.normalize
+    if (typeof t.denoise === 'boolean') out.denoise = t.denoise
+    if (typeof t.timeoutMs === 'number' && t.timeoutMs >= 5000 && Number.isFinite(t.timeoutMs)) {
+      out.timeoutMs = Math.floor(t.timeoutMs)
+    }
+    return out
+  }
   return undefined
 }
 

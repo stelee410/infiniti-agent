@@ -1332,7 +1332,7 @@ async function bootstrap(): Promise<void> {
     const on = ttsEnabled && ttsAvailable
     speakerBtn.setAttribute('aria-pressed', String(on))
     speakerBtn.title = !ttsAvailable
-      ? '语音回复：未配置 TTS（config.tts：minimax 或 moss_tts_nano）'
+      ? '语音回复：未配置 TTS（config.tts：minimax、moss_tts_nano 或 voxcpm）'
       : on
         ? '语音回复：已开启'
         : '语音回复：已关闭'

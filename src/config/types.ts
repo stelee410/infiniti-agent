@@ -215,7 +215,29 @@ export type MossTtsNanoConfig = {
   timeoutMs?: number
 }
 
-export type TtsConfig = MinimaxTtsConfig | MossTtsNanoConfig
+/**
+ * 本地 [VoxCPM2](https://github.com/OpenBMB/VoxCPM) HTTP 服务（仓库内 `scripts/voxcpm-tts-serve.py`）。
+ * 需先在本机安装 voxcpm 与依赖并启动服务（默认 http://127.0.0.1:8810）。
+ */
+export type VoxcpmTtsConfig = {
+  provider: 'voxcpm'
+  /** 服务根 URL，无尾斜杠，如 http://127.0.0.1:8810 */
+  baseUrl: string
+  /** 参考 wav（可选；不配时可用 controlInstruction 做声音设计） */
+  referenceAudioPath?: string
+  /** 声音设计 / 克隆风格描述，如「年轻女性，温柔甜美」 */
+  controlInstruction?: string
+  cfgValue?: number
+  inferenceTimesteps?: number
+  /** 是否启用服务端文本规范化（默认 false，与官方 Gradio 默认接近） */
+  normalize?: boolean
+  /** 参考音频降噪（默认 true） */
+  denoise?: boolean
+  /** 单句合成超时（毫秒），默认 120000 */
+  timeoutMs?: number
+}
+
+export type TtsConfig = MinimaxTtsConfig | MossTtsNanoConfig | VoxcpmTtsConfig
 
 /** 云端 Whisper ASR 配置（OpenAI-compatible）。 */
 export type WhisperAsrConfig = {
