@@ -66,6 +66,16 @@ class TestSetupVoxcpmVenv(unittest.TestCase):
             self.module._should_auto_download({"VOXCPM_SKIP_MODEL_DOWNLOAD": "1"})
         )
 
+    def test_should_use_cuda_torch_windows_gpu_true(self) -> None:
+        self.assertTrue(self.module._should_use_cuda_torch(has_gpu=True, is_win=True))
+
+    def test_should_use_cuda_torch_windows_no_gpu_false(self) -> None:
+        self.assertFalse(self.module._should_use_cuda_torch(has_gpu=False, is_win=True))
+
+    def test_should_use_cuda_torch_macos_gpu_false(self) -> None:
+        # 即使 has_gpu=True，非 Windows 也不应启用（保持 macOS / Linux 行为不变）
+        self.assertFalse(self.module._should_use_cuda_torch(has_gpu=True, is_win=False))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

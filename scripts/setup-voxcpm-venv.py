@@ -25,11 +25,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _winutils import (  # noqa: E402
     find_python,
+    is_windows,
     pip_install,
     repo_root,
     try_certifi_path,
     venv_python,
 )
+
+CUDA_TORCH_INDEX_URL = "https://download.pytorch.org/whl/cu126"
 
 
 def _resolve_venv_dir(env: Mapping[str, str], root: Path) -> Path:
@@ -40,6 +43,26 @@ def _resolve_venv_dir(env: Mapping[str, str], root: Path) -> Path:
 def _should_auto_download(env: Mapping[str, str]) -> bool:
     """venv 就绪后是否自动调用 download-voxcpm-model.py（与 .sh 行为一致）。"""
     return env.get("VOXCPM_SKIP_MODEL_DOWNLOAD", "0") != "1"
+
+
+def _detect_nvidia_smi() -> bool:
+    """探测 nvidia-smi 可执行性，作为 NVIDIA GPU 存在的简单代理。失败返 False。"""
+    try:
+        result = subprocess.run(
+            ["nvidia-smi"], capture_output=True, timeout=5, check=False
+        )
+        return result.returncode == 0
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def _should_use_cuda_torch(has_gpu: bool, is_win: bool) -> bool:
+    """是否走 PyTorch CUDA index URL 装 torch。
+
+    仅 Windows + 检测到 GPU 时启用。macOS 用 MPS、Linux 默认 wheel 已是 CUDA 版本，
+    不在 .py 这里改变行为（保持与原 .sh 一致）。
+    """
+    return is_win and has_gpu
 
 
 def main() -> int:
@@ -79,23 +102,40 @@ def main() -> int:
 
     pip_install(venv_dir, ["pip"], upgrade=True)
 
-    print(
-        "正在安装 torch / voxcpm 等（体积大，可能需数分钟至十几分钟）…",
-        file=sys.stderr,
-    )
-    pip_install(
-        venv_dir,
-        [
-            "torch>=2.5",
-            "numpy>=1.24",
-            "soundfile>=0.12",
-            "fastapi>=0.110",
-            "uvicorn[standard]>=0.29",
-            "python-multipart>=0.0.9",
-            "huggingface_hub>=0.20",
-            "voxcpm",
-        ],
-    )
+    torch_packages = ["torch>=2.5", "torchaudio>=2.5"]
+    core_packages = [
+        "numpy>=1.24",
+        "soundfile>=0.12",
+        "fastapi>=0.110",
+        "uvicorn[standard]>=0.29",
+        "python-multipart>=0.0.9",
+        "huggingface_hub>=0.20",
+        "voxcpm",
+    ]
+
+    if _should_use_cuda_torch(_detect_nvidia_smi(), is_windows()):
+        print(
+            f"检测到 NVIDIA GPU，从 {CUDA_TORCH_INDEX_URL} 安装 CUDA 版 torch / torchaudio …",
+            file=sys.stderr,
+        )
+        py = venv_python(venv_dir)
+        subprocess.check_call(
+            [
+                str(py), "-m", "pip", "install",
+                "--trusted-host", "pypi.org",
+                "--trusted-host", "files.pythonhosted.org",
+                "--index-url", CUDA_TORCH_INDEX_URL,
+                *torch_packages,
+            ]
+        )
+        print("安装其余 voxcpm 依赖（numpy / soundfile / voxcpm 等） …", file=sys.stderr)
+        pip_install(venv_dir, core_packages)
+    else:
+        print(
+            "正在安装 torch / voxcpm 等（体积大，可能需数分钟至十几分钟）…",
+            file=sys.stderr,
+        )
+        pip_install(venv_dir, [*torch_packages, *core_packages])
 
     print(f"venv 就绪: {venv_dir}", file=sys.stderr)
 
