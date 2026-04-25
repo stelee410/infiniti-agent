@@ -13,6 +13,11 @@ export type LlmProfile = {
   baseUrl: string
   model: string
   apiKey: string
+  /**
+   * 为 true 时不向 API 发送 tools（如 Ollama 下不支持 function calling 的模型）。
+   * 此时 agent 无法调用内置工具 / MCP，仅纯对话。
+   */
+  disableTools?: boolean
 }
 
 /**
@@ -142,6 +147,11 @@ export type InfinitiConfig = {
     baseUrl: string
     model: string
     apiKey: string
+    /**
+     * 无 profiles 的旧格式下，与 LlmProfile.disableTools 同义。
+     * 有 profiles 时请在各 profile 上设置 disableTools。
+     */
+    disableTools?: boolean
     /** 使用新多 profile 格式时，指定默认 profile 名 */
     default?: string
     /** 命名 LLM 配置集合 */
@@ -168,13 +178,19 @@ export function resolveLlmProfile(config: InfinitiConfig, profileName?: string):
   const name = profileName ?? config.llm.default
 
   if (name && profiles?.[name]) {
-    return profiles[name]
+    const p = profiles[name]!
+    if (p.disableTools !== undefined) return p
+    if (config.llm.disableTools !== undefined) {
+      return { ...p, disableTools: config.llm.disableTools }
+    }
+    return p
   }
   return {
     provider: config.llm.provider,
     baseUrl: config.llm.baseUrl,
     model: config.llm.model,
     apiKey: config.llm.apiKey,
+    ...(config.llm.disableTools !== undefined ? { disableTools: config.llm.disableTools } : {}),
   }
 }
 
@@ -228,9 +244,16 @@ export type VoxcpmTtsConfig = {
   /** 声音设计 / 克隆风格描述，如「年轻女性，温柔甜美」 */
   controlInstruction?: string
   cfgValue?: number
+  /** 扩散步数；过低易含糊/噪感，推荐约 20–30（更慢） */
   inferenceTimesteps?: number
   /** 是否启用服务端文本规范化（默认 false，与官方 Gradio 默认接近） */
   normalize?: boolean
+  /**
+   * 整句输出幅度归一化，减轻「同一段对话里时大时小」。
+   * `rms` 按能量拉到固定 RMS（更稳），`peak` 按峰值压到 0.99，避免削波与忽大忽小；`none` 保持模型原始电平。
+   * 默认 `rms`；流式接口会在整句生成完成后才写出 PCM（首包略晚一截）。
+   */
+  amplitudeNormalize?: 'none' | 'peak' | 'rms'
   /** 参考音频降噪（默认 true） */
   denoise?: boolean
   /** 单句合成超时（毫秒），默认 120000 */

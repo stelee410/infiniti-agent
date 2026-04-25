@@ -21,6 +21,59 @@ infiniti-agent migrate
 infiniti-agent
 ```
 
+## 本地全栈：大模型与 TTS
+
+要完整跑通 **对话（LLM）+ 语音（TTS）**，需各开一个终端：先起本机大模型服务，再起 TTS 服务，最后在项目里配置好 `~/.infiniti-agent/config.json` 或项目下 `.infiniti-agent/config.json`（`infiniti-agent migrate` 后）。以下命令均假设你在 **本仓库包根**（与 `package.json`、`scripts/` 同目录，即 `…/infiniti-agent/infiniti-agent`）执行。
+
+### 大模型（LLM）
+
+本项目的 LLM 走 **OpenAI 兼容** HTTP API（`provider: "openai"`）。本机需自行启动任意兼容服务，**无**随仓库分发的 `start-llm` 脚本，常用方式如下（选一即可）。
+
+**Ollama（常见）**
+
+```bash
+# 终端 1：保持运行
+ollama serve
+
+# 终端 2：拉模型（示例）
+ollama pull qwen2.5:7b
+```
+
+在 `config.json` 的 `llm` / `llm.profiles` 中设置例如：`"baseUrl": "http://127.0.0.1:11434/v1"`，`"model": "qwen2.5:7b"`，`"apiKey": "ollama"`（或任意非空占位）。若该模型**不支持**工具/函数调用，在对应 profile 加 `"disableTools": true`（与 `src/config/types.ts` 说明一致）。
+
+**vLLM（GPU 推理）**
+
+```bash
+vllm serve <模型名或本地路径> --host 0.0.0.0 --port 8000
+```
+
+`baseUrl` 填 `http://127.0.0.1:8000/v1`，`model` 与 vLLM 所加载的模型名一致。
+
+**LM Studio 等** 在本地打开「OpenAI 兼容服务」后，将界面提供的 `baseUrl` 与模型名写入配置即可。
+
+### TTS
+
+仓库内提供 VoxCPM2 与 MOSS-TTS-Nano（ONNX）两套 **启动脚本**（路径相对包根 `scripts/`）。
+
+**VoxCPM2（推荐）**
+
+```bash
+./scripts/setup-voxcpm-venv.sh
+./scripts/start-voxcpm-tts-serve.sh --port 8810
+```
+
+环境变量、镜像与 `config.tts` 中 `voxcpm` / `baseUrl` 等说明见下节「TTS（`config.tts`）」及 `src/config/types.ts`。
+
+**MOSS-TTS-Nano（ONNX，可选）**
+
+```bash
+./scripts/setup-moss-tts-onnx-venv.sh
+./scripts/download-moss-onnx-models.sh
+./scripts/start-moss-tts-onnx.sh
+```
+
+默认监听 `http://127.0.0.1:18083`；配置里 `provider` 为 `moss_tts_nano` 时与此对应。
+
 ## 命令一览
 
 | 命令 | 说明 |
@@ -65,7 +118,7 @@ npm run setup:liveui -- ~/your-project
 
 将 Open-LLM-VTuber 的 `live2d-models` 文件夹拷到项目根下的 `live2d-models/`，与 `model_dict.json` 中的 `url` 一致即可校验通过。
 
-**TTS（`config.tts`）**：除 MiniMax、MOSS-TTS-Nano 外，可选用 **[VoxCPM2](https://github.com/OpenBMB/VoxCPM)**。推荐流程：`./scripts/setup-voxcpm-venv.sh`（创建 `third_party/voxcpm-venv` 并安装依赖）→ `./scripts/download-voxcpm-model.sh`（拉取 `openbmb/VoxCPM2` 到 `./models/VoxCPM2`，需已登录 Hugging Face 或设置 `HF_TOKEN`）→ `./scripts/start-voxcpm-tts-serve.sh --port 8810`。配置中设置 `"provider": "voxcpm"` 与 `"baseUrl": "http://127.0.0.1:8810"`；可选 `referenceAudioPath`、`controlInstruction` 等见 `src/config/types.ts` 的 `VoxcpmTtsConfig`。国内可设环境变量 `HF_ENDPOINT=https://hf-mirror.com` 再执行下载脚本。
+**TTS（`config.tts`）**（`setup` / 启动脚本的**完整命令**见上文「### TTS」；以下为环境变量与配置字段补充）：除 MiniMax、MOSS-TTS-Nano 外，可选用 **[VoxCPM2](https://github.com/OpenBMB/VoxCPM)**。推荐流程：`./scripts/setup-voxcpm-venv.sh`（创建 `third_party/voxcpm-venv`、安装依赖后**默认**拉取 `openbmb/VoxCPM2` 到 `./models/VoxCPM2`；仅装环境不下载可设 `VOXCPM_SKIP_MODEL_DOWNLOAD=1`）→ `./scripts/start-voxcpm-tts-serve.sh --port 8810`。若曾跳过下载，可单独执行 `./scripts/download-voxcpm-model.sh`。未设 `HF_TOKEN` 时仍可下载，但速率较低；国内可在执行 setup / 下载脚本前设 `HF_ENDPOINT=https://hf-mirror.com`。配置中设置 `"provider": "voxcpm"` 与 `"baseUrl": "http://127.0.0.1:8810"`；可选 `referenceAudioPath`、`controlInstruction`、`amplitudeNormalize`（`rms` / `peak` / `none`，默认 `rms`，减轻句与句电平差）等见 `src/config/types.ts` 的 `VoxcpmTtsConfig`。
 
 **常用选项：**
 
