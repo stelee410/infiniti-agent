@@ -16,13 +16,17 @@ export type LiveUiVoiceMicWire = {
   speechRmsThreshold: number
   silenceEndMs: number
   suppressInterruptDuringTts: boolean
+  mode: 'push_to_talk' | 'auto'
 }
 
 /**
  * 供 `infiniti-agent live` 写入环境变量 `INFINITI_LIVEUI_VOICE_MIC`（JSON），
  * 由 Electron preload 注入 `window.infinitiLiveUi.voiceMic`。
  */
-export function buildLiveUiVoiceMicEnvJson(lu?: LiveUiConfig): string {
+export function buildLiveUiVoiceMicEnvJson(
+  lu?: LiveUiConfig,
+  opts: { auto?: boolean } = {},
+): string {
   const speech =
     typeof lu?.voiceMicSpeechRmsThreshold === 'number' &&
     Number.isFinite(lu.voiceMicSpeechRmsThreshold) &&
@@ -39,6 +43,7 @@ export function buildLiveUiVoiceMicEnvJson(lu?: LiveUiConfig): string {
     speechRmsThreshold: speech,
     silenceEndMs: silence,
     suppressInterruptDuringTts: suppress,
+    mode: opts.auto ? 'auto' : 'push_to_talk',
   }
   return JSON.stringify(wire)
 }

@@ -356,11 +356,12 @@ async function main(): Promise<void> {
     .command('live')
     .description('LiveUI：本地 WebSocket + Electron 透明渲染 + TUI（需 npm run build 生成 liveui/dist）')
     .option('-p, --port <port>', 'WebSocket 端口（覆盖 config.json 中 liveUi.port）')
+    .option('--auto', '语音输入使用自动 VAD 模式；默认需按住空格录音，松开发送识别')
     .option(
       '--zoom <n>',
       '人物显示缩放（0.4 ~ 1.5；0.9 = 90%、0.8 = 80%；不影响控制条/输入框）',
     )
-    .action(async (cmdOpts: { port?: string; zoom?: string }) => {
+    .action(async (cmdOpts: { port?: string; zoom?: string; auto?: boolean }) => {
       if (!configExistsSync(cwd)) {
         console.error('尚未配置。请先运行: infiniti-agent init 或 infiniti-agent migrate')
         process.exit(2)
@@ -418,7 +419,7 @@ async function main(): Promise<void> {
         liveUi,
         liveUiModel3FileUrl: useSprite ? undefined : resolved?.model3FileUrl,
         liveUiSpriteExpressionDirFileUrl: spriteResolved?.dirFileUrl,
-        liveUiVoiceMicJson: buildLiveUiVoiceMicEnvJson(cfg.liveUi),
+        liveUiVoiceMicJson: buildLiveUiVoiceMicEnvJson(cfg.liveUi, { auto: cmdOpts.auto === true }),
         liveUiFigureZoom: figureZoom,
       })
     })

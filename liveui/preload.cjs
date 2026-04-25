@@ -20,6 +20,7 @@ const voiceMicDefaults = {
   speechRmsThreshold: 0.0195,
   silenceEndMs: 1500,
   suppressInterruptDuringTts: true,
+  mode: 'push_to_talk',
 }
 let voiceMic = { ...voiceMicDefaults }
 try {
