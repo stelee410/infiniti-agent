@@ -131,6 +131,14 @@ export async function loadConfig(cwd?: string): Promise<InfinitiConfig> {
   const asr = parseAsrConfig(o.asr)
   const avatarGen = parseAvatarGenConfig(o.avatarGen)
 
+  const flatDisableTools = llm.disableTools
+  const resolvedDisableTools =
+    profiles && defaultProfile && profiles[defaultProfile]?.disableTools !== undefined
+      ? profiles[defaultProfile]!.disableTools
+      : typeof flatDisableTools === 'boolean'
+        ? flatDisableTools
+        : undefined
+
   return {
     version: 1,
     llm: {
@@ -138,6 +146,7 @@ export async function loadConfig(cwd?: string): Promise<InfinitiConfig> {
       baseUrl: baseUrl.trim(),
       model: model.trim(),
       apiKey: apiKey.trim(),
+      ...(resolvedDisableTools !== undefined ? { disableTools: resolvedDisableTools } : {}),
       ...(defaultProfile ? { default: defaultProfile } : {}),
       ...(profiles ? { profiles } : {}),
     },
@@ -223,12 +232,16 @@ function parseLlmProfiles(raw: unknown): Record<string, LlmProfile> | undefined 
       typeof p.model === 'string' && p.model.trim() &&
       typeof p.apiKey === 'string' && p.apiKey.trim()
     ) {
-      out[name] = {
+      const prof: LlmProfile = {
         provider: p.provider,
         baseUrl: p.baseUrl.trim(),
         model: p.model.trim(),
         apiKey: p.apiKey.trim(),
       }
+      if (typeof p.disableTools === 'boolean') {
+        prof.disableTools = p.disableTools
+      }
+      out[name] = prof
     }
   }
   return Object.keys(out).length ? out : undefined
@@ -305,6 +318,9 @@ function parseTtsConfig(raw: unknown): TtsConfig | undefined {
       out.inferenceTimesteps = Math.floor(t.inferenceTimesteps)
     }
     if (typeof t.normalize === 'boolean') out.normalize = t.normalize
+    if (t.amplitudeNormalize === 'none' || t.amplitudeNormalize === 'peak' || t.amplitudeNormalize === 'rms') {
+      out.amplitudeNormalize = t.amplitudeNormalize
+    }
     if (typeof t.denoise === 'boolean') out.denoise = t.denoise
     if (typeof t.timeoutMs === 'number' && t.timeoutMs >= 5000 && Number.isFinite(t.timeoutMs)) {
       out.timeoutMs = Math.floor(t.timeoutMs)

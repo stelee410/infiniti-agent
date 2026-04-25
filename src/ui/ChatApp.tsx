@@ -53,6 +53,34 @@ function splitSentences(text: string): string[] {
     .filter((s) => s.length > 0)
 }
 
+/** 无标点的超长一句会整段进 VoxCPM，既慢也易造成听感不连贯；按长度二次切开。 */
+const TTS_MAX_SEGMENT_CHARS = 96
+
+function splitLongTtsUnit(s: string, maxChars: number): string[] {
+  const t = s.trim()
+  if (!t) return []
+  if (t.length <= maxChars) return [t]
+  const out: string[] = []
+  let i = 0
+  while (i < t.length) {
+    let end = Math.min(i + maxChars, t.length)
+    if (end < t.length) {
+      const window = t.slice(i, end)
+      const soft = ['，', '、', '；', ',', ';', '：', ' ', '　'].map((ch) => window.lastIndexOf(ch))
+      const lastBreak = Math.max(...soft, -1)
+      if (lastBreak >= 8) end = i + lastBreak + 1
+    }
+    const part = t.slice(i, end).trim()
+    if (part) out.push(part)
+    i = end
+  }
+  return out
+}
+
+function splitTtsSegments(text: string): string[] {
+  return splitSentences(text).flatMap((u) => splitLongTtsUnit(u, TTS_MAX_SEGMENT_CHARS))
+}
+
 type Props = {
   config: InfinitiConfig
   mcp: McpManager
@@ -320,7 +348,9 @@ export function ChatApp({
           return
         }
         liveUi.resetAudio()
-        liveUi.enqueueTts(speakText.trim())
+        for (const seg of splitTtsSegments(speakText.trim())) {
+          liveUi.enqueueTts(seg)
+        }
         setInput('')
         return
       }
@@ -521,11 +551,11 @@ export function ChatApp({
                 liveUi.mouth.onDisplayText(clean)
                 flushStream(clean)
                 if (liveUi.hasTts) {
-                  const sentences = splitSentences(clean)
-                  for (let si = ttsSentRef.current; si < sentences.length - 1; si++) {
-                    liveUi.enqueueTts(sentences[si]!)
+                  const segments = splitTtsSegments(clean)
+                  for (let si = ttsSentRef.current; si < segments.length - 1; si++) {
+                    liveUi.enqueueTts(segments[si]!)
                   }
-                  ttsSentRef.current = Math.max(0, sentences.length - 1)
+                  ttsSentRef.current = Math.max(0, segments.length - 1)
                 }
               } else {
                 flushStream(full)
@@ -552,11 +582,11 @@ export function ChatApp({
           const lastMsg = outRaw[outRaw.length - 1]
           if (lastMsg?.role === 'assistant' && lastMsg.content) {
             const clean = stripLiveUiKnownEmotionTagsEverywhere(lastMsg.content, expressionManifest)
-            const sentences = splitSentences(clean)
-            for (let si = ttsSentRef.current; si < sentences.length; si++) {
-              liveUi.enqueueTts(sentences[si]!)
+            const segments = splitTtsSegments(clean)
+            for (let si = ttsSentRef.current; si < segments.length; si++) {
+              liveUi.enqueueTts(segments[si]!)
             }
-            ttsSentRef.current = sentences.length
+            ttsSentRef.current = segments.length
           }
         }
         setMessages(out)

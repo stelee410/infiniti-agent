@@ -486,6 +486,7 @@ async function runOpenAI(
     maxRetries: LLM_MAX_RETRIES,
   })
 
+  const useTools = !llm.disableTools
   const openaiTools: OpenAI.Chat.ChatCompletionTool[] = tools.map((t) => ({
     type: 'function',
     function: {
@@ -499,7 +500,7 @@ async function runOpenAI(
 
   for (let step = 0; step < MAX_TOOL_STEPS; step++) {
     if (opts.signal?.aborted) break
-    agentDebug('openai step', step, 'request stream')
+    agentDebug('openai step', step, 'request stream', useTools ? 'with tools' : 'no tools')
     opts.stream?.onStreamReset?.()
     const streamResp = await client.chat.completions.create({
       model: llm.model,
@@ -507,8 +508,9 @@ async function runOpenAI(
         { role: 'system', content: opts.system },
         ...toOpenAIMessages(working),
       ],
-      tools: openaiTools,
-      parallel_tool_calls: true,
+      ...(useTools
+        ? { tools: openaiTools, parallel_tool_calls: true as const }
+        : {}),
       stream: true,
     })
 

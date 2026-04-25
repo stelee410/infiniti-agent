@@ -10,6 +10,9 @@
 
 环境变量:
   VOXCPM_MODEL_ID  默认 openbmb/VoxCPM2（或本机模型目录）
+  VOXCPM_OPTIMIZE  是否启用 torch 侧 optimize + 首句 warm-up。Mac（MPS）上 compile 本就不会启用；
+                   设 0 / false 可略过首句预热，略加快启动。默认 1。
+  PYTORCH_MPS_*    见 start-voxcpm-tts-serve.sh（如 PYTORCH_MPS_HIGH_WATERMARK_RATIO）
 """
 from __future__ import annotations
 
@@ -49,10 +52,16 @@ def _get_model():
     import voxcpm
 
     mid = os.environ.get("VOXCPM_MODEL_ID", "openbmb/VoxCPM2").strip()
-    logger.info("Loading VoxCPM model: %s", mid)
+    wants_opt = os.environ.get("VOXCPM_OPTIMIZE", "1").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+    )
+    logger.info("Loading VoxCPM model: %s, optimize/warmup=%s", mid, wants_opt)
     _model_id = mid
     try:
-        _model = voxcpm.VoxCPM.from_pretrained(mid, load_denoiser=False, optimize=True)
+        _model = voxcpm.VoxCPM.from_pretrained(mid, load_denoiser=False, optimize=wants_opt)
     except TypeError:
         _model = voxcpm.VoxCPM.from_pretrained(mid, load_denoiser=False)
     logger.info("VoxCPM loaded, sample_rate=%s", getattr(_model.tts_model, "sample_rate", "?"))
@@ -65,6 +74,25 @@ def _final_text(text: str, control: str) -> str:
         raise ValueError("empty text")
     c = re.sub(r"[()（）]", "", (control or "").strip()).strip()
     return f"({c}){text}" if c else text
+
+
+def _amplitude_apply_f32(x: np.ndarray, mode: str) -> np.ndarray:
+    """在整段波形上做峰值或 RMS 归一化，减轻句与句之间电平差异。"""
+    m = (mode or "none").strip().lower()
+    if m in ("none", "off", "false", "0", ""):
+        return np.asarray(x, dtype=np.float32)
+    a = np.asarray(x, dtype=np.float32)
+    if a.size == 0:
+        return a
+    flat = a.reshape(-1)
+    if m in ("peak", "max"):
+        peak = float(np.max(np.abs(flat)) + 1e-8)
+        scale = 0.99 / peak
+    else:
+        rms = float(np.sqrt(np.mean(np.float64(flat) ** 2)) + 1e-8)
+        scale = 0.1 / rms
+    out = np.clip(a * scale, -1.0, 1.0).astype(np.float32)
+    return out
 
 
 def _float_chunk_to_pcm_s16le(chunk: np.ndarray) -> bytes:
@@ -83,7 +111,7 @@ def _float_chunk_to_pcm_s16le(chunk: np.ndarray) -> bytes:
     return pcm.tobytes()
 
 
-def _pcm_stream_from_generate(
+def _iter_float_from_generate(
     *,
     final_text: str,
     ref_path: Optional[str],
@@ -91,7 +119,7 @@ def _pcm_stream_from_generate(
     inference_timesteps: int,
     normalize: bool,
     denoise: bool,
-) -> Iterator[bytes]:
+) -> Iterator[np.ndarray]:
     model = _get_model()
     kwargs = dict(
         text=final_text,
@@ -105,12 +133,69 @@ def _pcm_stream_from_generate(
     try:
         stream_it = model.generate_streaming(**kwargs)
     except TypeError:
-        # 旧版 API 可能无部分关键字
         kwargs.pop("normalize", None)
         kwargs.pop("denoise", None)
         stream_it = model.generate_streaming(**kwargs)
     for chunk in stream_it:
-        yield _float_chunk_to_pcm_s16le(chunk)
+        yield np.asarray(chunk, dtype=np.float32)
+
+
+def _concat_float_chunks(chunks: list[np.ndarray]) -> np.ndarray:
+    if not chunks:
+        return np.array([], dtype=np.float32)
+    a0 = np.asarray(chunks[0], dtype=np.float32)
+    if a0.ndim == 2 and a0.shape[1] == 2:
+        return np.vstack([np.asarray(c, dtype=np.float32) for c in chunks])
+    return np.concatenate([np.asarray(c, dtype=np.float32).reshape(-1) for c in chunks], axis=0)
+
+
+def _iter_pcm_s16le_fixed(full: np.ndarray, samples_per_emit: int) -> Iterator[bytes]:
+    if full.ndim == 2 and full.shape[1] == 2:
+        for i in range(0, full.shape[0], samples_per_emit):
+            part = full[i : i + samples_per_emit, :]
+            if part.size:
+                yield _float_chunk_to_pcm_s16le(part)
+        return
+    flat = full.reshape(-1)
+    for i in range(0, flat.size, samples_per_emit):
+        seg = flat[i : i + samples_per_emit]
+        if seg.size:
+            yield _float_chunk_to_pcm_s16le(seg)
+
+
+def _pcm_stream_from_generate(
+    *,
+    final_text: str,
+    ref_path: Optional[str],
+    cfg_value: float,
+    inference_timesteps: int,
+    normalize: bool,
+    denoise: bool,
+    amplitude_normalize: str,
+) -> Iterator[bytes]:
+    it = _iter_float_from_generate(
+        final_text=final_text,
+        ref_path=ref_path,
+        cfg_value=cfg_value,
+        inference_timesteps=inference_timesteps,
+        normalize=normalize,
+        denoise=denoise,
+    )
+    m = (amplitude_normalize or "none").strip().lower()
+    if m in ("none", "off", "false", "0", ""):
+        for chunk in it:
+            yield _float_chunk_to_pcm_s16le(chunk)
+        return
+    chunks = list(it)
+    full = _concat_float_chunks(chunks)
+    full = _amplitude_apply_f32(full, m)
+    if full.size == 0:
+        return
+    a0 = np.asarray(chunks[0], dtype=np.float32) if chunks else full
+    samples = 2048
+    if a0.ndim == 2 and a0.shape[1] == 2:
+        samples = 1024
+    yield from _iter_pcm_s16le_fixed(full, samples)
 
 
 @_app.get("/health")
@@ -123,9 +208,10 @@ async def tts_full(
     text: str = Form(...),
     control_instruction: str = Form(""),
     cfg_value: float = Form(2.0),
-    inference_timesteps: int = Form(10),
+    inference_timesteps: int = Form(20),
     normalize: bool = Form(False),
     denoise: bool = Form(True),
+    amplitude_normalize: str = Form("rms"),
     reference_audio: Optional[UploadFile] = File(None),
 ):
     """整段 WAV（非流式，便于调试）。"""
@@ -157,6 +243,7 @@ async def tts_full(
             kwargs.pop("normalize", None)
             kwargs.pop("denoise", None)
             wav = model.generate(**kwargs)
+        wav = _amplitude_apply_f32(np.asarray(wav, dtype=np.float32), str(amplitude_normalize))
         sr = int(model.tts_model.sample_rate)
         buf = io.BytesIO()
         sf.write(buf, wav, sr, subtype="PCM_16", format="WAV")
@@ -174,9 +261,10 @@ async def tts_stream(
     text: str = Form(...),
     control_instruction: str = Form(""),
     cfg_value: float = Form(2.0),
-    inference_timesteps: int = Form(10),
+    inference_timesteps: int = Form(20),
     normalize: bool = Form(False),
     denoise: bool = Form(True),
+    amplitude_normalize: str = Form("rms"),
     reference_audio: Optional[UploadFile] = File(None),
 ):
     """流式 raw PCM s16le little-endian；声道与采样率见响应头。"""
@@ -207,6 +295,7 @@ async def tts_stream(
                 inference_timesteps=inference_timesteps,
                 normalize=normalize,
                 denoise=denoise,
+                amplitude_normalize=amplitude_normalize,
             ):
                 yield pcm
         finally:

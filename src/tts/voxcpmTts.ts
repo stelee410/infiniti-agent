@@ -26,8 +26,10 @@ async function buildStreamForm(
   body.set('text', text)
   body.set('control_instruction', cfg.controlInstruction?.trim() ?? '')
   body.set('cfg_value', String(cfg.cfgValue ?? 2.0))
-  body.set('inference_timesteps', String(cfg.inferenceTimesteps ?? 10))
+  body.set('inference_timesteps', String(cfg.inferenceTimesteps ?? 20))
   body.set('normalize', cfg.normalize === true ? 'true' : 'false')
+  const amp = cfg.amplitudeNormalize ?? 'rms'
+  body.set('amplitude_normalize', amp)
   body.set('denoise', cfg.denoise === false ? 'false' : 'true')
   if (referenceResolved) {
     const buf = await readFile(referenceResolved)
@@ -63,9 +65,10 @@ export function createVoxcpmTts(cfg: VoxcpmTtsConfig, cwd = process.cwd()): TtsE
     const sampleRate = parseIntHeader(res.headers, 'x-sample-rate', 48_000)
     const channels = parseIntHeader(res.headers, 'x-channels', 1)
     const frameBytes = Math.max(2, channels) * 2
-    const FIRST_MIN = 1536
-    const STEADY_BLOCK = 8192
-    const FIRST_CAP = 6144
+    /* 首包至少 ~50ms，减少细碎片段与浏览器侧 BufferSource 数量，长对话时更不易卡顿/爆音 */
+    const firstMin = Math.max(1536, Math.floor(0.05 * sampleRate) * frameBytes)
+    const STEADY_BLOCK = Math.max(8192, firstMin * 2)
+    const FIRST_CAP = Math.max(6144, firstMin + 2048)
 
     let carry = Buffer.alloc(0)
     let firstEmit = true
@@ -74,7 +77,7 @@ export function createVoxcpmTts(cfg: VoxcpmTtsConfig, cwd = process.cwd()): TtsE
       for (;;) {
         const aligned = Math.floor(carry.length / frameBytes) * frameBytes
         if (aligned < frameBytes) return
-        const minNeed = firstEmit ? FIRST_MIN : STEADY_BLOCK
+        const minNeed = firstEmit ? firstMin : STEADY_BLOCK
         if (!flush && aligned < minNeed) return
 
         let take: number
