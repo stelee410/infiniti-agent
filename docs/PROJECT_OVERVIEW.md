@@ -567,6 +567,10 @@ python scripts\start-voxcpm-tts-serve.py   # 同上
 
 要求 Python 3.10～3.12（VoxCPM 文档限制 <3.13）。脚本按以下顺序探测解释器：`VOXCPM_PYTHON` → `python3.12 / 3.11 / 3.10` → `python3` / `python` → Windows `py -3.x` launcher。
 
+Windows 11 上若检测到 NVIDIA GPU（`nvidia-smi` 可执行），`setup-voxcpm-venv.py` 会先从 `https://download.pytorch.org/whl/cu126` 安装 CUDA 版 `torch / torchaudio`，再装其他依赖。否则装 CPU 版（macOS / Linux 行为不变）。这是为绕开 PyPI 默认 cpu-only torch 在 Windows 上触发 VoxCPM `scaled_dot_product_attention` 维度错误的已知问题。
+
+`setup-voxcpm-venv.py` 完成 venv 与 pip install 后会自动调用 `download-voxcpm-model.py`；不希望自动下载（如已离线缓存好模型）请设 `VOXCPM_SKIP_MODEL_DOWNLOAD=1`。
+
 #### 关键环境变量
 
 | 变量 | 默认值 | 作用 |
@@ -595,13 +599,83 @@ python scripts\start-voxcpm-tts-serve.py   # 同上
 
 #### 开发者：跑脚本单元测试
 
-`scripts/_winutils.py` 集中了 venv 路径 / Python 探测 / pip install 等共享逻辑，配套 4 个测试文件覆盖纯函数与模块加载（共 25 用例）：
+`scripts/_winutils.py` 集中了 venv 路径 / Python 探测 / pip install 等共享逻辑，配套 4 个测试文件覆盖纯函数与模块加载（共 30 用例，含自动下载与 GPU 检测断言）：
 
 ```powershell
 python scripts\_winutils_test.py
 python scripts\setup-voxcpm-venv_test.py
 python scripts\download-voxcpm-model_test.py
 python scripts\start-voxcpm-tts-serve_test.py
+```
+
+### 12.10 本地 TTS 服务（MOSS-TTS-Nano）
+
+MOSS-TTS-Nano 是 `tts.provider = "moss_tts_nano"` 时使用的本地 TTS 服务，**走 ONNX runtime CPU 推理**（不需要 GPU；首句较慢但无显存压力）。所有脚本同样提供 `.sh`（macOS / Linux）与 `.py`（Windows 11）两个等价版本。
+
+#### macOS / Linux
+
+```bash
+bash scripts/setup-moss-tts-onnx-venv.sh    # 克隆 MOSS-TTS-Nano + 应用 patch + 建 venv + pip install
+bash scripts/download-moss-onnx-models.sh   # 下载 2 个 ONNX 仓库 + zh_1.wav 参考音
+bash scripts/start-moss-tts-onnx.sh         # 启动 HTTP 服务（默认 127.0.0.1:18083）
+```
+
+#### Windows 11（PowerShell）
+
+```powershell
+python scripts\setup-moss-tts-onnx-venv.py    # 同上
+python scripts\download-moss-onnx-models.py   # 同上
+python scripts\start-moss-tts-onnx.py         # 同上
+```
+
+要求 **Python 严格 3.11**（MOSS 上游限定）。Windows 上 `setup-moss-tts-onnx-venv.py` 用嵌入式块替换的方式应用 `scripts/patches/moss-onnx-skip-wetext.patch`（Windows 默认无 `patch` 命令），通过 `MOSS_TTS_SKIP_WETEXT` marker 实现幂等检测；`download-moss-onnx-models.py` 用 `tempfile.mkdtemp()` 替代 `/tmp/ia-moss-dl-$$`，用 `urllib.request.urlretrieve` 替代 `curl`。
+
+#### 关键环境变量
+
+| 变量 | 默认值 | 作用 |
+|---|---|---|
+| `MOSS_TTS_NANO_HOME` | `<repo>/third_party/MOSS-TTS-Nano` | MOSS 源码目录（venv 嵌在 `.venv/` 子目录） |
+| `MOSS_PYTHON` | 自动探测 3.11 | 强制指定 Python 解释器 |
+| `MOSS_ONNX_MODEL_DIR` | `<repo>/models` | ONNX 模型根目录 |
+| `MOSS_TTS_PORT` | `18083` | 服务端口 |
+| `MOSS_TTS_SKIP_WETEXT` | `1` | 跳过 WeTextProcessing（避免 OpenFst 依赖） |
+| `SSL_CERT_FILE` | `certifi.where()` 兜底 | CA 证书 |
+
+#### 集成到 `infiniti-agent`
+
+`moss_tts_nano` 必需 `promptAudioPath` 或 `demoId` 之一（声音克隆来源）：
+
+```json
+{
+  "tts": {
+    "provider": "moss_tts_nano",
+    "baseUrl": "http://127.0.0.1:18083",
+    "promptAudioPath": "D:\\infiniti-agent\\models\\moss-prompt\\zh_1.wav"
+  }
+}
+```
+
+#### 与 VoxCPM 的差异
+
+| 维度 | VoxCPM | MOSS-TTS-Nano |
+|---|---|---|
+| Python | 3.10–3.12 | **严格 3.11** |
+| 推理 | CUDA GPU（自动检测） | **CPU ONNX runtime** |
+| 首句延迟 | ~9 s（GPU） | 数十秒（CPU） |
+| patch | 无 | 有（嵌入式块替换） |
+| venv | `third_party/voxcpm-venv/` | `third_party/MOSS-TTS-Nano/.venv/` |
+| 端口 | 8810 | 18083 |
+
+每个 provider 独立 venv 是 **故意的依赖隔离**（VoxCPM 要 `torch>=2.5`、MOSS 要 `torch==2.7.0` 严格版本，互不兼容）。
+
+#### 开发者：跑脚本单元测试
+
+3 个测试文件，共 23 用例（含 patch 块替换与 marker 检测断言）：
+
+```powershell
+python scripts\setup-moss-tts-onnx-venv_test.py
+python scripts\download-moss-onnx-models_test.py
+python scripts\start-moss-tts-onnx_test.py
 ```
 
 ---
