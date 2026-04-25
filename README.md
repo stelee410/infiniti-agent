@@ -89,6 +89,10 @@ vllm serve <模型名或本地路径> --host 0.0.0.0 --port 8000
 | `infiniti-agent skill list` | 列出当前项目已安装的 Skills |
 | `infiniti-agent live` | LiveUI：WebSocket + Electron 透明窗 + TUI（需先 `npm run build`；**虚拟人窗口依赖本包内的 `electron` 模块**，全局安装后若看不到窗口，在包安装目录执行一次 `npm install` 或重装本包以拉取 optional 依赖） |
 
+Live 语音输入默认是 **按住空格说话**：点击麦克风按钮启用后，长按空格开始录音，松开发送 ASR 识别。若要恢复旧版自动 VAD / 自动打断模式，启动时加 `--auto`：`infiniti-agent live --auto`。
+
+Live 底部文本框会保留最近输入历史；焦点在文本框内且斜杠补全未打开时，可用 ↑ / ↓ 在历史输入中导航。
+
 LiveUI 窗口为无边框透明窗：**在底部深色对话条上，除按钮与输入框以外的区域**（条的外沿与留白）可拖动窗口；人物区域不再弹出单独拖动面板。
 
 **Electron 窗口（默认）**：无边框、**透明**、置顶叠层。需要标题栏 + **视图** 菜单（重新加载、开发者工具、缩放等）时：`INFINITI_LIVEUI_DEBUG_WINDOW=1`。启动时自动打开 DevTools（独立窗口）：`INFINITI_LIVEUI_DEVTOOLS=1`；`infiniti-agent live` 带 **`--debug`** 时也会自动设置 DevTools。

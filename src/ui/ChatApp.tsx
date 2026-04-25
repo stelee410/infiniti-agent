@@ -37,48 +37,27 @@ import { parseSpeakCommandLine } from '../liveui/speakCommandLine.js'
 import type { LiveUiInteractionKind, LiveUiSession } from '../liveui/wsSession.js'
 import type { LiveUiStatusVariant } from '../liveui/protocol.js'
 import {
+  collectNewTtsSegments,
+  splitTtsSegments,
+} from '../tts/streamSegments.js'
+import {
   createStreamLiveUiState,
   processAssistantStreamChunk,
   stripLiveUiKnownEmotionTagsEverywhere,
   stripLiveUiTagsFromMessages,
 } from '../liveui/emotionParse.js'
 
-/** 句末 + 中英逗号/顿号/分号：流式时更早切段 enqueueTts，减轻「字都打完了才开始出声」。 */
-const SENTENCE_RE = /(?<=[。！？；、.!?\n，,])\s*/
-
-function splitSentences(text: string): string[] {
-  return text
-    .split(SENTENCE_RE)
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0)
-}
-
-/** 无标点的超长一句会整段进 VoxCPM，既慢也易造成听感不连贯；按长度二次切开。 */
-const TTS_MAX_SEGMENT_CHARS = 96
-
-function splitLongTtsUnit(s: string, maxChars: number): string[] {
-  const t = s.trim()
-  if (!t) return []
-  if (t.length <= maxChars) return [t]
-  const out: string[] = []
-  let i = 0
-  while (i < t.length) {
-    let end = Math.min(i + maxChars, t.length)
-    if (end < t.length) {
-      const window = t.slice(i, end)
-      const soft = ['，', '、', '；', ',', ';', '：', ' ', '　'].map((ch) => window.lastIndexOf(ch))
-      const lastBreak = Math.max(...soft, -1)
-      if (lastBreak >= 8) end = i + lastBreak + 1
-    }
-    const part = t.slice(i, end).trim()
-    if (part) out.push(part)
-    i = end
-  }
-  return out
-}
-
-function splitTtsSegments(text: string): string[] {
-  return splitSentences(text).flatMap((u) => splitLongTtsUnit(u, TTS_MAX_SEGMENT_CHARS))
+/**
+ * Live 下 TTS 用的「干净正文」：与流式 onTextDelta 一致，先 `processAssistantStreamChunk` 得 `displayText`
+ *（仅由当前 `full` 决定，与流式 state 无关），再 `stripLiveUiKnownEmotionTagsEverywhere`。
+ * 收尾补播必须用本函数从 `assistantRaw` 得到 `clean`，才能与流式 TTS cursor 对齐。
+ */
+function ttsDisplayCleanForLiveUi(
+  assistantRaw: string,
+  manifest: Parameters<typeof stripLiveUiKnownEmotionTagsEverywhere>[1],
+): string {
+  const { displayText } = processAssistantStreamChunk(createStreamLiveUiState(), assistantRaw)
+  return stripLiveUiKnownEmotionTagsEverywhere(displayText, manifest)
 }
 
 type Props = {
@@ -111,7 +90,7 @@ export function ChatApp({
   const [streamText, setStreamText] = useState('')
   const streamTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const streamLiveUiRef = useRef(createStreamLiveUiState())
-  const ttsSentRef = useRef(0)
+  const ttsCursorRef = useRef(0)
   const [liveUiConnected, setLiveUiConnected] = useState(false)
   const editHistoryRef = useRef(new EditHistory())
   const [slashIndex, setSlashIndex] = useState(0)
@@ -532,9 +511,9 @@ export function ChatApp({
               lastStreamDeltaAtRef.current = null
               busySubtextRef.current = '等待模型响应（多轮工具之间会重新请求）…'
               liveUi?.sendAssistantStream('', true)
+              ttsCursorRef.current = 0
               if (liveUi?.hasTts) {
                 liveUi.resetAudio()
-                ttsSentRef.current = 0
               }
             },
             onTextDelta: (_delta, full) => {
@@ -543,19 +522,16 @@ export function ChatApp({
                 'SSE 流式中（久无新字时：可能在生成 tool 调用或网络慢）…'
               if (liveUi) {
                 liveUi.sendAssistantStream(full, false)
-                const { displayText } = processAssistantStreamChunk(
-                  streamLiveUiRef.current,
-                  full,
-                )
-                const clean = stripLiveUiKnownEmotionTagsEverywhere(displayText, expressionManifest)
+                processAssistantStreamChunk(streamLiveUiRef.current, full)
+                const clean = ttsDisplayCleanForLiveUi(full, expressionManifest)
                 liveUi.mouth.onDisplayText(clean)
                 flushStream(clean)
                 if (liveUi.hasTts) {
-                  const segments = splitTtsSegments(clean)
-                  for (let si = ttsSentRef.current; si < segments.length - 1; si++) {
-                    liveUi.enqueueTts(segments[si]!)
+                  const next = collectNewTtsSegments(clean, ttsCursorRef.current)
+                  for (const seg of next.segments) {
+                    liveUi.enqueueTts(seg)
                   }
-                  ttsSentRef.current = Math.max(0, segments.length - 1)
+                  ttsCursorRef.current = next.cursor
                 }
               } else {
                 flushStream(full)
@@ -580,13 +556,13 @@ export function ChatApp({
         const out = liveUi ? stripLiveUiTagsFromMessages(outRaw, expressionManifest) : outRaw
         if (liveUi?.hasTts) {
           const lastMsg = outRaw[outRaw.length - 1]
-          if (lastMsg?.role === 'assistant' && lastMsg.content) {
-            const clean = stripLiveUiKnownEmotionTagsEverywhere(lastMsg.content, expressionManifest)
-            const segments = splitTtsSegments(clean)
-            for (let si = ttsSentRef.current; si < segments.length; si++) {
-              liveUi.enqueueTts(segments[si]!)
+          if (lastMsg?.role === 'assistant' && typeof lastMsg.content === 'string' && lastMsg.content) {
+            const clean = ttsDisplayCleanForLiveUi(lastMsg.content, expressionManifest)
+            const next = collectNewTtsSegments(clean, ttsCursorRef.current, { final: true })
+            for (const seg of next.segments) {
+              liveUi.enqueueTts(seg)
             }
-            ttsSentRef.current = segments.length
+            ttsCursorRef.current = next.cursor
           }
         }
         setMessages(out)

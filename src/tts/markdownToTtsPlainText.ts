@@ -1,6 +1,35 @@
+const EMOJI_RE =
+  /(?:\p{Regional_Indicator}{2}|[#*0-9]\uFE0F?\u20E3|[\p{Extended_Pictographic}\p{Emoji_Presentation}](?:[\uFE0E\uFE0F])?(?:\u200D[\p{Extended_Pictographic}\p{Emoji_Presentation}](?:[\uFE0E\uFE0F])?)*)/gu
+
+function stripParentheticalContent(source: string): string {
+  const pairs = new Map<string, string>([
+    ['(', ')'],
+    ['（', '）'],
+  ])
+  const closes = new Set([...pairs.values()])
+  let depth = 0
+  let out = ''
+
+  for (const ch of source) {
+    if (pairs.has(ch)) {
+      if (depth === 0) out += ' '
+      depth++
+      continue
+    }
+    if (closes.has(ch) && depth > 0) {
+      depth--
+      if (depth === 0) out += ' '
+      continue
+    }
+    if (depth === 0) out += ch
+  }
+
+  return out
+}
+
 /**
  * 将助手输出中的 Markdown / 轻量标记收口为适合 TTS 的纯文本。
- * 不做完整 CommonMark 解析，用启发式剥离常见语法，避免朗读「井号、星号、链接」等。
+ * 不做完整 CommonMark 解析，用启发式剥离常见语法，避免朗读「井号、星号、链接」、括号旁白和 emoji 等。
  */
 export function markdownToTtsPlainText(source: string): string {
   let s = String(source ?? '')
@@ -45,6 +74,10 @@ export function markdownToTtsPlainText(source: string): string {
   // 行内代码 `...`
   s = s.replace(/`([^`]+)`/g, '$1')
   s = s.replace(/`+/g, ' ')
+
+  // TTS 不朗读括号内旁白/动作提示与 emoji。
+  s = stripParentheticalContent(s)
+  s = s.replace(EMOJI_RE, ' ')
 
   // 表格行里多余竖线 → 空格（避免朗读「竖线」）
   s = s.replace(/\s*\|\s*/g, ' ')

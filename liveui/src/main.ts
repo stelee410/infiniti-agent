@@ -730,19 +730,94 @@ async function bootstrap(): Promise<void> {
   const wsUrl = `ws://127.0.0.1:${port}`
   const socket = new WebSocket(wsUrl)
 
+  const INPUT_HISTORY_STORAGE_KEY = 'infiniti-liveui-input-history-v1'
+  const INPUT_HISTORY_MAX = 100
   const SLASH_MENU_MAX_ROWS = 10
   type SlashRow = { id: string; kind: string; label: string; desc: string; insert: string }
   let slashMenuOpenLive = false
   let slashRows: SlashRow[] = []
   let slashSel = 0
   let slashSig = ''
+  let inputHistory: string[] = []
+  let inputHistoryIndex = 0
+  let inputHistoryDraft = ''
   const slashMenuEl = document.getElementById('liveui-slash-menu')
   const slashHintEl = document.getElementById('liveui-slash-menu-hint')
   const slashListEl = document.getElementById('liveui-slash-menu-list')
 
+  const loadInputHistory = (): string[] => {
+    try {
+      const raw = window.localStorage.getItem(INPUT_HISTORY_STORAGE_KEY)
+      const parsed = raw ? JSON.parse(raw) : []
+      if (!Array.isArray(parsed)) return []
+      return parsed
+        .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
+        .slice(-INPUT_HISTORY_MAX)
+    } catch {
+      return []
+    }
+  }
+
+  const saveInputHistory = (): void => {
+    try {
+      window.localStorage.setItem(
+        INPUT_HISTORY_STORAGE_KEY,
+        JSON.stringify(inputHistory.slice(-INPUT_HISTORY_MAX)),
+      )
+    } catch {
+      /* ignore storage failures */
+    }
+  }
+
+  const rememberInputHistory = (raw: string): void => {
+    const value = raw.trimEnd()
+    if (!value.trim()) return
+    if (inputHistory[inputHistory.length - 1] !== value) {
+      inputHistory.push(value)
+      if (inputHistory.length > INPUT_HISTORY_MAX) {
+        inputHistory = inputHistory.slice(-INPUT_HISTORY_MAX)
+      }
+      saveInputHistory()
+    }
+    inputHistoryIndex = inputHistory.length
+    inputHistoryDraft = ''
+  }
+
+  inputHistory = loadInputHistory()
+  inputHistoryIndex = inputHistory.length
+
   const pushComposerDraft = (): void => {
     if (socket.readyState !== WebSocket.OPEN || !userLineInput) return
     socket.send(JSON.stringify({ type: 'USER_COMPOSER', data: { text: userLineInput.value } }))
+  }
+
+  const setComposerValue = (value: string): void => {
+    if (!userLineInput) return
+    userLineInput.value = value
+    const pos = value.length
+    userLineInput.setSelectionRange(pos, pos)
+    pushComposerDraft()
+    touchConvActivity()
+  }
+
+  const canNavigateInputHistory = (direction: 'up' | 'down'): boolean => {
+    if (!userLineInput || inputHistory.length === 0) return false
+    const pos = userLineInput.selectionStart ?? userLineInput.value.length
+    if (direction === 'up') return !userLineInput.value.slice(0, pos).includes('\n')
+    return !userLineInput.value.slice(pos).includes('\n')
+  }
+
+  const navigateInputHistory = (direction: 'up' | 'down'): boolean => {
+    if (!userLineInput || !canNavigateInputHistory(direction)) return false
+    if (inputHistoryIndex === inputHistory.length) {
+      inputHistoryDraft = userLineInput.value
+    }
+    const delta = direction === 'up' ? -1 : 1
+    const next = Math.max(0, Math.min(inputHistory.length, inputHistoryIndex + delta))
+    if (next === inputHistoryIndex) return true
+    inputHistoryIndex = next
+    setComposerValue(next === inputHistory.length ? inputHistoryDraft : inputHistory[next]!)
+    return true
   }
 
   const applySlashInsert = (): void => {
@@ -1278,6 +1353,7 @@ async function bootstrap(): Promise<void> {
     } else if (msg.type === 'ASR_RESULT') {
       const text = msg.data?.text
       if (typeof text === 'string' && text.trim()) {
+        rememberInputHistory(text.trim())
         if (userLineInput && !voiceMode) {
           userLineInput.value = text.trim()
           pushComposerDraft()
@@ -1359,6 +1435,8 @@ async function bootstrap(): Promise<void> {
   })
 
   userLineInput?.addEventListener('input', () => {
+    inputHistoryIndex = inputHistory.length
+    inputHistoryDraft = userLineInput.value
     pushComposerDraft()
     touchConvActivity()
   })
@@ -1383,14 +1461,27 @@ async function bootstrap(): Promise<void> {
         return
       }
     }
+    if (!ev.shiftKey && !ev.metaKey && !ev.ctrlKey && !ev.altKey) {
+      if (ev.key === 'ArrowUp' && navigateInputHistory('up')) {
+        ev.preventDefault()
+        return
+      }
+      if (ev.key === 'ArrowDown' && navigateInputHistory('down')) {
+        ev.preventDefault()
+        return
+      }
+    }
     if (ev.key !== 'Enter' || ev.shiftKey || ev.isComposing) return
     ev.preventDefault()
     const v = userLineInput.value.trimEnd()
     if (!v.trim()) return
     if (socket.readyState !== WebSocket.OPEN) return
     touchConvActivity()
+    rememberInputHistory(v)
     socket.send(JSON.stringify({ type: 'USER_INPUT', data: { line: v } }))
     userLineInput.value = ''
+    inputHistoryIndex = inputHistory.length
+    inputHistoryDraft = ''
     pushComposerDraft()
   })
 
@@ -1440,7 +1531,7 @@ async function bootstrap(): Promise<void> {
     if (!ttsEnabled) resetAudioQueue()
   })
 
-  // ── 麦克风按钮：连续语音对话模式 ──
+  // ── 麦克风按钮：默认按住空格说话；`infiniti-agent live --auto` 使用连续 VAD 模式 ──
   const resolveVoiceMicWire = (): LiveUiVoiceMicWire => {
     const vm = window.infinitiLiveUi?.voiceMic
     const speech =
@@ -1457,9 +1548,11 @@ async function bootstrap(): Promise<void> {
       vm?.suppressInterruptDuringTts === false
         ? false
         : VOICE_MIC_DEFAULT_SUPPRESS_INTERRUPT_DURING_TTS
-    return { speechRmsThreshold: speech, silenceEndMs: silence, suppressInterruptDuringTts: suppress }
+    const mode = vm?.mode === 'auto' ? 'auto' : 'push_to_talk'
+    return { speechRmsThreshold: speech, silenceEndMs: silence, suppressInterruptDuringTts: suppress, mode }
   }
   const voiceMic = resolveVoiceMicWire()
+  const voiceMicAuto = voiceMic.mode === 'auto'
   /** 已进入说话段后略低于 speech 门限，避免字间弱音被当成静音 */
   const vadRmsRelease = Math.max(0.004, Math.min(voiceMic.speechRmsThreshold * 0.48, voiceMic.speechRmsThreshold - 1e-6))
 
@@ -1476,6 +1569,8 @@ async function bootstrap(): Promise<void> {
   let silenceStart = 0
   let llmBusy = false
   let interruptSent = false
+  let pttSpaceDown = false
+  let pttRecording = false
 
   /** 进入「在说话」前需连续满足频谱门控的帧数，抑制突发噪声误触 */
   let vadSpeechLikelyStreak = 0
@@ -1489,13 +1584,20 @@ async function bootstrap(): Promise<void> {
     if (!micBtn) return
     micBtn.disabled = !asrAvailable
     micBtn.setAttribute('aria-pressed', String(voiceMode))
+    const recordingNow = voiceMicAuto ? voiceMode : pttRecording
     micBtn.title = !asrAvailable
       ? '语音输入：未配置 ASR（需在 config 中配置 whisper 或 sherpa_onnx）'
       : voiceMode
-        ? '语音模式开启中…点击关闭'
-        : '点击进入语音对话模式'
-    if (micIconIdle) micIconIdle.style.display = voiceMode ? 'none' : ''
-    if (micIconRecording) micIconRecording.style.display = voiceMode ? '' : 'none'
+        ? voiceMicAuto
+          ? '自动语音模式开启中…点击关闭'
+          : pttRecording
+            ? '正在录音，松开发送识别'
+            : '按住空格说话，松开发送；点击关闭'
+        : voiceMicAuto
+          ? '点击进入自动语音对话模式'
+          : '点击开启语音输入（按住空格说话）'
+    if (micIconIdle) micIconIdle.style.display = recordingNow ? 'none' : ''
+    if (micIconRecording) micIconRecording.style.display = recordingNow ? '' : 'none'
   }
 
   /** 须与 AnalyserNode.fftSize 一致，否则 getFloatTimeDomainData 行为未定义 */
@@ -1595,10 +1697,19 @@ async function bootstrap(): Promise<void> {
     reader.readAsDataURL(blob)
   }
 
-  const startSegmentRecording = (): void => {
-    if (!micStream || mediaRecorder?.state === 'recording') return
+  const startSegmentRecording = (): boolean => {
+    if (!micStream || mediaRecorder?.state === 'recording') return false
     micChunks = []
-    const mr = new MediaRecorder(micStream, { mimeType: 'audio/webm;codecs=opus' })
+    let mr: MediaRecorder
+    try {
+      const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : 'audio/webm'
+      mr = new MediaRecorder(micStream, { mimeType: mime })
+    } catch (e) {
+      console.warn('[liveui] MediaRecorder 创建失败:', e)
+      return false
+    }
     mediaRecorder = mr
     mr.ondataavailable = (e) => {
       if (e.data.size > 0) micChunks.push(e.data)
@@ -1606,15 +1717,46 @@ async function bootstrap(): Promise<void> {
     mr.onstop = () => {
       sendRecordedAudio()
     }
-    mr.start()
+    mr.start(250)
     console.debug('[liveui] 开始录音片段')
+    return true
   }
 
   const stopSegmentRecording = (): void => {
     if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-      mediaRecorder.stop()
+      try {
+        if (mediaRecorder.state === 'recording') mediaRecorder.requestData()
+      } catch {
+        /* ignore unsupported requestData timing */
+      }
+      try {
+        mediaRecorder.stop()
+      } catch (e) {
+        console.warn('[liveui] MediaRecorder stop 失败:', e)
+      }
       mediaRecorder = null
     }
+  }
+
+  const beginPushToTalk = (): void => {
+    if (!voiceMode || voiceMicAuto || pttRecording || !micStream) return
+    if (llmBusy && !interruptSent) {
+      interruptSent = true
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: 'INTERRUPT' }))
+      }
+      resetAudioQueue()
+    }
+    if (!startSegmentRecording()) return
+    pttRecording = true
+    updateMicBtn()
+  }
+
+  const endPushToTalk = (): void => {
+    if (!pttRecording) return
+    pttRecording = false
+    stopSegmentRecording()
+    updateMicBtn()
   }
 
   const vadLoop = (): void => {
@@ -1692,9 +1834,13 @@ async function bootstrap(): Promise<void> {
       updateMicBtn()
       if (userLineInput) {
         userLineInput.disabled = true
-        userLineInput.placeholder = '语音模式开启中…'
+        userLineInput.placeholder = voiceMicAuto
+          ? '自动语音模式开启中…'
+          : '按住空格说话，松开发送识别…'
       }
-      vadRaf = requestAnimationFrame(vadLoop)
+      if (voiceMicAuto) {
+        vadRaf = requestAnimationFrame(vadLoop)
+      }
     } catch (e) {
       console.warn('[liveui] 麦克风获取失败:', e)
     }
@@ -1703,6 +1849,8 @@ async function bootstrap(): Promise<void> {
   const exitVoiceMode = (): void => {
     voiceMode = false
     if (vadRaf) { cancelAnimationFrame(vadRaf); vadRaf = undefined }
+    pttSpaceDown = false
+    pttRecording = false
     stopSegmentRecording()
     if (micStream) {
       micStream.getTracks().forEach((t) => t.stop())
@@ -1721,6 +1869,36 @@ async function bootstrap(): Promise<void> {
       userLineInput.placeholder = ''
     }
   }
+
+  const finishPushToTalkIfNeeded = (): void => {
+    if (!voiceMode || voiceMicAuto) return
+    pttSpaceDown = false
+    endPushToTalk()
+  }
+
+  window.addEventListener('keydown', (ev) => {
+    if (!voiceMode || voiceMicAuto) return
+    if (ev.key !== ' ' && ev.code !== 'Space') return
+    if (ev.repeat || pttSpaceDown) return
+    const target = ev.target as HTMLElement | null
+    const tag = target?.tagName?.toLowerCase()
+    if (tag === 'button' || tag === 'select' || target?.isContentEditable) return
+    ev.preventDefault()
+    pttSpaceDown = true
+    beginPushToTalk()
+  }, true)
+
+  window.addEventListener('keyup', (ev) => {
+    if (!voiceMode || voiceMicAuto) return
+    if (ev.key !== ' ' && ev.code !== 'Space') return
+    ev.preventDefault()
+    finishPushToTalkIfNeeded()
+  }, true)
+
+  window.addEventListener('blur', finishPushToTalkIfNeeded)
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) finishPushToTalkIfNeeded()
+  })
 
   micBtn?.addEventListener('click', () => {
     if (!asrAvailable) return

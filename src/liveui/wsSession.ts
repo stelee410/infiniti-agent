@@ -42,6 +42,7 @@ export class LiveUiSession {
   private ttsEnabled = true
   private ttsSequence = 0
   private ttsPending: Promise<void> = Promise.resolve()
+  private ttsGeneration = 0
   private asrEngine: AsrEngine | null = null
 
   constructor(port: number) {
@@ -254,6 +255,7 @@ export class LiveUiSession {
 
   /** 通知渲染端清空音频队列（新一轮 assistant 回答开始时调用）。 */
   resetAudio(): void {
+    this.ttsGeneration++
     this.ttsSequence = 0
     this.ttsPending = Promise.resolve()
     this.broadcast({ type: 'AUDIO_RESET' })
@@ -268,10 +270,13 @@ export class LiveUiSession {
     const plain = markdownToTtsPlainText(text)
     if (!plain.trim()) return
     const engine = this.ttsEngine
+    const generation = this.ttsGeneration
     this.ttsPending = this.ttsPending.then(async () => {
       try {
+        if (generation !== this.ttsGeneration) return
         if (engine.synthesizeStream) {
           await engine.synthesizeStream(plain, async (out) => {
+            if (generation !== this.ttsGeneration) return
             if (out.data.length === 0) return
             const chunkSeq = this.ttsSequence++
             const payload: LiveUiAudioChunkMessage['data'] = {
@@ -289,6 +294,7 @@ export class LiveUiSession {
         }
         const seq = this.ttsSequence++
         const out = await engine.synthesize(plain)
+        if (generation !== this.ttsGeneration) return
         if (out.data.length === 0) return
         this.broadcast({
           type: 'AUDIO_CHUNK',

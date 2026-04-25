@@ -24,4 +24,14 @@ describe('markdownToTtsPlainText', () => {
   it('strips bare URLs', () => {
     expect(markdownToTtsPlainText('见 https://x.com/foo 结束')).toBe('见 结束')
   })
+
+  it('removes parenthetical asides before TTS', () => {
+    expect(markdownToTtsPlainText('你好（笑一下），我来了 (whisper: soft)。')).toBe('你好 ，我来了 。')
+    expect(markdownToTtsPlainText('开始（动作（内层）提示）结束')).toBe('开始 结束')
+  })
+
+  it('removes emoji and emoji sequences before TTS', () => {
+    expect(markdownToTtsPlainText('太好了 😊！我们开始吧 🚀')).toBe('太好了 ！我们开始吧')
+    expect(markdownToTtsPlainText('OK 👍🏽 family 👨‍👩‍👧‍👦 flag 🇨🇳')).toBe('OK family flag')
+  })
 })
