@@ -58,6 +58,14 @@ class TestSetupVoxcpmVenv(unittest.TestCase):
         result = self.module._resolve_venv_dir(env, Path("/repo"))
         self.assertEqual(result, Path("/repo") / "third_party" / "voxcpm-venv")
 
+    def test_should_auto_download_default_true(self) -> None:
+        self.assertTrue(self.module._should_auto_download({}))
+
+    def test_should_auto_download_skipped_when_set_to_one(self) -> None:
+        self.assertFalse(
+            self.module._should_auto_download({"VOXCPM_SKIP_MODEL_DOWNLOAD": "1"})
+        )
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

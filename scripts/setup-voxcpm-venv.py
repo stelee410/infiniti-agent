@@ -37,6 +37,11 @@ def _resolve_venv_dir(env: Mapping[str, str], root: Path) -> Path:
     return Path(env.get("VOXCPM_VENV", str(root / "third_party" / "voxcpm-venv")))
 
 
+def _should_auto_download(env: Mapping[str, str]) -> bool:
+    """venv 就绪后是否自动调用 download-voxcpm-model.py（与 .sh 行为一致）。"""
+    return env.get("VOXCPM_SKIP_MODEL_DOWNLOAD", "0") != "1"
+
+
 def main() -> int:
     root = repo_root()
     venv_dir = _resolve_venv_dir(os.environ, root)
@@ -93,10 +98,21 @@ def main() -> int:
     )
 
     print(f"venv 就绪: {venv_dir}", file=sys.stderr)
-    print(
-        f"下一步: python {root / 'scripts' / 'download-voxcpm-model.py'}",
-        file=sys.stderr,
-    )
+
+    download_py = root / "scripts" / "download-voxcpm-model.py"
+    if _should_auto_download(os.environ):
+        print(
+            "开始自动下载 VoxCPM2 权重到 models/VoxCPM2"
+            "（体积大、耗时长；仅跳过请设 VOXCPM_SKIP_MODEL_DOWNLOAD=1）…",
+            file=sys.stderr,
+        )
+        subprocess.check_call([sys.executable, str(download_py)])
+    else:
+        print(
+            f"已跳过模型下载（VOXCPM_SKIP_MODEL_DOWNLOAD=1）。"
+            f"需要时执行: python {download_py}",
+            file=sys.stderr,
+        )
     return 0
 
 

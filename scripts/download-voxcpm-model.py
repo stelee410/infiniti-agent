@@ -42,7 +42,7 @@ import os
 from huggingface_hub import snapshot_download
 dest = os.environ['DEST']
 repo = os.environ['REPO_ID']
-snapshot_download(repo_id=repo, local_dir=dest, local_dir_use_symlinks=False, max_workers=4)
+snapshot_download(repo_id=repo, local_dir=dest, max_workers=4)
 print('完成:', dest)
 """
 

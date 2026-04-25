@@ -11,6 +11,9 @@
 - VOXCPM_PYTHON     当 venv 不存在时使用的 Python 解释器
 - VOXCPM_MODEL_ID   模型 ID 或本地路径（未设时若 models/VoxCPM2 存在则自动指向）
 
+注：Apple Silicon 的 PyTorch MPS 调优（PYTORCH_MPS_HIGH_WATERMARK_RATIO / VOXCPM_OPTIMIZE）
+仅在 .sh 版本中处理；Windows 用 CUDA 或 CPU，无需对应配置。
+
 用法：
     python scripts/start-voxcpm-tts-serve.py [-- voxcpm-tts-serve 参数...]
 """
