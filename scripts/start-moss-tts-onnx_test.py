@@ -1,0 +1,77 @@
+#!/usr/bin/env python3
+"""单元测试：scripts/start-moss-tts-onnx.py（含连字符，importlib 加载）"""
+from __future__ import annotations
+
+import importlib.util
+import sys
+import unittest
+from pathlib import Path
+from types import ModuleType
+
+SCRIPTS_DIR = Path(__file__).resolve().parent
+
+
+def _load_script(name: str) -> ModuleType:
+    file_path = SCRIPTS_DIR / name
+    spec = importlib.util.spec_from_file_location(
+        name.replace("-", "_").removesuffix(".py"),
+        str(file_path),
+    )
+    if spec is None or spec.loader is None:
+        raise ImportError(f"无法加载 {file_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+class TestStartMossOnnx(unittest.TestCase):
+    module: ModuleType
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.module = _load_script("start-moss-tts-onnx.py")
+
+    def test_module_loads(self) -> None:
+        self.assertIsNotNone(self.module)
+
+    def test_main_callable(self) -> None:
+        self.assertTrue(callable(getattr(self.module, "main", None)))
+
+    def test_resolve_moss_home_uses_env_override(self) -> None:
+        env = {"MOSS_TTS_NANO_HOME": "/custom/moss"}
+        result = self.module._resolve_moss_home(env, Path("/repo"))
+        self.assertEqual(result, Path("/custom/moss"))
+
+    def test_resolve_moss_home_falls_back_to_default(self) -> None:
+        result = self.module._resolve_moss_home({}, Path("/repo"))
+        self.assertEqual(result, Path("/repo") / "third_party" / "MOSS-TTS-Nano")
+
+    def test_resolve_model_dir_uses_env_override(self) -> None:
+        env = {"MOSS_ONNX_MODEL_DIR": "/custom/models"}
+        result = self.module._resolve_model_dir(env, Path("/repo"))
+        self.assertEqual(result, Path("/custom/models"))
+
+    def test_resolve_model_dir_falls_back_to_default(self) -> None:
+        result = self.module._resolve_model_dir({}, Path("/repo"))
+        self.assertEqual(result, Path("/repo") / "models")
+
+    def test_resolve_port_default_is_18083(self) -> None:
+        self.assertEqual(self.module._resolve_port({}), 18083)
+
+    def test_resolve_port_uses_env_override(self) -> None:
+        self.assertEqual(self.module._resolve_port({"MOSS_TTS_PORT": "9999"}), 9999)
+
+    def test_resolve_skip_wetext_default_is_one(self) -> None:
+        self.assertEqual(self.module._resolve_skip_wetext({}), "1")
+
+    def test_resolve_skip_wetext_respects_existing_env(self) -> None:
+        # 已设值（即使是 "0"）也应保留
+        self.assertEqual(
+            self.module._resolve_skip_wetext({"MOSS_TTS_SKIP_WETEXT": "0"}),
+            "0",
+        )
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
