@@ -132,6 +132,10 @@ type Real2dFrameMsg = {
   type: 'REAL2D_FRAME'
   data: { sessionId?: unknown; timestampMs?: unknown; format?: unknown; frameBase64?: unknown }
 }
+type Real2dVideoMsg = {
+  type: 'REAL2D_VIDEO'
+  data: { sessionId?: unknown; url?: unknown; requestId?: unknown }
+}
 
 type SlashCompletionMsg = {
   type: 'SLASH_COMPLETION'
@@ -206,6 +210,7 @@ type Msg =
   | AsrResultMsg
   | Real2dStatusMsg
   | Real2dFrameMsg
+  | Real2dVideoMsg
   | SlashCompletionMsg
   | ConfigOpenMsg
   | ConfigStatusMsg
@@ -347,6 +352,7 @@ async function bootstrap(): Promise<void> {
 
   let liveModel: InstanceType<typeof Live2DModel> | null = null
   let real2dFrameSprite: PIXI.Sprite | null = null
+  let real2dVideoEl: HTMLVideoElement | null = null
   /** PNG 表情精灵（`spriteExpressions.dir`）；与 Live2D 二选一，由预加载环境变量决定 */
   let expressionSprite: PIXI.Sprite | null = null
   /** `file:` 基址，含尾斜杠，用于 `new URL('exp_XX.png', base)` */
@@ -883,6 +889,35 @@ async function bootstrap(): Promise<void> {
         layoutFigureInStage()
       })
       .catch((e) => console.warn('[liveui] real2d frame 加载失败', e))
+  }
+
+  const applyReal2dVideo = (url: unknown): void => {
+    if (typeof url !== 'string' || !url.trim()) return
+    if (!real2dVideoEl) {
+      const v = document.createElement('video')
+      real2dVideoEl = v
+      v.autoplay = true
+      v.loop = false
+      v.muted = false
+      v.playsInline = true
+      v.style.position = 'fixed'
+      v.style.left = '50%'
+      v.style.top = '48%'
+      v.style.transform = 'translate(-50%, -50%)'
+      v.style.maxWidth = '72vw'
+      v.style.maxHeight = '72vh'
+      v.style.objectFit = 'contain'
+      v.style.zIndex = '6'
+      v.style.pointerEvents = 'none'
+      document.body.appendChild(v)
+    }
+    if (real2dFrameSprite) {
+      app.stage.removeChild(real2dFrameSprite)
+      real2dFrameSprite.destroy({ children: true, texture: true })
+      real2dFrameSprite = null
+    }
+    real2dVideoEl.src = url
+    void real2dVideoEl.play().catch((e) => console.warn('[liveui] real2d video 播放失败', e))
   }
 
   const delay = (ms: number): Promise<void> => new Promise((resolve) => window.setTimeout(resolve, ms))
@@ -2120,6 +2155,8 @@ async function bootstrap(): Promise<void> {
       }
     } else if (msg.type === 'REAL2D_FRAME') {
       applyReal2dFrame(msg.data?.format, msg.data?.frameBase64)
+    } else if (msg.type === 'REAL2D_VIDEO') {
+      applyReal2dVideo(msg.data?.url)
     } else if (msg.type === 'SLASH_COMPLETION') {
       const open = !!msg.data?.open
       const raw = msg.data?.items

@@ -80,8 +80,8 @@ function buildLiveUiReal2dEnvJson(cfg: Awaited<ReturnType<typeof loadConfig>>): 
     fal: r.fal
       ? {
           keyEnv: r.fal.keyEnv ?? 'FAL_KEY',
-          mode: r.fal.mode ?? 'live-portrait',
-          model: r.fal.model ?? 'fal-ai/live-portrait',
+          mode: r.fal.mode ?? 'ai-avatar',
+          model: r.fal.model ?? 'fal-ai/ai-avatar',
           imageModel: r.fal.imageModel ?? 'fal-ai/live-portrait/image',
           lipsyncModel: r.fal.lipsyncModel ?? 'creatify/lipsync',
           drivingVideoUrl: r.fal.drivingVideoUrl,
@@ -178,6 +178,15 @@ async function configureLiveUiEngines(
   const real2d = cfg.liveUi?.real2d
   const wantsReal2d = cfg.liveUi?.renderer === 'real2d' || real2d?.enabled === true
   if (wantsReal2d && real2d?.enabled !== false) {
+    if ((real2d?.backend ?? 'local') === 'fal') {
+      liveUi.setReal2dFalRenderer({
+        backend: 'fal',
+        sourceImage: real2d?.sourceImage ? resolve(cwd, real2d.sourceImage) : undefined,
+        fal: buildReal2dFalStartConfig(real2d?.fal),
+      })
+      console.error(`[liveui] real2d fal 已配置 (model: ${real2d?.fal?.model ?? 'fal-ai/ai-avatar'})`)
+      return
+    }
     const client = new Real2dClient({
       baseUrl: real2d?.baseUrl,
       timeoutMs: real2d?.timeoutMs,
@@ -200,8 +209,8 @@ function buildReal2dFalStartConfig(fal?: LiveUiReal2dFalConfig): Real2dFalConfig
   return {
     apiKey: fal.apiKey,
     keyEnv: fal.keyEnv ?? 'FAL_KEY',
-    mode: fal.mode ?? 'live-portrait',
-    model: fal.model ?? 'fal-ai/live-portrait',
+    mode: fal.mode ?? 'ai-avatar',
+    model: fal.model ?? 'fal-ai/ai-avatar',
     imageModel: fal.imageModel ?? 'fal-ai/live-portrait/image',
     lipsyncModel: fal.lipsyncModel ?? 'creatify/lipsync',
     drivingVideoUrl: fal.drivingVideoUrl,
@@ -213,9 +222,9 @@ function buildReal2dFalStartConfig(fal?: LiveUiReal2dFalConfig): Real2dFalConfig
   }
 }
 
-function normalizeFalOptions(options?: LiveUiReal2dFalConfig['options']): Record<string, number | boolean> | undefined {
+function normalizeFalOptions(options?: LiveUiReal2dFalConfig['options']): Record<string, number | boolean | string> | undefined {
   if (!options) return undefined
-  const out: Record<string, number | boolean> = {}
+  const out: Record<string, number | boolean | string> = {}
   const map: Record<string, string> = {
     pupilX: 'pupil_x',
     pupilY: 'pupil_y',
@@ -236,7 +245,7 @@ function normalizeFalOptions(options?: LiveUiReal2dFalConfig['options']): Record
     enableSafetyChecker: 'enable_safety_checker',
   }
   for (const [k, v] of Object.entries(options)) {
-    if (typeof v === 'number' || typeof v === 'boolean') out[map[k] ?? k] = v
+    if (typeof v === 'number' || typeof v === 'boolean' || typeof v === 'string') out[map[k] ?? k] = v
   }
   return Object.keys(out).length ? out : undefined
 }

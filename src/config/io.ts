@@ -292,7 +292,7 @@ function parseLiveUiReal2dFalConfig(raw: unknown): NonNullable<LiveUiConfig['rea
   const out: NonNullable<NonNullable<LiveUiConfig['real2d']>['fal']> = {}
   if (typeof u.apiKey === 'string' && u.apiKey.trim()) out.apiKey = u.apiKey.trim()
   if (typeof u.keyEnv === 'string' && u.keyEnv.trim()) out.keyEnv = u.keyEnv.trim()
-  if (u.mode === 'live-portrait' || u.mode === 'live-portrait-image' || u.mode === 'lipsync-video') {
+  if (u.mode === 'ai-avatar' || u.mode === 'live-portrait' || u.mode === 'live-portrait-image' || u.mode === 'lipsync-video') {
     out.mode = u.mode
   }
   if (typeof u.model === 'string' && u.model.trim()) out.model = u.model.trim()
@@ -338,6 +338,8 @@ function parseLiveUiReal2dFalOptions(
     vxRatio: 'vxRatio',
     vyRatio: 'vyRatio',
     batchSize: 'batchSize',
+    numFrames: 'numFrames',
+    seed: 'seed',
   } as const
   for (const [src, dest] of Object.entries(numbers)) {
     const v = u[src]
@@ -361,6 +363,11 @@ function parseLiveUiReal2dFalOptions(
     if (typeof v === 'boolean') {
       ;(out as Record<string, boolean>)[dest] = v
     }
+  }
+  if (typeof u.prompt === 'string' && u.prompt.trim()) out.prompt = u.prompt.trim()
+  if (u.resolution === '480p' || u.resolution === '720p') out.resolution = u.resolution
+  if (u.acceleration === 'none' || u.acceleration === 'regular' || u.acceleration === 'high') {
+    out.acceleration = u.acceleration
   }
   return Object.keys(out).length ? out : undefined
 }

@@ -19,7 +19,8 @@ import { markdownToTtsPlainText } from '../tts/markdownToTtsPlainText.js'
 import type { AsrEngine } from '../asr/whisperAsr.js'
 import { captureVisionSnapshotResult } from './visionCapture.js'
 import { Real2dClient } from '../real2d/client.js'
-import type { Real2dParamVector } from '../real2d/protocol.js'
+import { renderFalAiAvatar } from '../real2d/falClient.js'
+import type { Real2dFalConfig, Real2dParamVector } from '../real2d/protocol.js'
 
 type Real2dBridgeOptions = {
   backend?: 'local' | 'fal'
@@ -80,6 +81,9 @@ export class LiveUiSession {
   private pendingVisionAttachment: LiveUiVisionAttachment | undefined
   private pendingFileAttachments: LiveUiFileAttachment[] = []
   private real2dClient: Real2dClient | null = null
+  private real2dBackend: 'local' | 'fal' = 'local'
+  private real2dSourceImage: string | undefined
+  private real2dFal: Real2dFalConfig | undefined
   private real2dSessionId = `live-${Date.now().toString(36)}`
   private real2dParams: Real2dParamVector = { ...DEFAULT_REAL2D_EMOTIONS.neutral }
   private real2dEmotion = 'neutral'
@@ -116,6 +120,9 @@ export class LiveUiSession {
       void old.stopSession(this.real2dSessionId).catch(() => {})
     }
     this.real2dClient = client
+    this.real2dBackend = opts.backend ?? 'local'
+    this.real2dSourceImage = opts.sourceImage
+    this.real2dFal = opts.fal
     this.real2dParams = { ...DEFAULT_REAL2D_EMOTIONS.neutral }
     this.real2dEmotion = 'neutral'
     this.lastReal2dMouthAt = 0
@@ -128,6 +135,20 @@ export class LiveUiSession {
       return
     }
     void this.startReal2d(client, opts)
+  }
+
+  setReal2dFalRenderer(opts: Real2dBridgeOptions = {}): void {
+    if (this.real2dClient) {
+      void this.real2dClient.stopSession(this.real2dSessionId).catch(() => {})
+    }
+    this.real2dClient = null
+    this.real2dBackend = 'fal'
+    this.real2dSourceImage = opts.sourceImage
+    this.real2dFal = opts.fal
+    this.broadcast({
+      type: 'REAL2D_STATUS',
+      data: { ready: !!this.real2dFal, backend: 'fal-ai/ai-avatar', message: this.real2dFal ? undefined : 'fal config missing' },
+    } as LiveUiMessage)
   }
 
   private async startReal2d(client: Real2dClient, opts: Real2dBridgeOptions): Promise<void> {
@@ -517,11 +538,19 @@ export class LiveUiSession {
         if (engine.synthesizeStream) {
           let chunks = 0
           let bytes = 0
+          const audioParts: Buffer[] = []
+          let audioFormat: 'mp3' | 'wav' | 'pcm_s16le' | undefined
+          let audioSampleRate = 24000
+          let audioChannels = 1
           await engine.synthesizeStream(plain, async (out) => {
             if (generation !== this.ttsGeneration) return
             if (out.data.length === 0) return
             chunks += 1
             bytes += out.data.length
+            audioParts.push(out.data)
+            audioFormat = out.format
+            audioSampleRate = out.sampleRate
+            audioChannels = out.channels ?? 1
             if (chunks === 1) {
               console.error(
                 `[liveui] TTS 首包: ${out.format}, ${out.sampleRate}Hz, ${out.channels ?? 1}ch, ${out.data.length} bytes`,
@@ -549,6 +578,9 @@ export class LiveUiSession {
             })
           })
           console.error(`[liveui] TTS 完成: ${chunks} chunks, ${bytes} bytes`)
+          if (generation === this.ttsGeneration && audioParts.length && audioFormat) {
+            this.renderReal2dFalVideo(plain, Buffer.concat(audioParts), audioFormat, audioSampleRate, audioChannels)
+          }
           return
         }
         const seq = this.ttsSequence++
@@ -574,6 +606,7 @@ export class LiveUiSession {
           sequence: seq,
           channels: 1,
         })
+        this.renderReal2dFalVideo(plain, out.data, out.format, out.sampleRate, 1)
       } catch (e) {
         console.warn(`[liveui] TTS 合成失败: ${(e as Error).message}`)
         if (process.env.INFINITI_AGENT_DEBUG === '1') {
@@ -710,6 +743,45 @@ export class LiveUiSession {
   private sendReal2dAudio(chunk: Parameters<Real2dClient['sendAudio']>[0]): void {
     if (!this.real2dClient) return
     void this.real2dClient.sendAudio(chunk).catch(() => {})
+  }
+
+  private renderReal2dFalVideo(
+    text: string,
+    audio: Buffer,
+    audioFormat: 'mp3' | 'wav' | 'pcm_s16le',
+    sampleRate: number,
+    channels: number,
+  ): void {
+    if (this.real2dBackend !== 'fal' || !this.real2dFal) return
+    const generation = this.ttsGeneration
+    this.broadcast({
+      type: 'REAL2D_STATUS',
+      data: { ready: true, backend: this.real2dFal.model ?? 'fal-ai/ai-avatar', message: 'fal render started' },
+    } as LiveUiMessage)
+    void renderFalAiAvatar({
+      sourceImagePath: this.real2dSourceImage,
+      audio,
+      audioFormat,
+      sampleRate,
+      channels,
+      text,
+      fal: this.real2dFal,
+    }).then((result) => {
+      if (generation !== this.ttsGeneration) return
+      this.broadcast({
+        type: 'REAL2D_VIDEO',
+        data: { sessionId: this.real2dSessionId, url: result.videoUrl, requestId: result.requestId },
+      } as LiveUiMessage)
+      this.broadcast({
+        type: 'REAL2D_STATUS',
+        data: { ready: true, backend: this.real2dFal?.model ?? 'fal-ai/ai-avatar', message: 'fal render complete' },
+      } as LiveUiMessage)
+    }).catch((e) => {
+      this.broadcast({
+        type: 'REAL2D_STATUS',
+        data: { ready: false, backend: this.real2dFal?.model ?? 'fal-ai/ai-avatar', message: (e as Error).message },
+      } as LiveUiMessage)
+    })
   }
 
   async dispose(): Promise<void> {

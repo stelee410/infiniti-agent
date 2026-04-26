@@ -7,7 +7,7 @@ export type Real2dBackend = 'local' | 'fal'
 export type Real2dFalConfig = {
   apiKey?: string
   keyEnv?: string
-  mode?: 'live-portrait' | 'live-portrait-image' | 'lipsync-video'
+  mode?: 'ai-avatar' | 'live-portrait' | 'live-portrait-image' | 'lipsync-video'
   model?: string
   imageModel?: string
   lipsyncModel?: string
@@ -16,7 +16,7 @@ export type Real2dFalConfig = {
   audioUrl?: string
   pollIntervalMs?: number
   requestTimeoutMs?: number
-  options?: Record<string, number | boolean>
+  options?: Record<string, number | boolean | string>
 }
 
 export type Real2dParamVector = {

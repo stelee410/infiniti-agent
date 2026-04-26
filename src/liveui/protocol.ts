@@ -131,6 +131,15 @@ export type LiveUiReal2dFrameMessage = {
   }
 }
 
+export type LiveUiReal2dVideoMessage = {
+  type: 'REAL2D_VIDEO'
+  data: {
+    sessionId: string
+    url: string
+    requestId?: string
+  }
+}
+
 export type LiveUiVisionAttachment = {
   imageBase64: string
   mediaType: 'image/jpeg' | 'image/png' | 'image/webp'
@@ -218,6 +227,7 @@ export type LiveUiMessage =
   | LiveUiConfigStatusMessage
   | LiveUiReal2dStatusMessage
   | LiveUiReal2dFrameMessage
+  | LiveUiReal2dVideoMessage
   | LiveUiVisionCaptureResultMessage
   | LiveUiVisionAttachmentClearMessage
   | LiveUiAttachmentClearMessage
@@ -292,6 +302,12 @@ export function isLiveUiMessage(x: unknown): x is LiveUiMessage {
       (dd.format === 'jpeg' || dd.format === 'webp' || dd.format === 'png' || dd.format === 'raw') &&
       typeof dd.frameBase64 === 'string'
     )
+  }
+  if (o.type === 'REAL2D_VIDEO') {
+    const d = (x as { data?: unknown }).data
+    if (!d || typeof d !== 'object') return false
+    const dd = d as { sessionId?: unknown; url?: unknown }
+    return typeof dd.sessionId === 'string' && typeof dd.url === 'string'
   }
   if (o.type === 'AUDIO_RESET' || o.type === 'INTERRUPT' || o.type === 'VISION_ATTACHMENT_CLEAR' || o.type === 'ATTACHMENT_CLEAR') return true
   if (o.type === 'INBOX_UPDATE') {

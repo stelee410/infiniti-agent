@@ -78,7 +78,7 @@ export type LiveUiRenderer = 'live2d' | 'sprite' | 'real2d'
 
 export type LiveUiReal2dBackend = 'local' | 'fal'
 
-export type LiveUiReal2dFalMode = 'live-portrait' | 'live-portrait-image' | 'lipsync-video'
+export type LiveUiReal2dFalMode = 'ai-avatar' | 'live-portrait' | 'live-portrait-image' | 'lipsync-video'
 
 export type LiveUiReal2dFalConfig = {
   /**
@@ -87,9 +87,9 @@ export type LiveUiReal2dFalConfig = {
   apiKey?: string
   /** fal.ai API key 环境变量名，默认 FAL_KEY。 */
   keyEnv?: string
-  /** 生成策略：默认 live-portrait，即 image_url + driving video_url -> video。 */
+  /** 生成策略：默认 ai-avatar，即 image_url + audio_url + prompt -> video。 */
   mode?: LiveUiReal2dFalMode
-  /** fal model id，默认 fal-ai/live-portrait。 */
+  /** fal model id，默认 fal-ai/ai-avatar。 */
   model?: string
   /** 可选备用 image endpoint，默认 fal-ai/live-portrait/image。 */
   imageModel?: string
@@ -133,6 +133,11 @@ export type LiveUiReal2dFalConfig = {
     vyRatio?: number
     batchSize?: number
     enableSafetyChecker?: boolean
+    prompt?: string
+    numFrames?: number
+    resolution?: '480p' | '720p'
+    seed?: number
+    acceleration?: 'none' | 'regular' | 'high'
   }
 }
 
