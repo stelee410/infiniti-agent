@@ -24,7 +24,7 @@ export const FIGURE_LAYOUT = {
    * 包围盒底边最多只能到「控制条上沿 − 该像素」，避免鞋踩进输入区。
    * 气泡可见时：脚站在气泡上，但不能压过控制条。
    */
-  footClearOfControlBarPx: 10,
+  footClearOfControlBarPx: 0,
 
   /**
    * 多行输入增高时控制条整体上移，soleCeiling 会过小导致人物被「顶」到屏外。

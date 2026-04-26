@@ -1,0 +1,486 @@
+type JsonObj = Record<string, any>
+
+type ConfigPanelOptions = {
+  socket: WebSocket
+  onOpenChange?: (open: boolean) => void
+}
+
+const tabs = [
+  ['llm', 'LLM'],
+  ['liveUi', 'LiveUI'],
+  ['tts', 'TTS'],
+  ['asr', 'ASR'],
+  ['avatarGen', 'AvatarGen'],
+  ['snap', 'Snap'],
+] as const
+
+const llmProviders = ['anthropic', 'openai', 'gemini', 'minimax', 'openrouter']
+const ttsProviders = ['', 'voxcpm', 'moss_tts_nano', 'minimax', 'whisper']
+
+function cloneConfig(v: unknown): JsonObj {
+  try {
+    return JSON.parse(JSON.stringify(v ?? {}))
+  } catch {
+    return {}
+  }
+}
+
+function text(v: unknown): string {
+  return typeof v === 'string' ? v : ''
+}
+
+function num(v: unknown, fallback = ''): string {
+  return typeof v === 'number' && Number.isFinite(v) ? String(v) : fallback
+}
+
+function el<K extends keyof HTMLElementTagNameMap>(
+  tag: K,
+  attrs: Record<string, string> = {},
+  children: Array<Node | string> = [],
+): HTMLElementTagNameMap[K] {
+  const node = document.createElement(tag)
+  for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v)
+  for (const child of children) node.append(child)
+  return node
+}
+
+function field(label: string, input: HTMLElement, span2 = false): HTMLDivElement {
+  return el('div', { class: `config-field${span2 ? ' config-span-2' : ''}` }, [
+    el('label', {}, [label]),
+    input,
+  ])
+}
+
+function input(value: string, onInput: (v: string) => void, type = 'text'): HTMLInputElement {
+  const n = el('input') as HTMLInputElement
+  n.type = type
+  n.value = value
+  n.addEventListener('input', () => onInput(n.value))
+  return n
+}
+
+function commitInput(value: string, onCommit: (v: string) => void, type = 'text'): HTMLInputElement {
+  const n = el('input') as HTMLInputElement
+  n.type = type
+  n.value = value
+  n.addEventListener('change', () => onCommit(n.value))
+  return n
+}
+
+function select(value: string, options: Array<[string, string]>, onChange: (v: string) => void): HTMLSelectElement {
+  const n = el('select') as HTMLSelectElement
+  for (const [v, label] of options) {
+    const opt = el('option') as HTMLOptionElement
+    opt.value = v
+    opt.textContent = label
+    n.append(opt)
+  }
+  n.value = value
+  n.addEventListener('change', () => onChange(n.value))
+  return n
+}
+
+function button(label: string, onClick: () => void, primary = false): HTMLButtonElement {
+  const b = el('button', { type: 'button', class: `config-btn${primary ? ' config-btn--primary' : ''}` }, [label]) as HTMLButtonElement
+  b.addEventListener('click', onClick)
+  return b
+}
+
+async function pickPath(kind: 'file' | 'directory', defaultPath?: string): Promise<string | null> {
+  return window.infinitiLiveUi?.selectPath?.({ kind, defaultPath }) ?? null
+}
+
+function ensureLlmProfiles(cfg: JsonObj): Record<string, JsonObj> {
+  cfg.llm ??= {}
+  if (!cfg.llm.profiles || typeof cfg.llm.profiles !== 'object') {
+    cfg.llm.profiles = {
+      main: {
+        provider: cfg.llm.provider || 'openai',
+        baseUrl: cfg.llm.baseUrl || '',
+        model: cfg.llm.model || '',
+        apiKey: cfg.llm.apiKey || '',
+        ...(cfg.llm.disableTools !== undefined ? { disableTools: !!cfg.llm.disableTools } : {}),
+      },
+    }
+    cfg.llm.default = cfg.llm.default || 'main'
+  }
+  return cfg.llm.profiles
+}
+
+function inferSharedModelsDir(cwd: string): string {
+  const m = cwd.match(/^\/Users\/[^/]+\/Dev(?:\/|$)/)
+  if (m) return `${m[0].replace(/\/$/, '')}/models`
+  return `${cwd.replace(/\/+$/, '')}/models`
+}
+
+function ensureDefaultConfigNodes(cfg: JsonObj, cwd: string): void {
+  cfg.version = 1
+  cfg.mcp ??= { servers: {} }
+  cfg.compaction ??= { autoThresholdTokens: 30000 }
+  cfg.liveUi ??= {}
+  cfg.liveUi.port ??= 8080
+  cfg.liveUi.ttsAutoEnabled ??= true
+  cfg.liveUi.asrAutoEnabled ??= false
+  cfg.liveUi.asrMode ??= 'manual'
+  cfg.liveUi.live2dModelsDir ??= './live2d-models'
+  cfg.liveUi.live2dModelDict ??= './model_dict.json'
+  cfg.liveUi.live2dModelName ??= 'mao_pro'
+  cfg.liveUi.voiceMicSpeechRmsThreshold ??= 0.03
+  cfg.liveUi.voiceMicSilenceEndMs ??= 1500
+  cfg.liveUi.voiceMicSuppressInterruptDuringTts ??= true
+
+  cfg.tts ??= {
+    provider: 'voxcpm',
+    baseUrl: 'http://127.0.0.1:8810',
+    controlInstruction: '年轻女性，温柔自然，语速适中',
+    cfgValue: 2,
+    inferenceTimesteps: 20,
+    normalize: true,
+    denoise: true,
+    timeoutMs: 300000,
+  }
+
+  const modelsDir = inferSharedModelsDir(cwd)
+  const senseVoiceDir = `${modelsDir}/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17`
+  cfg.asr ??= {
+    provider: 'sherpa_onnx',
+    model: `${senseVoiceDir}/model.int8.onnx`,
+    tokens: `${senseVoiceDir}/tokens.txt`,
+    lang: 'auto',
+    numThreads: 4,
+  }
+
+  cfg.avatarGen ??= {
+    provider: 'gemini',
+    baseUrl: 'https://openrouter.ai/api/v1',
+    model: 'google/gemini-3-pro-image-preview',
+    aspectRatio: '2:3',
+  }
+  cfg.snap ??= {
+    provider: 'nano-banana',
+    baseUrl: 'https://openrouter.ai/api/v1',
+    model: 'google/gemini-3-pro-image-preview',
+    aspectRatio: '4:3',
+    imageSize: '',
+    quality: 'auto',
+    timeoutMs: 120000,
+  }
+}
+
+function syncFlatLlm(cfg: JsonObj): void {
+  const profiles = ensureLlmProfiles(cfg)
+  const names = Object.keys(profiles)
+  if (!names.includes(cfg.llm.default)) cfg.llm.default = names[0] || 'main'
+  const p = profiles[cfg.llm.default]
+  if (!p) return
+  cfg.llm.provider = p.provider
+  cfg.llm.baseUrl = p.baseUrl
+  cfg.llm.model = p.model
+  cfg.llm.apiKey = p.apiKey
+  if (p.disableTools !== undefined) cfg.llm.disableTools = !!p.disableTools
+}
+
+export function initConfigPanel(opts: ConfigPanelOptions): {
+  open: (cwd: string, config: unknown) => void
+  close: () => void
+  setStatus: (ok: boolean, message: string) => void
+} {
+  const panel = document.getElementById('liveui-config-panel') as HTMLDivElement | null
+  const tabsEl = document.getElementById('liveui-config-tabs') as HTMLElement | null
+  const content = document.getElementById('liveui-config-content') as HTMLElement | null
+  const pathEl = document.getElementById('liveui-config-path') as HTMLElement | null
+  const statusEl = document.getElementById('liveui-config-status') as HTMLElement | null
+  const closeBtn = document.getElementById('liveui-config-close') as HTMLButtonElement | null
+  const saveBtn = document.getElementById('liveui-config-save') as HTMLButtonElement | null
+
+  let cfg: JsonObj = {}
+  let cwd = ''
+  let active = 'llm'
+
+  const setStatus = (ok: boolean, message: string): void => {
+    if (!statusEl) return
+    statusEl.textContent = message
+    statusEl.className = ok ? 'ok' : 'err'
+  }
+
+  const close = (): void => {
+    if (!panel) return
+    panel.hidden = true
+    panel.setAttribute('aria-hidden', 'true')
+    opts.onOpenChange?.(false)
+  }
+
+  const open = (nextCwd: string, config: unknown): void => {
+    cfg = cloneConfig(config)
+    cwd = nextCwd
+    ensureDefaultConfigNodes(cfg, cwd)
+    active = 'llm'
+    if (pathEl) pathEl.textContent = `${cwd}/.infiniti-agent/config.json`
+    setStatus(true, '')
+    render()
+    if (!panel) return
+    panel.hidden = false
+    panel.setAttribute('aria-hidden', 'false')
+    opts.onOpenChange?.(true)
+  }
+
+  const rerender = (): void => render()
+
+  const renderTabs = (): void => {
+    if (!tabsEl) return
+    tabsEl.replaceChildren()
+    for (const [id, label] of tabs) {
+      const b = el('button', {
+        type: 'button',
+        class: `config-tab${active === id ? ' config-tab--active' : ''}`,
+      }, [label]) as HTMLButtonElement
+      b.addEventListener('pointerdown', (ev) => {
+        ev.preventDefault()
+        active = id
+        render()
+      })
+      tabsEl.append(b)
+    }
+  }
+
+  const render = (): void => {
+    renderTabs()
+    if (!content) return
+    content.replaceChildren()
+    if (active === 'llm') renderLlm(content)
+    else if (active === 'liveUi') renderLiveUi(content)
+    else if (active === 'tts') renderTts(content)
+    else if (active === 'asr') renderAsr(content)
+    else if (active === 'avatarGen') renderAvatarGen(content)
+    else renderSnap(content)
+  }
+
+  const renderLlm = (root: HTMLElement): void => {
+    const section = el('section', { class: 'config-section config-section--active' })
+    cfg.llm ??= {}
+    const profiles = ensureLlmProfiles(cfg)
+    const names = Object.keys(profiles)
+    const defaultSelect = select(String(cfg.llm.default || names[0] || 'main'), names.map((n) => [n, n]), (v) => {
+      cfg.llm.default = v
+      syncFlatLlm(cfg)
+      rerender()
+    })
+    section.append(field('当前使用的 provider profile', defaultSelect))
+    const list = el('div', { class: 'config-list config-span-2' })
+    for (const name of Object.keys(profiles)) {
+      const p = profiles[name]
+      const card = el('div', { class: 'config-card config-grid' })
+      card.append(
+        field('名称', commitInput(name, (v) => {
+          const next = v.trim()
+          if (!next || next === name || profiles[next]) return
+          profiles[next] = profiles[name]
+          delete profiles[name]
+          if (cfg.llm.default === name) cfg.llm.default = next
+          rerender()
+        })),
+        field('Provider', select(String(p.provider || 'openai'), llmProviders.map((x) => [x, x]), (v) => { p.provider = v; syncFlatLlm(cfg) })),
+        field('Base URL', input(text(p.baseUrl), (v) => { p.baseUrl = v; syncFlatLlm(cfg) })),
+        field('Model', input(text(p.model), (v) => { p.model = v; syncFlatLlm(cfg) })),
+        field('API Key', input(text(p.apiKey), (v) => { p.apiKey = v; syncFlatLlm(cfg) }, 'password')),
+        field('Disable tools', select(p.disableTools ? 'true' : 'false', [['false', '否'], ['true', '是']], (v) => { p.disableTools = v === 'true'; syncFlatLlm(cfg) })),
+      )
+      const del = button('删除', () => {
+        if (Object.keys(profiles).length <= 1) {
+          setStatus(false, '至少保留一个 LLM provider')
+          return
+        }
+        delete profiles[name]
+        if (cfg.llm.default === name) cfg.llm.default = Object.keys(profiles)[0]
+        syncFlatLlm(cfg)
+        rerender()
+      })
+      card.append(el('div', { class: 'config-row config-span-2' }, [del]))
+      list.append(card)
+    }
+    section.append(list)
+    section.append(button('添加 LLM provider', () => {
+      let i = Object.keys(profiles).length + 1
+      while (profiles[`provider${i}`]) i++
+      profiles[`provider${i}`] = { provider: 'openai', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4.1-mini', apiKey: '' }
+      rerender()
+    }))
+    root.append(section)
+  }
+
+  const pathField = (label: string, value: string, kind: 'file' | 'directory', set: (v: string) => void): HTMLDivElement => {
+    const n = input(value, set)
+    return field(label, el('div', { class: 'config-row' }, [
+      n,
+      button('...', () => void pickPath(kind, n.value.trim() || undefined).then((p) => {
+        if (!p) return
+        n.value = p
+        set(p)
+      })),
+    ]), true)
+  }
+
+  const renderLiveUi = (root: HTMLElement): void => {
+    cfg.liveUi ??= {}
+    const l = cfg.liveUi
+    const mode = l.spriteExpressions?.dir ? 'sprite' : 'live2d'
+    const section = el('section', { class: 'config-section config-section--active' })
+    const grid = el('div', { class: 'config-grid' })
+    grid.append(
+      field('TTS 自动', select(l.ttsAutoEnabled === false ? 'false' : 'true', [['true', '开启'], ['false', '关闭']], (v) => { l.ttsAutoEnabled = v === 'true' })),
+      field('ASR 自动', select(l.asrAutoEnabled ? 'true' : 'false', [['false', '关闭'], ['true', '开启']], (v) => { l.asrAutoEnabled = v === 'true' })),
+      field('ASR 模式', select(text(l.asrMode || 'manual'), [['manual', '手动识别'], ['auto', '自动识别']], (v) => { l.asrMode = v })),
+      field('角色渲染方式', select(mode, [['live2d', 'Live2D model3'], ['sprite', 'spriteExpressions']], (v) => {
+        if (v === 'sprite') l.spriteExpressions ??= {}
+        else delete l.spriteExpressions
+        rerender()
+      })),
+      field('voiceMicSpeechRmsThreshold', input(num(l.voiceMicSpeechRmsThreshold, '0.0195'), (v) => { l.voiceMicSpeechRmsThreshold = Number(v) }, 'number')),
+    )
+    if (mode === 'sprite') {
+      l.spriteExpressions ??= {}
+      grid.append(pathField('spriteExpressions 目录', text(l.spriteExpressions.dir), 'directory', (v) => { l.spriteExpressions.dir = v }))
+      grid.append(pathField('expressions.json（可选）', text(l.spriteExpressions.manifest), 'file', (v) => { l.spriteExpressions.manifest = v }))
+    } else {
+      grid.append(pathField('Live2D model3.json', text(l.live2dModel3Json), 'file', (v) => { l.live2dModel3Json = v }))
+      grid.append(pathField('model_dict.json（可选）', text(l.live2dModelDict), 'file', (v) => { l.live2dModelDict = v }))
+    }
+    section.append(grid)
+    root.append(section)
+  }
+
+  const renderTts = (root: HTMLElement): void => {
+    cfg.tts ??= {}
+    const t = cfg.tts
+    const provider = text(t.provider)
+    const section = el('section', { class: 'config-section config-section--active' })
+    const grid = el('div', { class: 'config-grid' })
+    grid.append(field('Provider', select(provider, ttsProviders.map((x) => [x, x || '未启用']), (v) => {
+      cfg.tts = v ? { provider: v } : undefined
+      rerender()
+    })))
+    if (provider === 'minimax') {
+      grid.append(
+        field('API Key', input(text(t.apiKey), (v) => { t.apiKey = v }, 'password')),
+        field('Group ID', input(text(t.groupId), (v) => { t.groupId = v })),
+        field('Model', input(text(t.model || 'speech-02-turbo'), (v) => { t.model = v })),
+        field('Voice ID', input(text(t.voiceId || 'female-shaonv'), (v) => { t.voiceId = v })),
+        field('Speed', input(num(t.speed, '1'), (v) => { t.speed = Number(v) }, 'number')),
+        field('刷新声音列表', button('刷新/显示常用声音', () => setStatus(true, '常用声音: female-shaonv, male-qn-qingse, female-tianmei, male-qn-jingying'))),
+      )
+    } else if (provider === 'whisper') {
+      grid.append(
+        field('Base URL', input(text(t.baseUrl), (v) => { t.baseUrl = v })),
+        field('API Key', input(text(t.apiKey), (v) => { t.apiKey = v }, 'password')),
+        field('Model', input(text(t.model), (v) => { t.model = v })),
+        field('Voice ID', input(text(t.voiceId), (v) => { t.voiceId = v })),
+        field('刷新声音列表', button('刷新/显示常用声音', () => setStatus(true, '常用声音: alloy, verse, aria, coral, sage'))),
+      )
+    } else if (provider === 'moss_tts_nano') {
+      grid.append(
+        field('Base URL', input(text(t.baseUrl || 'http://127.0.0.1:18083'), (v) => { t.baseUrl = v })),
+        field('Demo ID', input(text(t.demoId), (v) => { t.demoId = v })),
+        pathField('Prompt Audio', text(t.promptAudioPath), 'file', (v) => { t.promptAudioPath = v }),
+      )
+    } else if (provider === 'voxcpm') {
+      grid.append(
+        field('Base URL', input(text(t.baseUrl || 'http://127.0.0.1:8810'), (v) => { t.baseUrl = v })),
+        field('Control Instruction', input(text(t.controlInstruction), (v) => { t.controlInstruction = v })),
+        pathField('Reference Audio', text(t.referenceAudioPath), 'file', (v) => { t.referenceAudioPath = v }),
+      )
+    }
+    section.append(grid)
+    root.append(section)
+  }
+
+  const renderAsr = (root: HTMLElement): void => {
+    cfg.asr ??= { provider: 'sherpa_onnx' }
+    const a = cfg.asr
+    const provider = text(a.provider || 'sherpa_onnx')
+    const section = el('section', { class: 'config-section config-section--active' })
+    const grid = el('div', { class: 'config-grid' })
+    grid.append(field('Provider', select(provider, [['sherpa_onnx', 'sherpa_onnx'], ['whisper', 'whisper']], (v) => {
+      cfg.asr = v === 'whisper' ? { provider: 'whisper' } : { provider: 'sherpa_onnx' }
+      rerender()
+    })))
+    if (provider === 'whisper') {
+      grid.append(
+        field('Base URL', input(text(a.baseUrl), (v) => { a.baseUrl = v })),
+        field('API Key', input(text(a.apiKey), (v) => { a.apiKey = v }, 'password')),
+        field('Model', input(text(a.model), (v) => { a.model = v })),
+        field('Language', input(text(a.lang || 'zh'), (v) => { a.lang = v })),
+      )
+    } else {
+      grid.append(
+        pathField('模型 .onnx', text(a.model), 'file', (v) => { a.model = v }),
+        pathField('tokens.txt', text(a.tokens), 'file', (v) => { a.tokens = v }),
+        field('Language', input(text(a.lang || 'zh'), (v) => { a.lang = v })),
+        field('Threads', input(num(a.numThreads, '4'), (v) => { a.numThreads = Number(v) }, 'number')),
+      )
+    }
+    section.append(grid)
+    root.append(section)
+  }
+
+  const renderAvatarGen = (root: HTMLElement): void => {
+    cfg.avatarGen ??= {}
+    const a = cfg.avatarGen
+    const section = el('section', { class: 'config-section config-section--active' })
+    const grid = el('div', { class: 'config-grid' })
+    grid.append(
+      field('Provider', select(text(a.provider || 'gemini'), [['gemini', 'gemini'], ['chatgpt-image', 'chatgpt-image']], (v) => { a.provider = v })),
+      field('Base URL', input(text(a.baseUrl), (v) => { a.baseUrl = v })),
+      field('API Key', input(text(a.apiKey), (v) => { a.apiKey = v }, 'password')),
+      field('Model', input(text(a.model), (v) => { a.model = v })),
+      field('Aspect Ratio', input(text(a.aspectRatio), (v) => { a.aspectRatio = v })),
+      field('Image Size', input(text(a.imageSize), (v) => { a.imageSize = v })),
+    )
+    section.append(grid)
+    root.append(section)
+  }
+
+  const renderSnap = (root: HTMLElement): void => {
+    cfg.snap ??= {}
+    const s = cfg.snap
+    const provider = text(s.provider || 'nano-banana')
+    const section = el('section', { class: 'config-section config-section--active' })
+    const grid = el('div', { class: 'config-grid' })
+    grid.append(
+      field('Provider', select(provider, [['nano-banana', 'nano-banana'], ['gpt-image-2', 'gpt-image-2']], (v) => {
+        const prevBase = text(s.baseUrl)
+        const prevModel = text(s.model)
+        s.provider = v
+        if (v === 'nano-banana') {
+          if (!prevBase || prevBase === 'https://api.openai.com/v1') s.baseUrl = 'https://openrouter.ai/api/v1'
+          if (!prevModel || prevModel === 'gpt-image-2') s.model = 'google/gemini-3-pro-image-preview'
+          s.aspectRatio ||= '4:3'
+        } else {
+          if (!prevBase || prevBase === 'https://openrouter.ai/api/v1') s.baseUrl = 'https://api.openai.com/v1'
+          if (!prevModel || prevModel === 'google/gemini-3-pro-image-preview') s.model = 'gpt-image-2'
+          s.imageSize ||= '1024x1024'
+          s.quality ||= 'auto'
+        }
+        rerender()
+      })),
+      field('Base URL', input(text(s.baseUrl), (v) => { s.baseUrl = v })),
+      field('API Key', input(text(s.apiKey), (v) => { s.apiKey = v }, 'password')),
+      field('Model', input(text(s.model), (v) => { s.model = v })),
+      field('Aspect Ratio', input(text(s.aspectRatio), (v) => { s.aspectRatio = v })),
+      field('Image Size', input(text(s.imageSize), (v) => { s.imageSize = v })),
+      field('Quality', select(text(s.quality || 'auto'), [['auto', 'auto'], ['high', 'high'], ['medium', 'medium'], ['low', 'low']], (v) => { s.quality = v })),
+      field('Timeout ms', input(num(s.timeoutMs, '120000'), (v) => { s.timeoutMs = Number(v) }, 'number')),
+    )
+    section.append(grid)
+    root.append(section)
+  }
+
+  closeBtn?.addEventListener('click', close)
+  saveBtn?.addEventListener('click', () => {
+    ensureDefaultConfigNodes(cfg, cwd)
+    syncFlatLlm(cfg)
+    opts.socket.send(JSON.stringify({ type: 'CONFIG_SAVE', data: { config: cfg } }))
+    setStatus(true, '保存中…')
+  })
+
+  return { open, close, setStatus }
+}

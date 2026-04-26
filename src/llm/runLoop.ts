@@ -24,6 +24,25 @@ const LLM_MAX_RETRIES = 1
 /** SSE 流闲置超时：连续无新事件即中断（参考 ref 的 STREAM_IDLE_TIMEOUT_MS） */
 const STREAM_IDLE_TIMEOUT_MS = 90_000
 
+function visionLocationText(m: Extract<PersistedMessage, { role: 'user' }>): string {
+  const v = m.vision
+  if (!v) return m.content
+  const parts = [
+    m.content,
+    '',
+    `[视觉快照] 已附带一张摄像头照片，拍摄时间：${v.capturedAt}。`,
+  ]
+  if (v.location) {
+    const acc = typeof v.location.accuracy === 'number'
+      ? `，精度约 ${Math.round(v.location.accuracy)} 米`
+      : ''
+    parts.push(
+      `[地理位置] latitude=${v.location.latitude}, longitude=${v.location.longitude}${acc}。`,
+    )
+  }
+  return parts.join('\n').trim()
+}
+
 function withDeadline<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined
   const timeoutPromise = new Promise<never>((_, reject) => {
@@ -154,7 +173,24 @@ function toAnthropicMessages(
   while (i < messages.length) {
     const m = messages[i]!
     if (m.role === 'user') {
-      out.push({ role: 'user', content: m.content })
+      if (m.vision) {
+        out.push({
+          role: 'user',
+          content: [
+            { type: 'text', text: visionLocationText(m) },
+            {
+              type: 'image',
+              source: {
+                type: 'base64',
+                media_type: m.vision.mediaType,
+                data: m.vision.imageBase64,
+              },
+            },
+          ],
+        })
+      } else {
+        out.push({ role: 'user', content: m.content })
+      }
       i++
       continue
     }
@@ -441,7 +477,22 @@ function toOpenAIMessages(
   const out: OpenAI.Chat.ChatCompletionMessageParam[] = []
   for (const m of messages) {
     if (m.role === 'user') {
-      out.push({ role: 'user', content: m.content })
+      if (m.vision) {
+        out.push({
+          role: 'user',
+          content: [
+            { type: 'text', text: visionLocationText(m) },
+            {
+              type: 'image_url',
+              image_url: {
+                url: `data:${m.vision.mediaType};base64,${m.vision.imageBase64}`,
+              },
+            },
+          ],
+        })
+      } else {
+        out.push({ role: 'user', content: m.content })
+      }
     } else if (m.role === 'assistant') {
       if (m.toolCalls?.length) {
         out.push({
@@ -610,6 +661,7 @@ async function runOpenAI(
 
 type GeminiPart = {
   text?: string
+  inlineData?: { mimeType: string; data: string }
   functionCall?: { name: string; args: Record<string, unknown> }
   functionResponse?: {
     name: string
@@ -625,7 +677,16 @@ function toGeminiContents(messages: PersistedMessage[]): GeminiContent[] {
   while (i < messages.length) {
     const m = messages[i]!
     if (m.role === 'user') {
-      contents.push({ role: 'user', parts: [{ text: m.content }] })
+      const parts: GeminiPart[] = [{ text: m.vision ? visionLocationText(m) : m.content }]
+      if (m.vision) {
+        parts.push({
+          inlineData: {
+            mimeType: m.vision.mediaType,
+            data: m.vision.imageBase64,
+          },
+        })
+      }
+      contents.push({ role: 'user', parts })
       i++
       continue
     }

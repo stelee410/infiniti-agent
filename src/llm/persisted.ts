@@ -4,8 +4,19 @@ export type ToolCallSpec = {
   argumentsJson: string
 }
 
+export type UserVisionAttachment = {
+  imageBase64: string
+  mediaType: 'image/jpeg' | 'image/png' | 'image/webp'
+  capturedAt: string
+  location?: {
+    latitude: number
+    longitude: number
+    accuracy?: number
+  }
+}
+
 export type PersistedMessage =
-  | { role: 'user'; content: string }
+  | { role: 'user'; content: string; vision?: UserVisionAttachment }
   | {
       role: 'assistant'
       content: string | null
@@ -35,6 +46,10 @@ export function truncateToolResults(
   maxChars: number = MAX_TOOL_RESULT_CHARS,
 ): PersistedMessage[] {
   return messages.map((m) => {
+    if (m.role === 'user' && m.vision) {
+      const { vision: _vision, ...rest } = m
+      return rest
+    }
     if (m.role !== 'tool' || m.content.length <= maxChars) return m
     return {
       ...m,

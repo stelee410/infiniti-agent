@@ -21,6 +21,8 @@ export type LiveUiAssistantStreamMessage = {
     fullRaw: string
     /** true：新一轮 assistant 输出开始，需清空解析状态与气泡 */
     reset?: boolean
+    /** true：一次性 assistant 输出已结束，可按阅读时长自动淡出气泡 */
+    done?: boolean
   }
 }
 
@@ -59,7 +61,7 @@ export type LiveUiAudioResetMessage = {
 /** 告知渲染端 TTS 引擎是否可用（连接时推送）。 */
 export type LiveUiTtsStatusMessage = {
   type: 'TTS_STATUS'
-  data: { available: boolean }
+  data: { available: boolean; enabled?: boolean }
 }
 
 /** 告知渲染端 ASR 是否可用（连接时推送）。 */
@@ -92,6 +94,78 @@ export type LiveUiSlashCompletionMessage = {
   }
 }
 
+export type LiveUiConfigOpenMessage = {
+  type: 'CONFIG_OPEN'
+  data: {
+    cwd: string
+    config: unknown
+  }
+}
+
+export type LiveUiConfigStatusMessage = {
+  type: 'CONFIG_STATUS'
+  data: {
+    ok: boolean
+    message: string
+  }
+}
+
+export type LiveUiVisionAttachment = {
+  imageBase64: string
+  mediaType: 'image/jpeg' | 'image/png' | 'image/webp'
+  capturedAt: string
+  location?: {
+    latitude: number
+    longitude: number
+    accuracy?: number
+  }
+}
+
+export type LiveUiVisionCaptureResultMessage = {
+  type: 'VISION_CAPTURE_RESULT'
+  data: {
+    requestId: string
+    ok: boolean
+    vision?: LiveUiVisionAttachment
+    error?: string
+  }
+}
+
+export type LiveUiVisionAttachmentClearMessage = {
+  type: 'VISION_ATTACHMENT_CLEAR'
+  data?: Record<string, never>
+}
+
+export type LiveUiInboxAttachment = {
+  kind: 'image' | 'file'
+  path: string
+  mimeType?: string
+  label?: string
+}
+
+export type LiveUiInboxItem = {
+  id: string
+  createdAt: string
+  subject: string
+  body: string
+  attachments: LiveUiInboxAttachment[]
+}
+
+export type LiveUiInboxUpdateMessage = {
+  type: 'INBOX_UPDATE'
+  data: {
+    unread: LiveUiInboxItem[]
+  }
+}
+
+export type LiveUiInboxSaveResultMessage = {
+  type: 'INBOX_SAVE_RESULT'
+  data: {
+    ok: boolean
+    message: string
+  }
+}
+
 export type LiveUiMessage =
   | LiveUiSyncParamMessage
   | LiveUiActionMessage
@@ -103,6 +177,12 @@ export type LiveUiMessage =
   | LiveUiAsrStatusMessage
   | LiveUiAsrResultMessage
   | LiveUiSlashCompletionMessage
+  | LiveUiConfigOpenMessage
+  | LiveUiConfigStatusMessage
+  | LiveUiVisionCaptureResultMessage
+  | LiveUiVisionAttachmentClearMessage
+  | LiveUiInboxUpdateMessage
+  | LiveUiInboxSaveResultMessage
 
 export function isLiveUiMessage(x: unknown): x is LiveUiMessage {
   if (!x || typeof x !== 'object') return false
@@ -121,9 +201,10 @@ export function isLiveUiMessage(x: unknown): x is LiveUiMessage {
   if (o.type === 'ASSISTANT_STREAM') {
     const d = (x as { data?: unknown }).data
     if (!d || typeof d !== 'object') return false
-    const dd = d as { fullRaw?: unknown; reset?: unknown }
+    const dd = d as { fullRaw?: unknown; reset?: unknown; done?: unknown }
     if (typeof dd.fullRaw !== 'string') return false
     if (dd.reset !== undefined && typeof dd.reset !== 'boolean') return false
+    if (dd.done !== undefined && typeof dd.done !== 'boolean') return false
     return true
   }
   if (o.type === 'STATUS_PILL') {
@@ -155,7 +236,30 @@ export function isLiveUiMessage(x: unknown): x is LiveUiMessage {
     }
     return true
   }
-  if (o.type === 'AUDIO_RESET' || o.type === 'INTERRUPT') return true
+  if (o.type === 'AUDIO_RESET' || o.type === 'INTERRUPT' || o.type === 'VISION_ATTACHMENT_CLEAR') return true
+  if (o.type === 'INBOX_UPDATE') {
+    const d = (x as { data?: unknown }).data
+    if (!d || typeof d !== 'object') return false
+    const unread = (d as { unread?: unknown }).unread
+    if (!Array.isArray(unread)) return false
+    return unread.every((it) => {
+      if (!it || typeof it !== 'object') return false
+      const m = it as Record<string, unknown>
+      return (
+        typeof m.id === 'string' &&
+        typeof m.createdAt === 'string' &&
+        typeof m.subject === 'string' &&
+        typeof m.body === 'string' &&
+        Array.isArray(m.attachments)
+      )
+    })
+  }
+  if (o.type === 'INBOX_SAVE_RESULT') {
+    const d = (x as { data?: unknown }).data
+    if (!d || typeof d !== 'object') return false
+    const dd = d as { ok?: unknown; message?: unknown }
+    return typeof dd.ok === 'boolean' && typeof dd.message === 'string'
+  }
   if (o.type === 'TTS_STATUS' || o.type === 'ASR_STATUS') {
     const d = (x as { data?: unknown }).data
     if (!d || typeof d !== 'object') return false
@@ -182,6 +286,24 @@ export function isLiveUiMessage(x: unknown): x is LiveUiMessage {
         typeof o2.insert === 'string'
       )
     })
+  }
+  if (o.type === 'CONFIG_OPEN') {
+    const d = (x as { data?: unknown }).data
+    if (!d || typeof d !== 'object') return false
+    const dd = d as { cwd?: unknown; config?: unknown }
+    return typeof dd.cwd === 'string' && !!dd.config && typeof dd.config === 'object'
+  }
+  if (o.type === 'CONFIG_STATUS') {
+    const d = (x as { data?: unknown }).data
+    if (!d || typeof d !== 'object') return false
+    const dd = d as { ok?: unknown; message?: unknown }
+    return typeof dd.ok === 'boolean' && typeof dd.message === 'string'
+  }
+  if (o.type === 'VISION_CAPTURE_RESULT') {
+    const d = (x as { data?: unknown }).data
+    if (!d || typeof d !== 'object') return false
+    const dd = d as { requestId?: unknown; ok?: unknown }
+    return typeof dd.requestId === 'string' && typeof dd.ok === 'boolean'
   }
   return false
 }

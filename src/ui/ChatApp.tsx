@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { join } from 'node:path'
+import { basename, isAbsolute, relative, resolve, join } from 'node:path'
+import { copyFile } from 'node:fs/promises'
 import { Box, Text, useApp, useInput } from 'ink'
 import TextInput from 'ink-text-input'
 import chokidar from 'chokidar'
@@ -20,11 +21,12 @@ import { resolvedCompactionSettings } from '../llm/compactionSettings.js'
 import { estimateMessagesTokens } from '../llm/estimateTokens.js'
 import { runToolLoop } from '../llm/runLoop.js'
 import type { PersistedMessage } from '../llm/persisted.js'
+import { oneShotTextCompletion } from '../llm/oneShotCompletion.js'
 import { saveSession, loadSession } from '../session/file.js'
 import { archiveSession } from '../session/archive.js'
-import { localSkillsDir } from '../paths.js'
+import { localInboxDir, localSkillsDir } from '../paths.js'
 import type { McpManager } from '../mcp/manager.js'
-import { loadConfig } from '../config/io.js'
+import { loadConfig, saveProjectConfig } from '../config/io.js'
 import { formatChatError } from '../utils/formatError.js'
 import { EditHistory } from '../session/editHistory.js'
 import { restoreEditSnapshot } from '../tools/repoTools.js'
@@ -35,7 +37,9 @@ import {
 } from './slashCompletions.js'
 import { parseSpeakCommandLine } from '../liveui/speakCommandLine.js'
 import type { LiveUiInteractionKind, LiveUiSession } from '../liveui/wsSession.js'
-import type { LiveUiStatusVariant } from '../liveui/protocol.js'
+import type { LiveUiStatusVariant, LiveUiVisionAttachment } from '../liveui/protocol.js'
+import { enqueueSnapPhotoJob } from '../snap/asyncSnap.js'
+import { listInboxMessages, markInboxMessageRead } from '../inbox/store.js'
 import {
   collectNewTtsSegments,
   splitTtsSegments,
@@ -65,16 +69,77 @@ type Props = {
   mcp: McpManager
   dangerouslySkipPermissions?: boolean
   liveUi?: LiveUiSession | null
+  onConfigReload?: (config: InfinitiConfig) => Promise<void>
 }
 
 const STREAM_DEBOUNCE_MS = 80
 const SLASH_MENU_MAX_ROWS = 10
+const LLM_PROVIDERS = new Set(['anthropic', 'openai', 'gemini', 'minimax', 'openrouter'])
+
+async function polishSnapQueuedReply(config: InfinitiConfig, prompt: string, jobId: string): Promise<string> {
+  const fallback =
+    `好呀，我去把这张画面慢慢生成出来。你可以先继续聊，等照片好了我会把它放进你的邮箱，小信封亮起来的时候点开就能看见。`
+  try {
+    const out = await oneShotTextCompletion({
+      config,
+      maxOutTokens: 500,
+      system:
+        '你是 Infiniti Agent 的日常对话人格。请只输出中文正文，不要标题，不要列表，不要任务 ID，不要像系统通知。用户刚发出 /snap 图片生成命令；你的回复要像普通聊天里自然接话，亲近、轻松、简短。表达：你会在后台生成图片；用户可以继续聊天；完成后会放进你的邮箱，小信封亮起即可查看。',
+      user: `用户想生成的图片：${prompt}\n内部任务 ID（不要输出）：${jobId}\n请给出一句或两句自然口语回复。参考但不要照抄：\n\n${fallback}`,
+    })
+    return out.trim() || fallback
+  } catch {
+    return fallback
+  }
+}
+
+function isPathInside(parent: string, child: string): boolean {
+  const rel = relative(resolve(parent), resolve(child))
+  return rel === '' || (!!rel && !rel.startsWith('..') && !isAbsolute(rel))
+}
+
+function stripTransientVision(messages: PersistedMessage[]): PersistedMessage[] {
+  return messages.map((m) => {
+    if (m.role !== 'user' || !m.vision) return m
+    const { vision: _vision, ...rest } = m
+    return rest
+  })
+}
+
+function validateConfigPanelSave(raw: unknown): asserts raw is InfinitiConfig {
+  if (!raw || typeof raw !== 'object') {
+    throw new Error('配置格式无效')
+  }
+  const cfg = raw as { llm?: unknown }
+  if (!cfg.llm || typeof cfg.llm !== 'object') {
+    throw new Error('缺少 llm 配置块')
+  }
+  const llm = cfg.llm as Record<string, unknown>
+  const profiles = llm.profiles && typeof llm.profiles === 'object'
+    ? llm.profiles as Record<string, unknown>
+    : undefined
+  const defaultName = typeof llm.default === 'string' ? llm.default : undefined
+  const selected =
+    defaultName && profiles && profiles[defaultName] && typeof profiles[defaultName] === 'object'
+      ? profiles[defaultName] as Record<string, unknown>
+      : llm
+  const provider = selected.provider
+  if (typeof provider !== 'string' || !LLM_PROVIDERS.has(provider)) {
+    throw new Error('默认 LLM provider 无效')
+  }
+  for (const key of ['baseUrl', 'model', 'apiKey']) {
+    if (typeof selected[key] !== 'string' || !selected[key].trim()) {
+      throw new Error(`默认 LLM profile 缺少 ${key}`)
+    }
+  }
+}
 
 export function ChatApp({
   config: initialConfig,
   mcp,
   dangerouslySkipPermissions,
   liveUi = null,
+  onConfigReload,
 }: Props): React.ReactElement {
   const { exit } = useApp()
   const rows = process.stdout.rows ?? 24
@@ -300,7 +365,7 @@ export function ChatApp({
   }, [mcp])
 
   const handleSubmit = useCallback(
-    async (line: string) => {
+    async (line: string, vision?: LiveUiVisionAttachment) => {
       const raw = line.trimEnd()
       if (!raw.trim()) {
         return
@@ -355,16 +420,85 @@ export function ChatApp({
         setInput('')
         return
       }
+      if (raw === '/config') {
+        if (!liveUi) {
+          setError('/config 暂不支持当前模式；请使用 infiniti-agent live 后在 Live 窗口输入 /config')
+          setInput('')
+          return
+        }
+        liveUi.openConfigPanel(cwd, config)
+        setNotice('已打开 Live 配置面板')
+        setTimeout(() => setNotice(null), 3000)
+        setInput('')
+        return
+      }
       if (raw === '/memory') {
         setError('记忆系统：memory.json（结构化记忆）+ user_profile.json（用户画像）— 在 .infiniti-agent/ 下')
         setInput('')
         return
       }
+      if (raw === '/inbox' || raw.startsWith('/inbox ')) {
+        const unreadOnly = !raw.includes('--all')
+        const inbox = await listInboxMessages(cwd, { unreadOnly, limit: 8 })
+        const scope = unreadOnly ? '未读' : '最近'
+        if (!inbox.length) {
+          setNotice(`${scope}你的邮箱为空`)
+          setTimeout(() => setNotice(null), 5000)
+        } else {
+          setNotice(
+            inbox.map((m) => `${m.createdAt} ${m.subject} (${m.id})`).join('\n'),
+          )
+          setTimeout(() => setNotice(null), 15000)
+        }
+        setInput('')
+        return
+      }
       if (raw === '/help') {
         setError(
-          '输入 / 可补全：斜杠命令与全部工具（↑↓ Tab）。命令: /exit /clear /reload /memory /undo /compact /permission /speak — /speak 后接正文仅 TTS 朗读、不写会话（Live 下测音色）。改文件/bash/HTTP 默认需确认（Y 允许 · A 本次会话始终允许该工具 · N 拒绝）；启动时加 --dangerously-skip-permissions 可跳过所有确认。/permission 查看当前状态。/compact 压缩较早历史。卡死排查：INFINITI_AGENT_DEBUG=1。',
+          '输入 / 可补全：斜杠命令与全部工具（↑↓ Tab）。命令: /exit /clear /reload /config /memory /inbox /undo /compact /permission /speak /snap — /config 仅 Live 模式打开配置面板；/speak 后接正文仅 TTS 朗读、不写会话；/snap 后接提示词异步生成合照/写实照片，完成后写入你的邮箱。改文件/bash/HTTP 默认需确认（Y 允许 · A 本次会话始终允许该工具 · N 拒绝）；启动时加 --dangerously-skip-permissions 可跳过所有确认。/permission 查看当前状态。/compact 压缩较早历史。卡死排查：INFINITI_AGENT_DEBUG=1。',
         )
         setInput('')
+        return
+      }
+      if (raw === '/snap' || raw.startsWith('/snap ')) {
+        const prompt = raw.startsWith('/snap ') ? raw.slice('/snap '.length).trim() : ''
+        if (!prompt) {
+          setError('/snap 后请输入提示词，例如：/snap 在咖啡馆自拍，暖色灯光')
+          setInput('')
+          return
+        }
+        if (busyRef.current) return
+        setError(null)
+        setNotice('图片任务已交给后台处理，一会儿会放进你的邮箱')
+        setInput('')
+        const snapVision = vision ?? liveUi?.consumePendingVisionAttachment()
+        if (snapVision) liveUi?.clearVisionAttachment()
+        try {
+          const job = await enqueueSnapPhotoJob(cwd, config, prompt, snapVision)
+          const content = await polishSnapQueuedReply(config, prompt, job.id)
+          const next: PersistedMessage[] = [
+            ...messages,
+            { role: 'user', content: raw },
+            { role: 'assistant', content },
+          ]
+          setMessages(next)
+          await saveSession(cwd, next)
+          setNotice(content)
+          setTimeout(() => setNotice(null), 12000)
+          if (liveUi) {
+            liveUi.sendAssistantStream(content, true, true)
+            if (liveUi.hasTts) {
+              const clean = ttsDisplayCleanForLiveUi(content, expressionManifest)
+              liveUi.resetAudio()
+              for (const seg of splitTtsSegments(clean)) {
+                liveUi.enqueueTts(seg)
+              }
+            }
+          }
+        } catch (e: unknown) {
+          setError(formatChatError(e))
+          setNotice(null)
+        }
         return
       }
       if (raw === '/compact' || raw.startsWith('/compact ')) {
@@ -483,9 +617,15 @@ export function ChatApp({
         }
       }
 
+      const turnVision = vision ?? liveUi?.consumePendingVisionAttachment()
+
       const nextMsgs: PersistedMessage[] = [
         ...baseMessages,
-        { role: 'user', content: userLine },
+        {
+          role: 'user',
+          content: turnVision ? `${userLine}\n\n[已附带视觉快照]` : userLine,
+          ...(turnVision ? { vision: turnVision } : {}),
+        },
       ]
       setMessages(nextMsgs)
       setInput('')
@@ -565,8 +705,9 @@ export function ChatApp({
             ttsCursorRef.current = next.cursor
           }
         }
-        setMessages(out)
-        await saveSession(cwd, out)
+        const displayOut = stripTransientVision(out)
+        setMessages(displayOut)
+        await saveSession(cwd, displayOut)
       } catch (e: unknown) {
         if (!ac.signal.aborted) {
           setError(formatChatError(e))
@@ -620,6 +761,73 @@ export function ChatApp({
     )
   }, [liveUi, slashMenuOpen, slashFiltered])
 
+  const refreshLiveInbox = useCallback(async () => {
+    if (!liveUi) return
+    const unread = await listInboxMessages(cwd, { unreadOnly: true, limit: 5 })
+    liveUi.sendInboxUpdate(
+      unread.map((m) => ({
+        id: m.id,
+        createdAt: m.createdAt,
+        subject: m.subject,
+        body: m.body,
+        attachments: m.attachments,
+      })),
+    )
+  }, [cwd, liveUi])
+
+  useEffect(() => {
+    if (!liveUi) return
+    let stopped = false
+    const tick = async () => {
+      try {
+        await refreshLiveInbox()
+      } catch {
+        /* inbox refresh is best-effort UI sync */
+      }
+    }
+    void tick()
+    const timer = setInterval(() => {
+      if (!stopped) void tick()
+    }, 2500)
+    return () => {
+      stopped = true
+      clearInterval(timer)
+    }
+  }, [liveUi, refreshLiveInbox])
+
+  useEffect(() => {
+    if (!liveUi) return
+    return liveUi.onInboxMarkRead((ids) => {
+      void (async () => {
+        await Promise.all(ids.map((id) => markInboxMessageRead(cwd, id).catch(() => null)))
+        await refreshLiveInbox()
+      })()
+    })
+  }, [cwd, liveUi, refreshLiveInbox])
+
+  useEffect(() => {
+    if (!liveUi) return
+    return liveUi.onInboxSaveAs((sourcePath, destinationPath) => {
+      void (async () => {
+        try {
+          const inboxRoot = localInboxDir(cwd)
+          const source = resolve(sourcePath)
+          const dest = resolve(destinationPath)
+          const knownInboxAttachment = (await listInboxMessages(cwd)).some((m) =>
+            m.attachments.some((a) => resolve(a.path) === source),
+          )
+          if (!isPathInside(inboxRoot, source) && !knownInboxAttachment) {
+            throw new Error('只能另存你的邮箱里的附件')
+          }
+          await copyFile(source, dest)
+          liveUi.sendInboxSaveResult(true, `已另存为 ${basename(dest)}`)
+        } catch (e: unknown) {
+          liveUi.sendInboxSaveResult(false, formatChatError(e))
+        }
+      })()
+    })
+  }, [cwd, liveUi])
+
   useEffect(() => {
     if (!liveUi) return
     return liveUi.onInterrupt(() => {
@@ -630,6 +838,33 @@ export function ChatApp({
       }
     })
   }, [liveUi])
+
+  useEffect(() => {
+    if (!liveUi) return
+    return liveUi.onConfigSave((nextConfig) => {
+      void (async () => {
+        try {
+          validateConfigPanelSave(nextConfig)
+          await saveProjectConfig(cwd, nextConfig)
+          const next = await loadConfig(cwd)
+          setConfig(next)
+          await mcp.stop()
+          await mcp.start(next)
+          if (onConfigReload) {
+            await onConfigReload(next)
+          }
+          setError(null)
+          setNotice('配置已保存到项目 .infiniti-agent/config.json；当前 Live 设置已热重载')
+          setTimeout(() => setNotice(null), 7000)
+          liveUi.sendConfigStatus(true, '已保存并热重载。')
+        } catch (e: unknown) {
+          const msg = formatChatError(e)
+          setError(msg)
+          liveUi.sendConfigStatus(false, msg)
+        }
+      })()
+    })
+  }, [cwd, liveUi, mcp, onConfigReload])
 
   useEffect(() => {
     if (!liveUi) return

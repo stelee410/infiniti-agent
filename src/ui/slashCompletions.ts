@@ -50,6 +50,13 @@ const COMMAND_ITEMS: SlashItem[] = [
     insert: '/reload ',
   },
   {
+    id: '/config',
+    kind: 'command',
+    label: '/config',
+    desc: '打开 Live 模式 Electron 配置面板',
+    insert: '/config ',
+  },
+  {
     id: '/reload-skills',
     kind: 'command',
     label: '/reload-skills',
@@ -64,6 +71,13 @@ const COMMAND_ITEMS: SlashItem[] = [
     insert: '/memory ',
   },
   {
+    id: '/inbox',
+    kind: 'command',
+    label: '/inbox',
+    desc: '查看你的邮箱里最近未读邮件；加 --all 查看最近全部',
+    insert: '/inbox ',
+  },
+  {
     id: '/help',
     kind: 'command',
     label: '/help',
@@ -76,6 +90,13 @@ const COMMAND_ITEMS: SlashItem[] = [
     label: '/speak',
     desc: '仅 TTS 朗读其后文本（不写会话，Live 测音色）',
     insert: '/speak ',
+  },
+  {
+    id: '/snap',
+    kind: 'command',
+    label: '/snap',
+    desc: '用已确认照片和 agent 参考图生成合照；无照片时按提示词生成写实照片',
+    insert: '/snap ',
   },
   {
     id: '/undo',

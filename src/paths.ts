@@ -27,6 +27,14 @@ export function localSessionPath(cwd: string): string {
   return join(cwd, LOCAL_DIR_NAME, 'session.json')
 }
 
+export function localInboxDir(cwd: string): string {
+  return join(cwd, LOCAL_DIR_NAME, 'inbox')
+}
+
+export function localJobsDir(cwd: string): string {
+  return join(cwd, LOCAL_DIR_NAME, 'jobs')
+}
+
 export function localMemoryPath(cwd: string): string {
   return join(cwd, LOCAL_DIR_NAME, 'memory.md')
 }

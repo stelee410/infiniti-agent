@@ -28,17 +28,21 @@ import { runLink } from './link.js'
 import { LiveUiSession } from './liveui/wsSession.js'
 import { createMinimaxTts } from './tts/minimaxTts.js'
 import { createMossTtsNano } from './tts/mossTtsNano.js'
-import { createVoxcpmTts } from './tts/voxcpmTts.js'
+import { checkVoxcpmTtsHealth, createVoxcpmTts } from './tts/voxcpmTts.js'
+import { createWhisperTts } from './tts/whisperTts.js'
 import { createWhisperAsr } from './asr/whisperAsr.js'
 import { createSherpaOnnxAsr } from './asr/sherpaOnnxAsr.js'
 import { spawnLiveElectron } from './liveui/spawnRenderer.js'
 import { buildLiveUiVoiceMicEnvJson, VOICE_MIC_DEFAULT_SPEECH_RMS_THRESHOLD } from './liveui/voiceMicEnv.js'
 import { runTestAsr, parseTestAsrRms, parseTestAsrInt } from './cli/testAsr.js'
+import { runTestCamera, parseTestCameraInt } from './cli/testCamera.js'
 import { resolveLive2dModelForUi, resolveSpriteExpressionDirForUi } from './liveui/resolveModelPath.js'
 import { runAddLlm, runSelectLlm } from './cli/llmCli.js'
 import { runLinkyunSync } from './cli/linkyunSync.js'
 import { runGenerateAvatar } from './cli/generateAvatar.js'
 import { runSetLiveAgent } from './cli/setLiveAgent.js'
+import { runSnapPhotoJob } from './snap/asyncSnap.js'
+import { disableUiLogFile, enableUiLogFile, withUiLogFile } from './utils/uiLogFile.js'
 
 const cwd = process.cwd()
 
@@ -54,6 +58,122 @@ function applyThinkingOverride(cfg: Awaited<ReturnType<typeof loadConfig>>, disa
   return { ...cfg, thinking: { ...cfg.thinking, mode: 'disabled' as const } }
 }
 
+function isUiModeInvocation(argv: string[]): boolean {
+  if (argv.includes('--cli')) return false
+  const globalFlags = new Set(['--debug', '--dangerously-skip-permissions', '--disable-thinking'])
+  const rest = argv.filter((a) => !globalFlags.has(a))
+  const command = rest[0]
+  return !command || command === 'chat' || command === 'live'
+}
+
+async function configureLiveUiEngines(
+  liveUi: LiveUiSession,
+  cfg: Awaited<ReturnType<typeof loadConfig>>,
+): Promise<void> {
+  liveUi.resetAudio()
+  liveUi.setTtsEnabled(cfg.liveUi?.ttsAutoEnabled !== false)
+  if (cfg.tts?.provider === 'minimax') {
+    try {
+      liveUi.setTtsEngine(createMinimaxTts(cfg.tts))
+      console.error(
+        `[liveui] MiniMax TTS 已启用 (model: ${cfg.tts.model ?? 'speech-02-turbo'}, voice: ${cfg.tts.voiceId ?? 'female-shaonv'})`,
+      )
+    } catch (e) {
+      console.warn(`[liveui] TTS 未启用（配置或初始化失败）: ${(e as Error).message}`)
+      liveUi.setTtsEngine(null)
+    }
+  } else if (cfg.tts?.provider === 'moss_tts_nano') {
+    try {
+      liveUi.setTtsEngine(createMossTtsNano(cfg.tts, cwd))
+      console.error(`[liveui] MOSS-TTS-Nano 已启用 (baseUrl: ${cfg.tts.baseUrl})`)
+    } catch (e) {
+      console.warn(`[liveui] TTS 未启用（MOSS-TTS-Nano 初始化失败）: ${(e as Error).message}`)
+      liveUi.setTtsEngine(null)
+    }
+  } else if (cfg.tts?.provider === 'voxcpm') {
+    try {
+      const health = await checkVoxcpmTtsHealth(cfg.tts)
+      console.error(`[liveui] VoxCPM TTS 服务健康检查通过: ${health.slice(0, 160)}`)
+      liveUi.setTtsEngine(createVoxcpmTts(cfg.tts, cwd))
+      console.error(`[liveui] VoxCPM TTS 已启用 (baseUrl: ${cfg.tts.baseUrl})`)
+    } catch (e) {
+      console.warn(
+        `[liveui] TTS 未启用（VoxCPM 服务不可用）: ${(e as Error).message}\n` +
+          '  请先启动: cd ../infiniti-tts-service && ./scripts/start-voxcpm-tts-serve-mac.sh --port 8810',
+      )
+      liveUi.setTtsEngine(null)
+    }
+  } else if (cfg.tts?.provider === 'whisper') {
+    try {
+      liveUi.setTtsEngine(createWhisperTts(cfg.tts))
+      console.error(
+        `[liveui] Whisper TTS 已启用 (model: ${cfg.tts.model ?? 'gpt-4o-mini-tts'}, voice: ${cfg.tts.voiceId ?? 'alloy'})`,
+      )
+    } catch (e) {
+      console.warn(`[liveui] TTS 未启用（Whisper 初始化失败）: ${(e as Error).message}`)
+      liveUi.setTtsEngine(null)
+    }
+  } else {
+    liveUi.setTtsEngine(null)
+  }
+
+  if (cfg.asr?.provider === 'whisper') {
+    try {
+      liveUi.setAsrEngine(createWhisperAsr(cfg.asr))
+      console.error(
+        `[liveui] Whisper ASR 已启用 (model: ${cfg.asr.model ?? 'whisper-large-v3-turbo'}, baseUrl: ${cfg.asr.baseUrl})`,
+      )
+    } catch (e) {
+      console.warn(`[liveui] ASR 未启用（Whisper 初始化失败）: ${(e as Error).message}`)
+      liveUi.setAsrEngine(null)
+    }
+  } else if (cfg.asr?.provider === 'sherpa_onnx') {
+    try {
+      liveUi.setAsrEngine(await createSherpaOnnxAsr(cfg.asr, cwd))
+      console.error(`[liveui] sherpa-onnx ASR 已启用 (model: ${cfg.asr.model})`)
+    } catch (e) {
+      console.warn(`[liveui] ASR 未启用（sherpa-onnx 加载失败）: ${(e as Error).message}`)
+      liveUi.setAsrEngine(null)
+    }
+  } else {
+    liveUi.setAsrEngine(null)
+  }
+}
+
+function restartLiveUiElectron(
+  liveUi: LiveUiSession,
+  cfg: Awaited<ReturnType<typeof loadConfig>>,
+  opts: { auto?: boolean; figureZoom?: number } = {},
+): void {
+  const spriteResolved = resolveSpriteExpressionDirForUi(cwd, cfg.liveUi)
+  for (const w of spriteResolved?.warnings ?? []) {
+    console.error(`[liveui] ${w}`)
+  }
+
+  const resolved = resolveLive2dModelForUi(cwd, cfg.liveUi)
+  for (const w of resolved?.warnings ?? []) {
+    console.error(`[liveui] ${w}`)
+  }
+
+  const useSprite = Boolean(spriteResolved?.dirFileUrl)
+  if (useSprite) {
+    console.error(`[liveui] 已启用 spriteExpressions（PNG），不使用 Live2D 模型 URL`)
+  }
+
+  const child = spawnLiveElectron(liveUi.port, {
+    model3FileUrl: useSprite ? undefined : resolved?.model3FileUrl,
+    spriteExpressionDirFileUrl: spriteResolved?.dirFileUrl,
+    voiceMicJson: buildLiveUiVoiceMicEnvJson(cfg.liveUi, { auto: opts.auto === true }),
+    figureZoom: opts.figureZoom,
+  })
+  liveUi.setElectronChild(child)
+  if (!child) {
+    console.error('[liveui] Electron 未启动：已启动 WebSocket，可稍后自行对接渲染端。')
+  } else {
+    console.error(`[liveui] WebSocket ws://127.0.0.1:${liveUi.port} · Electron 已启动`)
+  }
+}
+
 async function runChatTui(
   opts: {
     skipPermissions?: boolean
@@ -66,6 +186,7 @@ async function runChatTui(
     liveUiVoiceMicJson?: string
     /** `live --zoom` 注入：人物显示缩放（0.4 ~ 1.5），不影响控制条/输入框 */
     liveUiFigureZoom?: number
+    onConfigReload?: (config: Awaited<ReturnType<typeof loadConfig>>) => Promise<void>
   } = {},
 ): Promise<void> {
   if (!configExistsSync(cwd)) {
@@ -92,56 +213,7 @@ async function runChatTui(
       }
       await liveUi.start()
       liveUi.startMouthPump()
-      if (cfg.tts?.provider === 'minimax') {
-        try {
-          liveUi.setTtsEngine(createMinimaxTts(cfg.tts))
-          console.error(
-            `[liveui] MiniMax TTS 已启用 (model: ${cfg.tts.model ?? 'speech-02-turbo'}, voice: ${cfg.tts.voiceId ?? 'female-shaonv'})`,
-          )
-        } catch (e) {
-          console.warn(`[liveui] TTS 未启用（配置或初始化失败）: ${(e as Error).message}`)
-          liveUi.setTtsEngine(null)
-        }
-      } else if (cfg.tts?.provider === 'moss_tts_nano') {
-        try {
-          liveUi.setTtsEngine(createMossTtsNano(cfg.tts, cwd))
-          console.error(`[liveui] MOSS-TTS-Nano 已启用 (baseUrl: ${cfg.tts.baseUrl})`)
-        } catch (e) {
-          console.warn(`[liveui] TTS 未启用（MOSS-TTS-Nano 初始化失败）: ${(e as Error).message}`)
-          liveUi.setTtsEngine(null)
-        }
-      } else if (cfg.tts?.provider === 'voxcpm') {
-        try {
-          liveUi.setTtsEngine(createVoxcpmTts(cfg.tts, cwd))
-          console.error(`[liveui] VoxCPM TTS 已启用 (baseUrl: ${cfg.tts.baseUrl})`)
-        } catch (e) {
-          console.warn(`[liveui] TTS 未启用（VoxCPM 初始化失败）: ${(e as Error).message}`)
-          liveUi.setTtsEngine(null)
-        }
-      } else {
-        liveUi.setTtsEngine(null)
-      }
-      if (cfg.asr?.provider === 'whisper') {
-        try {
-          liveUi.setAsrEngine(createWhisperAsr(cfg.asr))
-          console.error(
-            `[liveui] Whisper ASR 已启用 (model: ${cfg.asr.model ?? 'whisper-large-v3-turbo'}, baseUrl: ${cfg.asr.baseUrl})`,
-          )
-        } catch (e) {
-          console.warn(`[liveui] ASR 未启用（Whisper 初始化失败）: ${(e as Error).message}`)
-          liveUi.setAsrEngine(null)
-        }
-      } else if (cfg.asr?.provider === 'sherpa_onnx') {
-        try {
-          liveUi.setAsrEngine(await createSherpaOnnxAsr(cfg.asr, cwd))
-          console.error(`[liveui] sherpa-onnx ASR 已启用 (model: ${cfg.asr.model})`)
-        } catch (e) {
-          console.warn(`[liveui] ASR 未启用（sherpa-onnx 加载失败）: ${(e as Error).message}`)
-          liveUi.setAsrEngine(null)
-        }
-      } else {
-        liveUi.setAsrEngine(null)
-      }
+      await configureLiveUiEngines(liveUi, cfg)
       const child = spawnLiveElectron(liveUi.port, {
         model3FileUrl: opts.liveUiModel3FileUrl,
         spriteExpressionDirFileUrl: opts.liveUiSpriteExpressionDirFileUrl,
@@ -163,6 +235,7 @@ async function runChatTui(
         mcp={mcp}
         dangerouslySkipPermissions={skipPerm}
         liveUi={liveUi}
+        onConfigReload={opts.onConfigReload}
       />,
       { maxFps: 15, incrementalRendering: true },
     )
@@ -175,6 +248,9 @@ async function runChatTui(
 }
 
 async function main(): Promise<void> {
+  const uiLogEnabledAtStartup = isUiModeInvocation(process.argv.slice(2))
+  if (uiLogEnabledAtStartup) enableUiLogFile(cwd)
+  try {
   if (process.argv.includes('--debug')) {
     const idx = process.argv.indexOf('--debug')
     process.argv.splice(idx, 1)
@@ -195,6 +271,21 @@ async function main(): Promise<void> {
     process.argv.splice(idx, 1)
   }
   const argv = process.argv.slice(2)
+
+  if (argv[0] === 'snap-worker') {
+    const jobPath = argv[1]
+    if (!jobPath) {
+      console.error('用法: infiniti-agent snap-worker <job.json>')
+      process.exit(2)
+    }
+    try {
+      await runSnapPhotoJob(jobPath)
+    } catch (e) {
+      console.error((e as Error).message)
+      process.exit(2)
+    }
+    return
+  }
 
   // 兼容旧写法 --cli
   const cliIdx = argv.indexOf('--cli')
@@ -349,7 +440,7 @@ async function main(): Promise<void> {
     .command('chat')
     .description('进入对话界面（无参数时默认）')
     .action(async () => {
-      await runChatTui({ skipPermissions, disableThinking })
+      await withUiLogFile(cwd, () => runChatTui({ skipPermissions, disableThinking }))
     })
 
   program
@@ -362,6 +453,7 @@ async function main(): Promise<void> {
       '人物显示缩放（0.4 ~ 1.5；0.9 = 90%、0.8 = 80%；不影响控制条/输入框）',
     )
     .action(async (cmdOpts: { port?: string; zoom?: string; auto?: boolean }) => {
+      await withUiLogFile(cwd, async () => {
       if (!configExistsSync(cwd)) {
         console.error('尚未配置。请先运行: infiniti-agent init 或 infiniti-agent migrate')
         process.exit(2)
@@ -421,7 +513,37 @@ async function main(): Promise<void> {
         liveUiSpriteExpressionDirFileUrl: spriteResolved?.dirFileUrl,
         liveUiVoiceMicJson: buildLiveUiVoiceMicEnvJson(cfg.liveUi, { auto: cmdOpts.auto === true }),
         liveUiFigureZoom: figureZoom,
+        onConfigReload: async (nextCfg) => {
+          if (nextCfg.liveUi?.port && nextCfg.liveUi.port !== liveUi.port) {
+            console.warn(
+              `[liveui] liveUi.port 已保存为 ${nextCfg.liveUi.port}，当前会话仍使用 ws://127.0.0.1:${liveUi.port}；端口变更需下次启动生效。`,
+            )
+          }
+          await configureLiveUiEngines(liveUi, nextCfg)
+          restartLiveUiElectron(liveUi, nextCfg, {
+            auto: cmdOpts.auto === true,
+            figureZoom,
+          })
+        },
       })
+      })
+    })
+
+  program
+    .command('test_camera')
+    .alias('test-camera')
+    .description('摄像头拍照测试：通过 CLI 后端直接拍一张 JPEG 到 /tmp，并输出完整日志路径。')
+    .option('--output <path>', '图片输出路径（默认 /tmp/infiniti-agent-camera-<time>.jpg）')
+    .option('--log <path>', '日志输出路径（默认 /tmp/infiniti-agent-camera-<time>.log）')
+    .option('--timeout-ms <n>', '测试总超时（毫秒）', '20000')
+    .action(async (cmdOpts: { output?: string; log?: string; timeoutMs?: string }) => {
+      const timeoutMs = parseTestCameraInt(cmdOpts.timeoutMs, 20000, '--timeout-ms')
+      const code = await runTestCamera({
+        output: cmdOpts.output,
+        log: cmdOpts.log,
+        timeoutMs,
+      })
+      process.exit(code)
     })
 
   program
@@ -582,9 +704,15 @@ async function main(): Promise<void> {
     })
 
   await program.parseAsync(process.argv)
+  } finally {
+    if (uiLogEnabledAtStartup) disableUiLogFile()
+  }
 }
 
 main().catch((e) => {
+  const uiMode = isUiModeInvocation(process.argv.slice(2))
+  if (uiMode) enableUiLogFile(cwd)
   console.error(e)
+  if (uiMode) disableUiLogFile()
   process.exit(1)
 })

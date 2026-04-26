@@ -11,6 +11,15 @@ function resolveSherpaPath(p: string, cwd: string): string {
   return t && isAbsolute(t) ? t : resolve(cwd, t)
 }
 
+const TERMINAL_PUNCT_RE = /[。！？!?.,，；;：:、…]$/
+const CJK_RE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u
+
+function restoreLightPunctuation(text: string): string {
+  const t = text.trim()
+  if (!t || TERMINAL_PUNCT_RE.test(t)) return t
+  return `${t}${CJK_RE.test(t) ? '。' : '.'}`
+}
+
 /**
  * 本地 sherpa-onnx SenseVoice ASR 引擎。
  * 用 ffmpeg 将 webm 转 16kHz mono WAV，再用 sherpa-onnx-node 离线识别。
@@ -66,7 +75,7 @@ export async function createSherpaOnnxAsr(cfg: SherpaOnnxAsrConfig, cwd = proces
         stream.acceptWaveform({ sampleRate: wave.sampleRate, samples: wave.samples })
         recognizer.decode(stream)
         const result = recognizer.getResult(stream) as { text?: string }
-        return (result.text ?? '').trim()
+        return restoreLightPunctuation(result.text ?? '')
       } finally {
         try { unlinkSync(inputPath) } catch { /* ignore */ }
         try { unlinkSync(wavPath) } catch { /* ignore */ }

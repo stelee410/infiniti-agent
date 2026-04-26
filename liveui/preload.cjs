@@ -21,6 +21,8 @@ const voiceMicDefaults = {
   silenceEndMs: 1500,
   suppressInterruptDuringTts: true,
   mode: 'push_to_talk',
+  ttsAutoEnabled: true,
+  asrAutoEnabled: false,
 }
 let voiceMic = { ...voiceMicDefaults }
 try {
@@ -48,5 +50,21 @@ contextBridge.exposeInMainWorld('infinitiLiveUi', {
   /** 首帧布局后收紧窗口高度（仅 height） */
   compactWindowHeight: (height) => {
     ipcRenderer.send('liveui-compact-height', { height })
+  },
+  setConfigPanelOpen: (open) => {
+    ipcRenderer.send('liveui-config-panel-open', !!open)
+  },
+  getWindowBounds: () => ipcRenderer.invoke('liveui-get-window-bounds'),
+  setWindowPosition: (x, y) => {
+    ipcRenderer.send('liveui-set-window-position', { x, y })
+  },
+  selectPath: (opts) => {
+    const kind = opts && opts.kind === 'directory' ? 'directory' : 'file'
+    const defaultPath = opts && typeof opts.defaultPath === 'string' ? opts.defaultPath : undefined
+    return ipcRenderer.invoke('liveui-select-path', { kind, defaultPath })
+  },
+  savePath: (opts) => {
+    const defaultPath = opts && typeof opts.defaultPath === 'string' ? opts.defaultPath : undefined
+    return ipcRenderer.invoke('liveui-save-path', { defaultPath })
   },
 })

@@ -17,6 +17,7 @@ export type OpenRouterImageGenOptions = {
   modalities?: ('text' | 'image')[]
   aspectRatio?: string
   imageSize?: string
+  timeoutMs?: number
 }
 
 function decodeDataUrlImage(dataUrl: string): Buffer {
@@ -58,6 +59,10 @@ export async function openRouterGenerateImageBuffer(opts: OpenRouterImageGenOpti
   const key = opts.apiKey.trim()
   if (!key) throw new Error('OpenRouter: apiKey 为空，无法设置 Authorization')
 
+  const ac = new AbortController()
+  const timer = opts.timeoutMs && opts.timeoutMs > 0
+    ? setTimeout(() => ac.abort(), opts.timeoutMs)
+    : undefined
   const res = await fetch(url, {
     method: 'POST',
     headers: {
@@ -67,6 +72,9 @@ export async function openRouterGenerateImageBuffer(opts: OpenRouterImageGenOpti
       'X-Title': 'infiniti-agent',
     },
     body: JSON.stringify(body),
+    signal: ac.signal,
+  }).finally(() => {
+    if (timer) clearTimeout(timer)
   })
 
   const json = (await res.json().catch(() => null)) as Record<string, unknown> | null

@@ -36,6 +36,15 @@
       #liveui-bottom-dock > * {
         pointer-events: auto;
       }
+      body.liveui-config-open #liveui-bottom-dock,
+      body.liveui-config-open #speech-bubble,
+      body.liveui-config-open #liveui-inbox {
+        display: none !important;
+      }
+      body.liveui-inbox-open #liveui-bottom-dock,
+      body.liveui-inbox-open #speech-bubble {
+        display: none !important;
+      }
       /* 气泡：脱离底部 dock，半透明叠在人物身上 */
       #speech-bubble {
         position: fixed;
@@ -80,6 +89,169 @@
         display: none;
         width: 0;
         height: 0;
+      }
+      #liveui-inbox {
+        position: fixed;
+        z-index: 210;
+        top: max(12px, env(safe-area-inset-top, 0px));
+        left: 14px;
+        display: none;
+        align-items: flex-start;
+        gap: 10px;
+        pointer-events: auto;
+        -webkit-app-region: no-drag;
+        app-region: no-drag;
+      }
+      #liveui-inbox.liveui-inbox--visible {
+        display: flex;
+      }
+      #liveui-inbox-toggle {
+        box-sizing: border-box;
+        width: 42px;
+        height: 42px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        margin: 0;
+        padding: 0;
+        border: 1px solid rgba(251, 191, 36, 0.55);
+        border-radius: 10px;
+        background: rgba(31, 41, 55, 0.92);
+        color: #fef3c7;
+        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.38);
+        cursor: pointer;
+        transform: translate(-42%, -38%);
+        -webkit-app-region: no-drag;
+        app-region: no-drag;
+      }
+      #liveui-inbox-toggle:hover {
+        background: rgba(55, 65, 81, 0.96);
+        border-color: rgba(253, 230, 138, 0.78);
+      }
+      #liveui-inbox-toggle svg {
+        width: 22px;
+        height: 22px;
+        display: block;
+        pointer-events: none;
+      }
+      #liveui-inbox-panel {
+        box-sizing: border-box;
+        width: min(82vw, 360px);
+        max-height: min(72vh, 580px);
+        display: none;
+        flex-direction: column;
+        gap: 10px;
+        padding: 12px;
+        border-radius: 14px;
+        background: rgba(20, 22, 28, 0.96);
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        box-shadow: 0 18px 46px rgba(0, 0, 0, 0.48);
+        color: rgba(255, 255, 255, 0.94);
+        overflow-y: auto;
+        -webkit-app-region: no-drag;
+        app-region: no-drag;
+        cursor: default;
+      }
+      #liveui-inbox.liveui-inbox--open #liveui-inbox-panel {
+        display: flex;
+      }
+      body.liveui-inbox-open #liveui-inbox {
+        inset: 0;
+        left: 0 !important;
+        top: 0 !important;
+        width: 100vw;
+        height: 100vh;
+        padding: 18px;
+        box-sizing: border-box;
+        align-items: stretch;
+        justify-content: stretch;
+        background: rgba(10, 12, 18, 0.72);
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+      }
+      body.liveui-inbox-open #liveui-inbox-toggle {
+        position: fixed;
+        top: 18px;
+        right: 18px;
+        left: auto;
+        z-index: 2;
+        transform: none;
+        background: #7f1d1d;
+        border-color: rgba(252, 165, 165, 0.55);
+        color: #fff7f7;
+      }
+      body.liveui-inbox-open #liveui-inbox-panel {
+        display: flex;
+        width: 100%;
+        max-width: none;
+        max-height: none;
+        padding: 18px;
+        border-radius: 18px;
+      }
+      body.liveui-inbox-open .liveui-inbox-image {
+        max-height: min(62vh, 620px);
+      }
+      .liveui-inbox-mail {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .liveui-inbox-subject {
+        font: 650 14px/1.35 system-ui, -apple-system, 'Segoe UI', sans-serif;
+        color: #fff7ed;
+        word-break: break-word;
+      }
+      .liveui-inbox-time {
+        font: 11px/1.25 system-ui, -apple-system, 'Segoe UI', sans-serif;
+        color: rgba(255, 255, 255, 0.54);
+      }
+      .liveui-inbox-body {
+        white-space: pre-wrap;
+        word-break: break-word;
+        font: 13px/1.55 system-ui, -apple-system, 'Segoe UI', sans-serif;
+        color: rgba(255, 255, 255, 0.9);
+      }
+      .liveui-inbox-image-wrap {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .liveui-inbox-image {
+        display: block;
+        width: 100%;
+        max-height: 320px;
+        object-fit: contain;
+        border-radius: 10px;
+        background: #0f1117;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+      }
+      .liveui-inbox-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+      .liveui-inbox-action {
+        box-sizing: border-box;
+        width: 34px;
+        height: 34px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid rgba(148, 163, 184, 0.38);
+        border-radius: 9px;
+        background: #1f2937;
+        color: #f8fafc;
+        cursor: pointer;
+      }
+      .liveui-inbox-action:hover {
+        background: #334155;
+        border-color: rgba(226, 232, 240, 0.62);
+      }
+      .liveui-inbox-action svg {
+        width: 18px;
+        height: 18px;
+        display: block;
+        pointer-events: none;
       }
       .liveui-md-root :where(p, ul, ol, pre, h1, h2, h3, h4, h5, h6, blockquote, table, hr) {
         margin: 0.45em 0;
@@ -164,6 +336,7 @@
       }
       #liveui-control-bar {
         box-sizing: border-box;
+        position: relative;
         width: 100%;
         padding: 10px 12px 12px;
         border-radius: 18px;
@@ -177,6 +350,87 @@
       }
       #liveui-control-bar:active {
         cursor: grabbing;
+      }
+      #liveui-window-tools {
+        position: absolute;
+        top: -18px;
+        right: 16px;
+        z-index: 2;
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        -webkit-app-region: no-drag;
+        app-region: no-drag;
+      }
+      .liveui-window-tool {
+        box-sizing: border-box;
+        width: 34px;
+        height: 34px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin: 0;
+        padding: 0;
+        border: 1px solid rgba(148, 163, 184, 0.45);
+        border-radius: 9px;
+        background: #243244;
+        color: #f8fafc;
+        box-shadow: 0 8px 18px rgba(0, 0, 0, 0.36);
+        cursor: pointer;
+        transition:
+          transform 0.12s ease,
+          background 0.12s ease,
+          color 0.12s ease,
+          border-color 0.12s ease;
+        -webkit-app-region: no-drag;
+        app-region: no-drag;
+      }
+      .liveui-window-tool:hover {
+        transform: translateY(-1px);
+        background: #334155;
+        border-color: rgba(226, 232, 240, 0.62);
+        color: #ffffff;
+      }
+      .liveui-window-tool svg {
+        width: 19px;
+        height: 19px;
+        display: block;
+        pointer-events: none;
+        cursor: inherit;
+      }
+      .liveui-window-tool--drag {
+        background: #155e75;
+        border-color: rgba(103, 232, 249, 0.48);
+      }
+      .liveui-window-tool--drag {
+        cursor: -webkit-grab;
+        cursor: grab;
+        -webkit-app-region: no-drag;
+        app-region: no-drag;
+        user-select: none;
+      }
+      .liveui-window-tool--drag:hover {
+        background: #0e7490;
+        border-color: rgba(165, 243, 252, 0.72);
+      }
+      .liveui-window-tool--drag:active {
+        cursor: -webkit-grabbing;
+        cursor: grabbing;
+      }
+      .liveui-window-tool--drag.liveui-window-tool--dragging,
+      body.liveui-window-dragging,
+      body.liveui-window-dragging * {
+        cursor: -webkit-grabbing !important;
+        cursor: grabbing !important;
+      }
+      .liveui-window-tool--close {
+        background: #7f1d1d;
+        border-color: rgba(252, 165, 165, 0.5);
+      }
+      .liveui-window-tool--close:hover {
+        background: #b91c1c;
+        border-color: rgba(254, 202, 202, 0.78);
+        color: #fff7f7;
       }
       #liveui-bar-body {
         display: flex;
@@ -267,12 +521,6 @@
         height: 20px;
         display: block;
       }
-      .liveui-hand-emoji {
-        font-size: 19px;
-        line-height: 1;
-        display: block;
-        filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.25));
-      }
       .liveui-icon-btn--speaker {
         background: linear-gradient(180deg, #34d399 0%, #059669 100%);
         box-shadow: 0 2px 6px rgba(5, 150, 105, 0.35);
@@ -292,9 +540,14 @@
         background: linear-gradient(180deg, #ef4444 0%, #dc2626 100%);
         box-shadow: 0 2px 6px rgba(220,38,38,0.45);
       }
-      .liveui-icon-btn--hand {
-        background: linear-gradient(180deg, #fbbf24 0%, #d97706 100%);
+      .liveui-icon-btn--camera {
+        background: linear-gradient(180deg, #f59e0b 0%, #d97706 100%);
         box-shadow: 0 2px 6px rgba(217, 119, 6, 0.35);
+        transition: background 0.2s, box-shadow 0.2s, opacity 0.2s;
+      }
+      .liveui-icon-btn--camera[aria-busy="true"] {
+        filter: saturate(0.78);
+        opacity: 0.72;
       }
       #liveui-composer {
         flex: 1;
@@ -329,12 +582,118 @@
         border-radius: 8px;
         background: transparent;
         color: rgba(255, 255, 255, 0.45);
-        cursor: not-allowed;
+        cursor: default;
         opacity: 0.65;
+        overflow: hidden;
+        position: relative;
       }
       .liveui-attach-btn svg {
         width: 18px;
         height: 18px;
+      }
+      .liveui-attach-btn--has-photo {
+        opacity: 1;
+        background: rgba(255, 255, 255, 0.08);
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
+        cursor: pointer;
+      }
+      .liveui-attach-btn--has-photo #liveui-attach-icon {
+        display: none;
+      }
+      #liveui-attachment-thumb {
+        position: absolute;
+        inset: 3px;
+        width: calc(100% - 6px);
+        height: calc(100% - 6px);
+        object-fit: cover;
+        border-radius: 6px;
+        display: block;
+      }
+      #liveui-attachment-thumb[hidden] {
+        display: none;
+      }
+      #liveui-photo-preview {
+        position: fixed;
+        z-index: 190;
+        left: 50%;
+        bottom: calc(max(4px, env(safe-area-inset-bottom, 0px)) + 118px);
+        transform: translateX(-50%);
+        width: min(78vw, 360px);
+        padding: 10px;
+        border-radius: 14px;
+        background: rgba(20, 22, 28, 0.94);
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        box-shadow: 0 16px 44px rgba(0, 0, 0, 0.5);
+        -webkit-app-region: no-drag;
+        app-region: no-drag;
+        pointer-events: auto;
+        user-select: none;
+        cursor: default;
+      }
+      #liveui-photo-preview[hidden] {
+        display: none !important;
+      }
+      #liveui-photo-preview-img {
+        display: block;
+        width: 100%;
+        aspect-ratio: 4 / 3;
+        object-fit: cover;
+        border-radius: 10px;
+        background: #0f1117;
+      }
+      .liveui-photo-preview-actions {
+        position: absolute;
+        right: 16px;
+        bottom: 16px;
+        display: flex;
+        gap: 8px;
+        z-index: 2;
+        -webkit-app-region: no-drag;
+        app-region: no-drag;
+        pointer-events: auto;
+      }
+      .liveui-photo-action {
+        box-sizing: border-box;
+        width: 34px;
+        height: 34px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        border-radius: 10px;
+        color: #fff;
+        cursor: pointer;
+        -webkit-app-region: no-drag;
+        app-region: no-drag;
+        pointer-events: auto;
+        box-shadow: 0 8px 18px rgba(0, 0, 0, 0.36);
+      }
+      .liveui-photo-action svg {
+        width: 18px;
+        height: 18px;
+        display: block;
+        pointer-events: none;
+        cursor: inherit;
+      }
+      .liveui-photo-action--cancel {
+        background: rgba(127, 29, 29, 0.92);
+      }
+      .liveui-photo-action--confirm {
+        background: rgba(5, 150, 105, 0.92);
+      }
+      .liveui-photo-fly {
+        position: fixed;
+        z-index: 240;
+        object-fit: cover;
+        pointer-events: none;
+        box-shadow: 0 14px 34px rgba(0, 0, 0, 0.42);
+        transition:
+          left 0.72s cubic-bezier(0.2, 0.9, 0.2, 1),
+          top 0.72s cubic-bezier(0.2, 0.9, 0.2, 1),
+          width 0.72s cubic-bezier(0.2, 0.9, 0.2, 1),
+          height 0.72s cubic-bezier(0.2, 0.9, 0.2, 1),
+          border-radius 0.72s cubic-bezier(0.2, 0.9, 0.2, 1),
+          opacity 0.72s ease;
       }
       #liveui-user-line {
         flex: 1;
@@ -432,11 +791,232 @@
         color: rgba(255, 255, 255, 0.55);
         font-size: 12px;
       }
+      #liveui-config-panel {
+        position: fixed;
+        inset: 14px;
+        z-index: 320;
+        display: grid;
+        grid-template-rows: auto 1fr;
+        min-height: 0;
+        border-radius: 14px;
+        border: 1px solid rgba(148, 163, 184, 0.45);
+        background: rgba(18, 21, 28, 0.98);
+        box-shadow: 0 22px 60px rgba(0, 0, 0, 0.55);
+        color: rgba(255, 255, 255, 0.92);
+        -webkit-app-region: no-drag;
+        app-region: no-drag;
+      }
+      #liveui-config-panel[hidden] {
+        display: none !important;
+      }
+      .config-topbar {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 12px;
+        padding: 12px 14px;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.25);
+      }
+      .config-title {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        min-width: 0;
+      }
+      .config-title strong {
+        font: 700 15px/1.2 system-ui, sans-serif;
+      }
+      .config-title span {
+        color: rgba(255, 255, 255, 0.48);
+        font: 12px/1.3 system-ui, sans-serif;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .config-actions {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 8px;
+        flex: 0 0 auto;
+      }
+      .config-btn {
+        border: 1px solid rgba(148, 163, 184, 0.32);
+        border-radius: 8px;
+        background: rgba(30, 41, 59, 0.85);
+        color: rgba(255, 255, 255, 0.92);
+        min-height: 32px;
+        padding: 0 12px;
+        font: 600 13px system-ui, sans-serif;
+        cursor: pointer;
+      }
+      .config-btn:hover {
+        background: rgba(51, 65, 85, 0.95);
+      }
+      .config-btn--primary {
+        border-color: rgba(34, 211, 238, 0.45);
+        background: #0891b2;
+      }
+      .config-body {
+        display: grid;
+        grid-template-columns: 150px minmax(0, 1fr);
+        min-height: 0;
+      }
+      .config-tabs {
+        padding: 10px;
+        border-right: 1px solid rgba(148, 163, 184, 0.22);
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .config-tab {
+        border: none;
+        border-radius: 8px;
+        background: transparent;
+        color: rgba(255, 255, 255, 0.68);
+        text-align: left;
+        padding: 9px 10px;
+        font: 600 13px system-ui, sans-serif;
+        cursor: pointer;
+      }
+      .config-tab--active {
+        background: rgba(34, 211, 238, 0.14);
+        color: #67e8f9;
+      }
+      .config-content {
+        overflow: auto;
+        padding: 14px;
+      }
+      .config-section {
+        display: none;
+        max-width: 760px;
+      }
+      .config-section--active {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .config-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+      .config-field {
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+        min-width: 0;
+      }
+      .config-field label {
+        color: rgba(255, 255, 255, 0.62);
+        font: 600 12px/1.25 system-ui, sans-serif;
+      }
+      .config-field input,
+      .config-field select,
+      .config-field textarea {
+        box-sizing: border-box;
+        width: 100%;
+        border: 1px solid rgba(148, 163, 184, 0.28);
+        border-radius: 8px;
+        background: rgba(15, 23, 42, 0.9);
+        color: rgba(255, 255, 255, 0.92);
+        min-height: 34px;
+        padding: 7px 9px;
+        font: 13px/1.35 system-ui, sans-serif;
+      }
+      .config-field textarea {
+        min-height: 74px;
+        resize: vertical;
+      }
+      .config-span-2 {
+        grid-column: 1 / -1;
+      }
+      .config-row {
+        display: flex;
+        gap: 8px;
+        align-items: end;
+      }
+      .config-list {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .config-card {
+        border: 1px solid rgba(148, 163, 184, 0.2);
+        border-radius: 8px;
+        padding: 10px;
+        background: rgba(15, 23, 42, 0.52);
+      }
+      #liveui-config-status {
+        color: rgba(255, 255, 255, 0.58);
+        font: 12px/1.4 system-ui, sans-serif;
+        max-width: 260px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      #liveui-config-status.ok {
+        color: #86efac;
+      }
+      #liveui-config-status.err {
+        color: #fca5a5;
+      }
+      @media (max-width: 560px) {
+        #liveui-config-panel {
+          inset: 8px;
+        }
+        .config-body {
+          grid-template-columns: 1fr;
+        }
+        .config-topbar {
+          grid-template-columns: 1fr;
+        }
+        .config-actions {
+          justify-content: space-between;
+        }
+        .config-tabs {
+          flex-direction: row;
+          overflow-x: auto;
+          border-right: none;
+          border-bottom: 1px solid rgba(148, 163, 184, 0.22);
+        }
+        .config-grid {
+          grid-template-columns: 1fr;
+        }
+        .config-span-2 {
+          grid-column: auto;
+        }
+      }
     </style>
   </head>
   <body>
+    <div id="liveui-config-panel" hidden aria-hidden="true">
+      <div class="config-topbar">
+        <div class="config-title">
+          <strong>Infiniti 配置</strong>
+          <span id="liveui-config-path"></span>
+        </div>
+        <div class="config-actions">
+          <span id="liveui-config-status"></span>
+          <button type="button" class="config-btn" id="liveui-config-close">取消</button>
+          <button type="button" class="config-btn config-btn--primary" id="liveui-config-save">保存</button>
+        </div>
+      </div>
+      <div class="config-body">
+        <nav class="config-tabs" id="liveui-config-tabs"></nav>
+        <main class="config-content" id="liveui-config-content"></main>
+      </div>
+    </div>
     <div id="speech-bubble" aria-hidden="true">
       <div id="speech-bubble-text" class="liveui-md-root"></div>
+    </div>
+    <div id="liveui-inbox" aria-hidden="true">
+      <button type="button" id="liveui-inbox-toggle" title="你的邮箱" aria-label="你的邮箱">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path fill="currentColor" d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2Zm0 4.2-8 5-8-5V6l8 5 8-5v2.2Z"/>
+        </svg>
+      </button>
+      <div id="liveui-inbox-panel" role="dialog" aria-label="你的邮箱"></div>
     </div>
     <div id="liveui-bottom-dock">
       <div
@@ -451,6 +1031,40 @@
         <ul id="liveui-slash-menu-list"></ul>
       </div>
       <div id="liveui-control-bar">
+        <div id="liveui-window-tools" aria-label="窗口操作">
+          <button
+            type="button"
+            class="liveui-window-tool"
+            id="liveui-btn-config"
+            title="设置"
+            aria-label="设置"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path fill="currentColor" d="M19.43 12.98c.04-.32.07-.65.07-.98s-.02-.66-.07-.98l2.11-1.65-2-3.46-2.49 1a7.1 7.1 0 0 0-1.69-.98L15 3.25h-4l-.36 2.68c-.6.23-1.16.56-1.69.98l-2.49-1-2 3.46 2.11 1.65c-.04.32-.07.65-.07.98s.02.66.07.98l-2.11 1.65 2 3.46 2.49-1c.53.41 1.09.74 1.69.98l.36 2.68h4l.36-2.68c.6-.23 1.16-.56 1.69-.98l2.49 1 2-3.46-2.11-1.65zM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z"/>
+            </svg>
+          </button>
+          <div
+            class="liveui-window-tool liveui-window-tool--drag"
+            title="拖动窗口"
+            aria-label="拖动窗口"
+            role="button"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path fill="currentColor" d="M10 4h4v4h3l-5 5-5-5h3V4zm2 7 5 5h-3v4h-4v-4H7l5-5zM4 10h4v4H4v-4zm12 0h4v4h-4v-4z"/>
+            </svg>
+          </div>
+          <button
+            type="button"
+            class="liveui-window-tool liveui-window-tool--close"
+            id="liveui-btn-exit"
+            title="关闭退出"
+            aria-label="关闭退出"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path fill="currentColor" d="M18.3 5.71 12 12l6.3 6.29-1.41 1.41L10.59 13.41 4.29 19.7 2.88 18.29 9.17 12 2.88 5.71 4.29 4.3l6.3 6.29 6.3-6.29 1.41 1.41z"/>
+            </svg>
+          </button>
+        </div>
         <div id="liveui-bar-body">
           <aside id="liveui-bar-side">
             <div
@@ -501,12 +1115,16 @@
               </button>
               <button
                 type="button"
-                class="liveui-icon-btn liveui-icon-btn--hand"
-                id="liveui-btn-hand"
-                title="举手 / 打断（即将支持）"
-                aria-label="举手，即将支持"
+                class="liveui-icon-btn liveui-icon-btn--camera"
+                id="liveui-btn-vision"
+                title="拍照"
+                aria-label="拍照"
+                aria-pressed="false"
+                aria-busy="false"
               >
-                <span class="liveui-hand-emoji" aria-hidden="true">✋</span>
+                <svg id="liveui-camera-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path fill="currentColor" d="M9.25 4 7.6 6H4.75A2.75 2.75 0 0 0 2 8.75v8.5A2.75 2.75 0 0 0 4.75 20h14.5A2.75 2.75 0 0 0 22 17.25v-8.5A2.75 2.75 0 0 0 19.25 6H16.4l-1.65-2h-5.5zM12 9a4 4 0 1 1 0 8 4 4 0 0 1 0-8zm0 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm6.5-2.2a.8.8 0 1 1 0 1.6.8.8 0 0 1 0-1.6z"/>
+                </svg>
               </button>
             </div>
           </aside>
@@ -515,16 +1133,16 @@
               type="button"
               class="liveui-attach-btn"
               id="liveui-btn-attach"
-              disabled
-              title="附件（即将支持）"
-              aria-label="附件，即将支持"
+              title="附件"
+              aria-label="附件"
             >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
+              <svg id="liveui-attach-icon" viewBox="0 0 24 24" aria-hidden="true">
                 <path
                   fill="currentColor"
                   d="M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5v10.5c0 .55-.45 1-1 1s-1-.45-1-1V6H10v9.5c0 1.38 1.12 2.5 2.5 2.5s2.5-1.12 2.5-2.5V5c0-2.21-1.79-4-4-4S7 2.79 7 5v12.5c0 3.04 2.46 5.5 5.5 5.5s5.5-2.46 5.5-5.5V6h-1.5z"
                 />
               </svg>
+              <img id="liveui-attachment-thumb" alt="" hidden />
             </button>
             <textarea
               id="liveui-user-line"
@@ -536,6 +1154,33 @@
             ></textarea>
           </div>
         </div>
+      </div>
+    </div>
+    <div id="liveui-photo-preview" hidden>
+      <img id="liveui-photo-preview-img" alt="" />
+      <div class="liveui-photo-preview-actions">
+        <button
+          type="button"
+          class="liveui-photo-action liveui-photo-action--cancel"
+          id="liveui-photo-cancel"
+          title="取消"
+          aria-label="取消"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path fill="currentColor" d="M18.3 5.71 12 12l6.3 6.29-1.41 1.41L10.59 13.41 4.29 19.7 2.88 18.29 9.17 12 2.88 5.71 4.29 4.3l6.3 6.29 6.3-6.29 1.41 1.41z"/>
+          </svg>
+        </button>
+        <button
+          type="button"
+          class="liveui-photo-action liveui-photo-action--confirm"
+          id="liveui-photo-confirm"
+          title="确认"
+          aria-label="确认"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path fill="currentColor" d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
+          </svg>
+        </button>
       </div>
     </div>
     <canvas id="app"></canvas>

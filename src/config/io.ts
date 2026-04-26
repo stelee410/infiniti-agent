@@ -11,6 +11,7 @@ import type {
   LiveUiConfig,
   LlmProfile,
   McpServerConfig,
+  SnapImageConfig,
   TtsConfig,
 } from './types.js'
 import { isLlmProvider } from './types.js'
@@ -130,6 +131,7 @@ export async function loadConfig(cwd?: string): Promise<InfinitiConfig> {
   const tts = parseTtsConfig(o.tts)
   const asr = parseAsrConfig(o.asr)
   const avatarGen = parseAvatarGenConfig(o.avatarGen)
+  const snap = parseSnapImageConfig(o.snap)
 
   const flatDisableTools = llm.disableTools
   const resolvedDisableTools =
@@ -161,6 +163,7 @@ export async function loadConfig(cwd?: string): Promise<InfinitiConfig> {
     ...(tts ? { tts } : {}),
     ...(asr ? { asr } : {}),
     ...(avatarGen ? { avatarGen } : {}),
+    ...(snap ? { snap } : {}),
   }
 }
 
@@ -168,11 +171,31 @@ function parseAvatarGenConfig(raw: unknown): AvatarGenConfig | undefined {
   if (!raw || typeof raw !== 'object') return undefined
   const u = raw as Record<string, unknown>
   const out: AvatarGenConfig = {}
+  if (u.provider === 'gemini' || u.provider === 'chatgpt-image') out.provider = u.provider
   if (typeof u.baseUrl === 'string' && u.baseUrl.trim()) out.baseUrl = u.baseUrl.trim()
   if (typeof u.apiKey === 'string' && u.apiKey.trim()) out.apiKey = u.apiKey.trim()
   if (typeof u.model === 'string' && u.model.trim()) out.model = u.model.trim()
   if (typeof u.aspectRatio === 'string' && u.aspectRatio.trim()) out.aspectRatio = u.aspectRatio.trim()
   if (typeof u.imageSize === 'string' && u.imageSize.trim()) out.imageSize = u.imageSize.trim()
+  return Object.keys(out).length ? out : undefined
+}
+
+function parseSnapImageConfig(raw: unknown): SnapImageConfig | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const u = raw as Record<string, unknown>
+  const out: SnapImageConfig = {}
+  if (u.provider === 'nano-banana' || u.provider === 'gpt-image-2') out.provider = u.provider
+  if (typeof u.baseUrl === 'string' && u.baseUrl.trim()) out.baseUrl = u.baseUrl.trim()
+  if (typeof u.apiKey === 'string' && u.apiKey.trim()) out.apiKey = u.apiKey.trim()
+  if (typeof u.model === 'string' && u.model.trim()) out.model = u.model.trim()
+  if (typeof u.aspectRatio === 'string' && u.aspectRatio.trim()) out.aspectRatio = u.aspectRatio.trim()
+  if (typeof u.imageSize === 'string' && u.imageSize.trim()) out.imageSize = u.imageSize.trim()
+  if (u.quality === 'auto' || u.quality === 'high' || u.quality === 'medium' || u.quality === 'low') {
+    out.quality = u.quality
+  }
+  if (typeof u.timeoutMs === 'number' && Number.isFinite(u.timeoutMs) && u.timeoutMs >= 5000) {
+    out.timeoutMs = Math.floor(u.timeoutMs)
+  }
   return Object.keys(out).length ? out : undefined
 }
 
@@ -183,6 +206,15 @@ function parseLiveUiConfig(raw: unknown): LiveUiConfig | undefined {
   if (typeof u.port === 'number' && Number.isFinite(u.port)) {
     const p = Math.floor(u.port)
     if (p >= 1 && p <= 65535) out.port = p
+  }
+  if (typeof u.ttsAutoEnabled === 'boolean') {
+    out.ttsAutoEnabled = u.ttsAutoEnabled
+  }
+  if (typeof u.asrAutoEnabled === 'boolean') {
+    out.asrAutoEnabled = u.asrAutoEnabled
+  }
+  if (u.asrMode === 'manual' || u.asrMode === 'auto') {
+    out.asrMode = u.asrMode
   }
   if (typeof u.live2dModelsDir === 'string' && u.live2dModelsDir.trim()) {
     out.live2dModelsDir = u.live2dModelsDir.trim()
@@ -289,11 +321,6 @@ function parseTtsConfig(raw: unknown): TtsConfig | undefined {
         ? t.promptAudioPath.trim()
         : undefined
     const demo = typeof t.demoId === 'string' && t.demoId.trim() ? t.demoId.trim() : undefined
-    if (!prompt && !demo) {
-      throw new ConfigError(
-        'tts.provider 为 moss_tts_nano 时须设置 promptAudioPath 或 demoId（见 MOSS-TTS-Nano README）',
-      )
-    }
     const out: TtsConfig = { provider: 'moss_tts_nano', baseUrl: t.baseUrl.trim() }
     if (prompt) out.promptAudioPath = prompt
     if (demo) out.demoId = demo
@@ -325,6 +352,14 @@ function parseTtsConfig(raw: unknown): TtsConfig | undefined {
     if (typeof t.timeoutMs === 'number' && t.timeoutMs >= 5000 && Number.isFinite(t.timeoutMs)) {
       out.timeoutMs = Math.floor(t.timeoutMs)
     }
+    return out
+  }
+  if (t.provider === 'whisper') {
+    if (typeof t.apiKey !== 'string' || !t.apiKey.trim()) return undefined
+    if (typeof t.baseUrl !== 'string' || !t.baseUrl.trim()) return undefined
+    const out: TtsConfig = { provider: 'whisper', apiKey: t.apiKey.trim(), baseUrl: t.baseUrl.trim() }
+    if (typeof t.model === 'string' && t.model.trim()) out.model = t.model.trim()
+    if (typeof t.voiceId === 'string' && t.voiceId.trim()) out.voiceId = t.voiceId.trim()
     return out
   }
   return undefined
@@ -398,6 +433,8 @@ export async function saveConfig(input: SaveConfigInput): Promise<void> {
     ...(existing?.liveUi ? { liveUi: existing.liveUi } : {}),
     ...(existing?.tts ? { tts: existing.tts } : {}),
     ...(existing?.asr ? { asr: existing.asr } : {}),
+    ...(existing?.avatarGen ? { avatarGen: existing.avatarGen } : {}),
+    ...(existing?.snap ? { snap: existing.snap } : {}),
   }
   const target = GLOBAL_CONFIG_PATH
   await mkdir(dirname(target), { recursive: true })

@@ -48,6 +48,6 @@ echo "venv 就绪: $VENV_DIR" >&2
 if [[ "${VOXCPM_SKIP_MODEL_DOWNLOAD:-0}" == "1" ]]; then
   echo "已跳过模型下载（VOXCPM_SKIP_MODEL_DOWNLOAD=1）。需要时执行: $REPO_ROOT/scripts/download-voxcpm-model.sh" >&2
 else
-  echo "开始自动下载 VoxCPM2 权重到 models/VoxCPM2（体积大、耗时长；仅跳过请设 VOXCPM_SKIP_MODEL_DOWNLOAD=1）…" >&2
+  echo "开始自动下载 VoxCPM2 权重到 ${VOXCPM_MODEL_DIR:-$HOME/Dev/models/VoxCPM2}（体积大、耗时长；仅跳过请设 VOXCPM_SKIP_MODEL_DOWNLOAD=1）…" >&2
   "$SCRIPT_DIR/download-voxcpm-model.sh"
 fi

@@ -6,7 +6,7 @@ import {
   stripLiveUiKnownEmotionTagsEverywhere,
   type StreamLiveUiState,
 } from '../../src/liveui/emotionParse.ts'
-import type { LiveUiStatusVariant } from '../../src/liveui/protocol.ts'
+import type { LiveUiStatusVariant, LiveUiVisionAttachment } from '../../src/liveui/protocol.ts'
 import type { LiveUiVoiceMicWire } from '../../src/liveui/voiceMicEnv.ts'
 import {
   VOICE_MIC_DEFAULT_SILENCE_END_MS,
@@ -26,6 +26,7 @@ import {
   parseSpriteExpressionManifest,
   type SpriteExpressionManifestV1,
 } from '../../src/liveui/spriteExpressionManifestCore.ts'
+import { initConfigPanel } from './configPanel.ts'
 
 /** 由 expressions.json 注入，覆盖默认 exp_xx 映射 */
 let spriteEmotionToIdOverride: Record<string, string> | null = null
@@ -45,6 +46,19 @@ declare global {
       setIgnoreMouseEvents?: (ignore: boolean, opts?: { forward?: boolean }) => void
       /** Electron：首帧后按人物包围盒收紧窗口高度 */
       compactWindowHeight?: (height: number) => void
+      /** Electron：配置面板打开时临时切换到较大的可交互窗口 */
+      setConfigPanelOpen?: (open: boolean) => void
+      /** Electron：读取窗口位置，供自绘拖拽按钮使用 */
+      getWindowBounds?: () => Promise<{ x: number; y: number; width: number; height: number } | null>
+      /** Electron：移动窗口，供自绘拖拽按钮使用 */
+      setWindowPosition?: (x: number, y: number) => void
+      /** Electron：选择本地文件或目录 */
+      selectPath?: (opts: { kind: 'file' | 'directory'; defaultPath?: string }) => Promise<string | null>
+      /** Electron：打开系统另存为对话框 */
+      savePath?: (opts: { defaultPath?: string }) => Promise<string | null>
+    }
+    ImageCapture?: new (track: MediaStreamTrack) => {
+      grabFrame: () => Promise<ImageBitmap>
     }
     /** pixi-live2d-display 依赖全局 PIXI.Ticker */
     PIXI: typeof PIXI
@@ -63,7 +77,7 @@ type ActionMsg = {
 
 type AssistantStreamMsg = {
   type: 'ASSISTANT_STREAM'
-  data: { fullRaw: string; reset?: boolean }
+  data: { fullRaw: string; reset?: boolean; done?: boolean }
 }
 
 type StatusPillMsg = {
@@ -84,13 +98,58 @@ type AudioChunkMsg = {
 
 type AudioResetMsg = { type: 'AUDIO_RESET' }
 
-type TtsStatusMsg = { type: 'TTS_STATUS'; data: { available: boolean } }
+type TtsStatusMsg = { type: 'TTS_STATUS'; data: { available: boolean; enabled?: unknown } }
 type AsrStatusMsg = { type: 'ASR_STATUS'; data: { available: boolean } }
 type AsrResultMsg = { type: 'ASR_RESULT'; data: { text: string } }
 
 type SlashCompletionMsg = {
   type: 'SLASH_COMPLETION'
   data: { open?: boolean; items?: unknown }
+}
+
+type ConfigOpenMsg = {
+  type: 'CONFIG_OPEN'
+  data: { cwd?: unknown; config?: unknown }
+}
+
+type ConfigStatusMsg = {
+  type: 'CONFIG_STATUS'
+  data: { ok?: unknown; message?: unknown }
+}
+
+type VisionCaptureResultMsg = {
+  type: 'VISION_CAPTURE_RESULT'
+  data: {
+    requestId?: unknown
+    ok?: unknown
+    vision?: unknown
+    error?: unknown
+  }
+}
+
+type InboxAttachment = {
+  kind?: unknown
+  path?: unknown
+  mimeType?: unknown
+  label?: unknown
+}
+
+type InboxItem = {
+  id?: unknown
+  createdAt?: unknown
+  subject?: unknown
+  body?: unknown
+  attachments?: unknown
+}
+
+type InboxUpdateMsg = {
+  type: 'INBOX_UPDATE'
+  data: { unread?: unknown }
+}
+
+type InboxSaveResultMsg = {
+  type: 'INBOX_SAVE_RESULT'
+  data: { ok?: unknown; message?: unknown }
 }
 
 type Msg =
@@ -104,6 +163,11 @@ type Msg =
   | AsrStatusMsg
   | AsrResultMsg
   | SlashCompletionMsg
+  | ConfigOpenMsg
+  | ConfigStatusMsg
+  | VisionCaptureResultMsg
+  | InboxUpdateMsg
+  | InboxSaveResultMsg
 
 const FACE_RADIUS = 110
 
@@ -206,6 +270,9 @@ async function bootstrap(): Promise<void> {
   ) as HTMLElement | null
   const statusPill = document.getElementById('liveui-status-pill')
   const userLineInput = document.getElementById('liveui-user-line') as HTMLTextAreaElement | null
+  const inboxRoot = document.getElementById('liveui-inbox')
+  const inboxToggle = document.getElementById('liveui-inbox-toggle') as HTMLButtonElement | null
+  const inboxPanel = document.getElementById('liveui-inbox-panel')
   if (!canvas) return
 
   window.PIXI = PIXI
@@ -417,6 +484,17 @@ async function bootstrap(): Promise<void> {
   let bubbleAutoDismissTimer: ReturnType<typeof setTimeout> | undefined
   let bubbleIsStreaming = false
 
+  const positionInboxAtComposer = (): void => {
+    if (!inboxRoot) return
+    const composer = document.getElementById('liveui-composer')
+    if (!composer) return
+    const rect = composer.getBoundingClientRect()
+    const left = Math.max(8, Math.min(window.innerWidth - 56, rect.left + 2))
+    const top = Math.max(8, Math.min(window.innerHeight - 56, rect.top + 2))
+    inboxRoot.style.left = `${left}px`
+    inboxRoot.style.top = `${top}px`
+  }
+
   /** 将气泡定位到控制条上方、叠在人物躯干区域。 */
   const positionBubbleOverFigure = (): void => {
     if (!speechBubble) return
@@ -425,6 +503,7 @@ async function bootstrap(): Promise<void> {
     const barRect = controlBar.getBoundingClientRect()
     const gap = 12
     speechBubble.style.bottom = `${window.innerHeight - barRect.top + gap}px`
+    positionInboxAtComposer()
   }
 
   /**
@@ -729,6 +808,16 @@ async function bootstrap(): Promise<void> {
   const port = readPort()
   const wsUrl = `ws://127.0.0.1:${port}`
   const socket = new WebSocket(wsUrl)
+  let configPanelOpen = false
+  const configPanel = initConfigPanel({
+    socket,
+    onOpenChange: (open) => {
+      configPanelOpen = open
+      document.body.classList.toggle('liveui-config-open', open)
+      window.infinitiLiveUi?.setConfigPanelOpen?.(open)
+      window.infinitiLiveUi?.setIgnoreMouseEvents?.(!open, { forward: true })
+    },
+  })
 
   const INPUT_HISTORY_STORAGE_KEY = 'infiniti-liveui-input-history-v1'
   const INPUT_HISTORY_MAX = 100
@@ -744,6 +833,164 @@ async function bootstrap(): Promise<void> {
   const slashMenuEl = document.getElementById('liveui-slash-menu')
   const slashHintEl = document.getElementById('liveui-slash-menu-hint')
   const slashListEl = document.getElementById('liveui-slash-menu-list')
+  type RenderInboxAttachment = { kind: 'image' | 'file'; path: string; mimeType?: string; label?: string }
+  type RenderInboxItem = {
+    id: string
+    createdAt: string
+    subject: string
+    body: string
+    attachments: RenderInboxAttachment[]
+  }
+  let unreadInboxItems: RenderInboxItem[] = []
+  let openInboxItems: RenderInboxItem[] = []
+  let inboxPanelOpen = false
+  let inboxMarkTimer: number | undefined
+  const inboxIconSvg = '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2Zm0 4.2-8 5-8-5V6l8 5 8-5v2.2Z"/></svg>'
+  const closeIconSvg = '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M18.3 5.71 12 12l6.3 6.29-1.41 1.41L10.59 13.41 4.29 19.7 2.88 18.29 9.17 12 2.88 5.71 4.29 4.3l6.3 6.29 6.3-6.29 1.41 1.41z"/></svg>'
+
+  const filePathToUrl = (p: string): string => {
+    if (/^file:/i.test(p) || /^https?:/i.test(p) || /^data:/i.test(p)) return p
+    return `file://${p.split('/').map((part) => encodeURIComponent(part)).join('/')}`
+  }
+
+  const parseInboxAttachment = (raw: InboxAttachment): RenderInboxAttachment | null => {
+    if (!raw || typeof raw !== 'object') return null
+    if (raw.kind !== 'image' && raw.kind !== 'file') return null
+    if (typeof raw.path !== 'string' || !raw.path.trim()) return null
+    const out: RenderInboxAttachment = { kind: raw.kind, path: raw.path }
+    if (typeof raw.mimeType === 'string') out.mimeType = raw.mimeType
+    if (typeof raw.label === 'string') out.label = raw.label
+    return out
+  }
+
+  const parseInboxItem = (raw: InboxItem): RenderInboxItem | null => {
+    if (!raw || typeof raw !== 'object') return null
+    if (
+      typeof raw.id !== 'string' ||
+      typeof raw.createdAt !== 'string' ||
+      typeof raw.subject !== 'string' ||
+      typeof raw.body !== 'string' ||
+      !Array.isArray(raw.attachments)
+    ) {
+      return null
+    }
+    return {
+      id: raw.id,
+      createdAt: raw.createdAt,
+      subject: raw.subject,
+      body: raw.body,
+      attachments: raw.attachments
+        .map((a) => parseInboxAttachment(a as InboxAttachment))
+        .filter((a): a is RenderInboxAttachment => a != null),
+    }
+  }
+
+  const renderInbox = (): void => {
+    if (!inboxRoot || !inboxPanel) return
+    if (!inboxPanelOpen) positionInboxAtComposer()
+    const items = inboxPanelOpen ? openInboxItems : unreadInboxItems
+    const visible = inboxPanelOpen || unreadInboxItems.length > 0
+    inboxRoot.classList.toggle('liveui-inbox--visible', visible)
+    inboxRoot.classList.toggle('liveui-inbox--open', inboxPanelOpen)
+    inboxRoot.setAttribute('aria-hidden', visible ? 'false' : 'true')
+    inboxPanel.replaceChildren()
+    if (!visible || items.length === 0) {
+      return
+    }
+    for (const item of items) {
+      const mail = document.createElement('section')
+      mail.className = 'liveui-inbox-mail'
+
+      const subject = document.createElement('div')
+      subject.className = 'liveui-inbox-subject'
+      subject.textContent = item.subject
+      mail.appendChild(subject)
+
+      const time = document.createElement('div')
+      time.className = 'liveui-inbox-time'
+      time.textContent = new Date(item.createdAt).toLocaleString()
+      mail.appendChild(time)
+
+      const body = document.createElement('div')
+      body.className = 'liveui-inbox-body'
+      body.textContent = item.body
+      mail.appendChild(body)
+
+      for (const attachment of item.attachments) {
+        if (attachment.kind === 'image') {
+          const wrap = document.createElement('div')
+          wrap.className = 'liveui-inbox-image-wrap'
+          const img = document.createElement('img')
+          img.className = 'liveui-inbox-image'
+          img.alt = attachment.label ?? 'generated image'
+          img.src = filePathToUrl(attachment.path)
+          wrap.appendChild(img)
+          const actions = document.createElement('div')
+          actions.className = 'liveui-inbox-actions'
+          const saveBtn = document.createElement('button')
+          saveBtn.type = 'button'
+          saveBtn.className = 'liveui-inbox-action'
+          saveBtn.title = '另存为'
+          saveBtn.setAttribute('aria-label', '另存为')
+          saveBtn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M5 20h14v-2H5v2ZM19 9h-4V3H9v6H5l7 7 7-7Z"/></svg>'
+          saveBtn.addEventListener('click', async (ev) => {
+            ev.stopPropagation()
+            const defaultPath = attachment.path.split(/[\\/]/).pop() || 'snap-image.png'
+            const dest = await window.infinitiLiveUi?.savePath?.({ defaultPath })
+            if (dest && socket.readyState === WebSocket.OPEN) {
+              socket.send(JSON.stringify({
+                type: 'INBOX_SAVE_AS',
+                data: { sourcePath: attachment.path, destinationPath: dest },
+              }))
+            }
+          })
+          actions.appendChild(saveBtn)
+          wrap.appendChild(actions)
+          mail.appendChild(wrap)
+        }
+      }
+
+      inboxPanel.appendChild(mail)
+    }
+  }
+
+  const markVisibleInboxReadSoon = (): void => {
+    if (inboxMarkTimer) window.clearTimeout(inboxMarkTimer)
+    const ids = unreadInboxItems.map((m) => m.id)
+    if (ids.length === 0) return
+    inboxMarkTimer = window.setTimeout(() => {
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: 'INBOX_MARK_READ', data: { ids } }))
+      }
+    }, 1500)
+  }
+
+  const setInboxOpen = (open: boolean): void => {
+    if (!inboxRoot || !inboxToggle) return
+    if (open && unreadInboxItems.length === 0 && openInboxItems.length === 0) return
+    inboxPanelOpen = open
+    if (open) {
+      openInboxItems = unreadInboxItems.length > 0 ? [...unreadInboxItems] : [...openInboxItems]
+    } else {
+      openInboxItems = []
+      if (inboxMarkTimer) {
+        window.clearTimeout(inboxMarkTimer)
+        inboxMarkTimer = undefined
+      }
+    }
+    document.body.classList.toggle('liveui-inbox-open', open)
+    inboxToggle.innerHTML = open ? closeIconSvg : inboxIconSvg
+    inboxToggle.title = open ? '关闭你的邮箱' : '你的邮箱'
+    inboxToggle.setAttribute('aria-label', open ? '关闭你的邮箱' : '你的邮箱')
+    window.infinitiLiveUi?.setConfigPanelOpen?.(open)
+    window.infinitiLiveUi?.setIgnoreMouseEvents?.(!open, { forward: true })
+    renderInbox()
+    if (open) markVisibleInboxReadSoon()
+  }
+
+  inboxToggle?.addEventListener('click', () => {
+    setInboxOpen(!inboxPanelOpen)
+  })
 
   const loadInputHistory = (): string[] => {
     try {
@@ -880,6 +1127,7 @@ async function bootstrap(): Promise<void> {
   let lastConvActivity = Date.now()
   let statusPillVariant: LiveUiStatusVariant = 'ready'
   let idleMotionBusy = false
+  let maybeAutoStartAsr = (): void => {}
 
   const touchConvActivity = (): void => {
     lastConvActivity = Date.now()
@@ -889,6 +1137,276 @@ async function bootstrap(): Promise<void> {
     touchConvActivity()
     if (socket.readyState !== WebSocket.OPEN) return
     socket.send(JSON.stringify({ type: 'LIVEUI_INTERACTION', data: { kind } }))
+  }
+
+  let cameraCapturing = false
+  let cameraCaptureSeq = 0
+  let activeCameraRequestId = ''
+  let previewPhotoRequestId = ''
+  let previewPhotoVision: LiveUiVisionAttachment | null = null
+  let attachedPhotoRequestId = ''
+  let attachedPhotoVision: LiveUiVisionAttachment | null = null
+  let clearConfirmedPhotoUi: (notifyServer?: boolean) => void = () => {}
+  let cameraUiTimeout: number | undefined
+
+  const getCurrentLocation = (timeoutMs = 1500): Promise<LiveUiVisionAttachment['location'] | undefined> => {
+    if (!navigator.geolocation) return Promise.resolve(undefined)
+    return new Promise((resolve) => {
+      let settled = false
+      const done = (value: LiveUiVisionAttachment['location'] | undefined): void => {
+        if (settled) return
+        settled = true
+        resolve(value)
+      }
+      const timer = window.setTimeout(() => done(undefined), timeoutMs)
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          window.clearTimeout(timer)
+          done({
+            latitude: pos.coords.latitude,
+            longitude: pos.coords.longitude,
+            accuracy: pos.coords.accuracy,
+          })
+        },
+        () => {
+          window.clearTimeout(timer)
+          done(undefined)
+        },
+        { enableHighAccuracy: false, maximumAge: 60_000, timeout: timeoutMs },
+      )
+    })
+  }
+
+  const describeCameraError = (e: unknown): string => {
+    if (e === undefined) return 'thrown value is undefined'
+    if (e === null) return 'thrown value is null'
+    const maybe = e as { name?: unknown; message?: unknown; stack?: unknown }
+    const name = typeof maybe?.name === 'string' ? maybe.name : ''
+    const message = typeof maybe?.message === 'string' ? maybe.message : ''
+    const stack = typeof maybe?.stack === 'string' ? maybe.stack : ''
+    const friendly =
+      name === 'NotAllowedError' || name === 'SecurityError'
+        ? '摄像头权限被系统拒绝'
+        : name === 'NotFoundError' || name === 'DevicesNotFoundError'
+          ? '没有找到可用摄像头'
+          : name === 'NotReadableError' || name === 'TrackStartError'
+            ? '摄像头被其他应用占用'
+            : ''
+    const parts = [friendly, name, message, stack].filter(Boolean)
+    if (parts.length) return parts.join(' | ')
+    try {
+      const json = JSON.stringify(e)
+      if (json && json !== '{}') return `${Object.prototype.toString.call(e)} ${json}`
+    } catch {
+      /* ignore */
+    }
+    return String(e)
+  }
+
+  const stopMediaStream = (stream: MediaStream): void => {
+    for (const track of stream.getTracks()) {
+      try {
+        console.debug(`[liveui] stop camera/mic track: kind=${track.kind}, label="${track.label}", state=${track.readyState}`)
+        track.stop()
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  const getCameraStreamWithTimeout = (timeoutMs = 8_000): Promise<MediaStream> => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      return Promise.reject(new Error('当前环境不支持摄像头'))
+    }
+    console.debug('[liveui] getUserMedia(camera) requesting one-shot stream')
+    return new Promise((resolve, reject) => {
+      let settled = false
+      const finish = (fn: () => void): void => {
+        if (settled) return
+        settled = true
+        window.clearTimeout(timer)
+        fn()
+      }
+      const timer = window.setTimeout(() => {
+        finish(() => reject(new Error(`摄像头请求超时（${timeoutMs}ms）`)))
+      }, timeoutMs)
+      navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: 'user',
+          width: { ideal: 640 },
+          height: { ideal: 480 },
+        },
+        audio: false,
+      }).then(
+        (stream) => {
+          if (settled) {
+            stopMediaStream(stream)
+            return
+          }
+          for (const track of stream.getVideoTracks()) {
+            console.debug(
+              `[liveui] camera stream track: label="${track.label}", state=${track.readyState}, muted=${track.muted}, settings=${JSON.stringify(track.getSettings())}`,
+            )
+          }
+          finish(() => resolve(stream))
+        },
+        (e) => finish(() => reject(e)),
+      )
+    })
+  }
+
+  const drawCameraSourceToVision = (
+    source: CanvasImageSource,
+    srcW: number,
+    srcH: number,
+    location: LiveUiVisionAttachment['location'] | undefined,
+  ): LiveUiVisionAttachment => {
+    const maxSide = 640
+    const scale = Math.min(1, maxSide / Math.max(srcW, srcH))
+    const w = Math.max(1, Math.round(srcW * scale))
+    const h = Math.max(1, Math.round(srcH * scale))
+    const canvasEl = document.createElement('canvas')
+    canvasEl.width = w
+    canvasEl.height = h
+    const ctx = canvasEl.getContext('2d')
+    if (!ctx) throw new Error('无法创建图片画布')
+    ctx.drawImage(source, 0, 0, w, h)
+    const imageBase64 = canvasEl.toDataURL('image/jpeg', 0.72).split(',')[1]
+    if (!imageBase64) throw new Error('图片编码失败')
+    return {
+      imageBase64,
+      mediaType: 'image/jpeg',
+      capturedAt: new Date().toISOString(),
+      ...(location ? { location } : {}),
+    }
+  }
+
+  const captureVideoFallbackFrame = async (
+    stream: MediaStream,
+    location: LiveUiVisionAttachment['location'] | undefined,
+  ): Promise<LiveUiVisionAttachment> => {
+    const video = document.createElement('video')
+    video.muted = true
+    video.playsInline = true
+    video.autoplay = true
+    video.style.position = 'fixed'
+    video.style.left = '-9999px'
+    video.style.top = '0'
+    video.style.width = '1px'
+    video.style.height = '1px'
+    video.srcObject = stream
+    document.body.appendChild(video)
+    console.debug('[liveui] video fallback play start')
+    video.play().then(
+      () => console.debug('[liveui] video fallback play resolved'),
+      (e) => console.warn(`[liveui] video fallback play rejected: ${describeCameraError(e)}`),
+    )
+    await new Promise<void>((resolve, reject) => {
+      const startedAt = performance.now()
+      const tick = (): void => {
+        if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && video.videoWidth > 0 && video.videoHeight > 0) {
+          resolve()
+          return
+        }
+        if (performance.now() - startedAt > 3_000) {
+          reject(new Error('摄像头没有输出视频帧'))
+          return
+        }
+        requestAnimationFrame(tick)
+      }
+      requestAnimationFrame(tick)
+    })
+    try {
+      return drawCameraSourceToVision(video, video.videoWidth, video.videoHeight, location)
+    } finally {
+      video.pause()
+      video.srcObject = null
+      video.remove()
+    }
+  }
+
+  const grabImageCaptureFrame = async (track: MediaStreamTrack, timeoutMs = 2500): Promise<ImageBitmap> => {
+    if (!window.ImageCapture) throw new Error('ImageCapture unavailable')
+    return await Promise.race([
+      new window.ImageCapture(track).grabFrame(),
+      new Promise<never>((_, reject) => {
+        window.setTimeout(() => reject(new Error(`ImageCapture.grabFrame 超时（${timeoutMs}ms）`)), timeoutMs)
+      }),
+    ])
+  }
+
+  const captureLocalCameraPhoto = async (): Promise<LiveUiVisionAttachment> => {
+    console.debug('[liveui] local camera capture start')
+    const locationPromise = getCurrentLocation(1200)
+    const stream = await getCameraStreamWithTimeout()
+    try {
+      const location = await locationPromise
+      const track = stream.getVideoTracks()[0]
+      if (track && window.ImageCapture) {
+        try {
+          console.debug('[liveui] ImageCapture.grabFrame start')
+          const bitmap = await grabImageCaptureFrame(track)
+          try {
+            console.debug(`[liveui] ImageCapture.grabFrame ok: ${bitmap.width}x${bitmap.height}`)
+            return drawCameraSourceToVision(bitmap, bitmap.width, bitmap.height, location)
+          } finally {
+            bitmap.close()
+          }
+        } catch (e) {
+          console.warn(`[liveui] ImageCapture.grabFrame 失败，改用 video 首帧: ${describeCameraError(e)}`)
+        }
+      }
+      console.debug('[liveui] falling back to video element frame capture')
+      return await captureVideoFallbackFrame(stream, location)
+    } finally {
+      stopMediaStream(stream)
+    }
+  }
+
+  const parseVisionAttachment = (raw: unknown): LiveUiVisionAttachment | null => {
+    if (!raw || typeof raw !== 'object') return null
+    const v = raw as {
+      imageBase64?: unknown
+      mediaType?: unknown
+      capturedAt?: unknown
+      location?: unknown
+    }
+    if (
+      typeof v.imageBase64 !== 'string' ||
+      typeof v.capturedAt !== 'string' ||
+      (v.mediaType !== 'image/jpeg' && v.mediaType !== 'image/png' && v.mediaType !== 'image/webp')
+    ) {
+      return null
+    }
+    const out: LiveUiVisionAttachment = {
+      imageBase64: v.imageBase64,
+      mediaType: v.mediaType,
+      capturedAt: v.capturedAt,
+    }
+    if (v.location && typeof v.location === 'object') {
+      const loc = v.location as { latitude?: unknown; longitude?: unknown; accuracy?: unknown }
+      if (
+        typeof loc.latitude === 'number' &&
+        Number.isFinite(loc.latitude) &&
+        typeof loc.longitude === 'number' &&
+        Number.isFinite(loc.longitude)
+      ) {
+        out.location = { latitude: loc.latitude, longitude: loc.longitude }
+        if (typeof loc.accuracy === 'number' && Number.isFinite(loc.accuracy)) {
+          out.location.accuracy = loc.accuracy
+        }
+      }
+    }
+    return out
+  }
+
+  const sendUserCommand = (line: string): void => {
+    touchConvActivity()
+    if (socket.readyState !== WebSocket.OPEN) return
+    socket.send(JSON.stringify({ type: 'USER_INPUT', data: { line } }))
+    if (attachedPhotoVision && !line.trimStart().startsWith('/')) {
+      clearConfirmedPhotoUi(false)
+    }
   }
 
   const classifyHitNames = (hits: string[]): 'head' | 'body' | null => {
@@ -948,7 +1466,7 @@ async function bootstrap(): Promise<void> {
   }
 
   // ── TTS 开关 ──
-  let ttsEnabled = true
+  let ttsEnabled = window.infinitiLiveUi?.voiceMic?.ttsAutoEnabled !== false
   let ttsAvailable = false
 
   // ── 音频播放系统（TTS AUDIO_CHUNK） ──
@@ -1344,12 +1862,27 @@ async function bootstrap(): Promise<void> {
           redrawPlaceholderMouth()
         }
       }
+    } else if (msg.type === 'INBOX_UPDATE') {
+      const raw = msg.data?.unread
+      unreadInboxItems = Array.isArray(raw)
+        ? raw.map((it) => parseInboxItem(it as InboxItem)).filter((it): it is RenderInboxItem => it != null)
+        : []
+      renderInbox()
+    } else if (msg.type === 'INBOX_SAVE_RESULT') {
+      const text = typeof msg.data?.message === 'string' ? msg.data.message : ''
+      if (msg.data?.ok) {
+        console.debug('[liveui] inbox save:', text)
+      } else {
+        console.warn('[liveui] inbox save failed:', text)
+      }
     } else if (msg.type === 'TTS_STATUS') {
       ttsAvailable = !!msg.data?.available
+      if (typeof msg.data?.enabled === 'boolean') ttsEnabled = msg.data.enabled
       updateSpeakerBtn()
     } else if (msg.type === 'ASR_STATUS') {
       asrAvailable = !!msg.data?.available
       updateMicBtn()
+      maybeAutoStartAsr()
     } else if (msg.type === 'ASR_RESULT') {
       const text = msg.data?.text
       if (typeof text === 'string' && text.trim()) {
@@ -1393,6 +1926,27 @@ async function bootstrap(): Promise<void> {
       slashMenuOpenLive = open
       slashRows = next
       renderLiveSlashMenu()
+    } else if (msg.type === 'CONFIG_OPEN') {
+      const cwd = typeof msg.data?.cwd === 'string' ? msg.data.cwd : ''
+      configPanel.open(cwd, msg.data?.config)
+    } else if (msg.type === 'CONFIG_STATUS') {
+      const ok = !!msg.data?.ok
+      configPanel.setStatus(ok, typeof msg.data?.message === 'string' ? msg.data.message : '')
+      if (ok) configPanel.close()
+    } else if (msg.type === 'VISION_CAPTURE_RESULT') {
+      const requestId = typeof msg.data?.requestId === 'string' ? msg.data.requestId : ''
+      if (!requestId || requestId !== activeCameraRequestId) return
+      finishCameraCaptureUi()
+      if (msg.data?.ok === true) {
+        const vision = parseVisionAttachment(msg.data.vision)
+        if (vision) {
+          showPhotoPreview(requestId, vision)
+          return
+        }
+      }
+      console.warn('[liveui] 拍照失败:', msg.data?.error)
+    } else if (msg.type === 'VISION_ATTACHMENT_CLEAR') {
+      clearConfirmedPhotoUi(false)
     } else if (msg.type === 'AUDIO_CHUNK') {
       if (ttsEnabled && msg.data) enqueueAudioChunk(msg.data)
     } else if (msg.type === 'AUDIO_RESET') {
@@ -1415,6 +1969,10 @@ async function bootstrap(): Promise<void> {
         if (a.expression) applyLive2dExpression(a.expression)
       }
       setBubbleFromDisplayText(stripLiveUiKnownEmotionTagsEverywhere(displayText, streamManifestForStrip))
+      if (msg.data?.done && bubbleTarget.trim()) {
+        bubbleIsStreaming = false
+        scheduleBubbleDismiss()
+      }
       touchConvActivity()
     } else if (msg.type === 'STATUS_PILL' && statusPill) {
       const label = typeof msg.data?.label === 'string' ? msg.data.label : '就绪'
@@ -1478,7 +2036,7 @@ async function bootstrap(): Promise<void> {
     if (socket.readyState !== WebSocket.OPEN) return
     touchConvActivity()
     rememberInputHistory(v)
-    socket.send(JSON.stringify({ type: 'USER_INPUT', data: { line: v } }))
+    void sendUserCommand(v)
     userLineInput.value = ''
     inputHistoryIndex = inputHistory.length
     inputHistoryDraft = ''
@@ -1531,6 +2089,64 @@ async function bootstrap(): Promise<void> {
     if (!ttsEnabled) resetAudioQueue()
   })
 
+  document.getElementById('liveui-btn-config')?.addEventListener('click', () => {
+    void sendUserCommand('/config')
+  })
+
+  document.getElementById('liveui-btn-exit')?.addEventListener('click', () => {
+    void sendUserCommand('/exit')
+  })
+
+  const dragBtn = document.querySelector('.liveui-window-tool--drag') as HTMLElement | null
+  dragBtn?.addEventListener('pointerdown', (ev) => {
+    if (ev.button !== 0) return
+    const api = window.infinitiLiveUi
+    if (!api?.getWindowBounds || !api.setWindowPosition) return
+    ev.preventDefault()
+    ev.stopPropagation()
+    dragBtn.setPointerCapture?.(ev.pointerId)
+    dragBtn.classList.add('liveui-window-tool--dragging')
+    document.body.classList.add('liveui-window-dragging')
+    const startScreenX = ev.screenX
+    const startScreenY = ev.screenY
+    void api.getWindowBounds().then((bounds) => {
+      if (!bounds) {
+        dragBtn.classList.remove('liveui-window-tool--dragging')
+        document.body.classList.remove('liveui-window-dragging')
+        return
+      }
+      let dragging = true
+      const move = (moveEv: PointerEvent): void => {
+        if (!dragging) return
+        if ((moveEv.buttons & 1) === 0) {
+          end(moveEv)
+          return
+        }
+        moveEv.preventDefault()
+        api.setWindowPosition?.(
+          bounds.x + moveEv.screenX - startScreenX,
+          bounds.y + moveEv.screenY - startScreenY,
+        )
+      }
+      const end = (endEv: PointerEvent): void => {
+        if (!dragging) return
+        dragging = false
+        dragBtn.releasePointerCapture?.(endEv.pointerId)
+        dragBtn.classList.remove('liveui-window-tool--dragging')
+        document.body.classList.remove('liveui-window-dragging')
+        window.removeEventListener('pointermove', move, true)
+        window.removeEventListener('pointerup', end, true)
+        window.removeEventListener('pointercancel', end, true)
+      }
+      window.addEventListener('pointermove', move, true)
+      window.addEventListener('pointerup', end, true)
+      window.addEventListener('pointercancel', end, true)
+    }).catch(() => {
+      dragBtn.classList.remove('liveui-window-tool--dragging')
+      document.body.classList.remove('liveui-window-dragging')
+    })
+  })
+
   // ── 麦克风按钮：默认按住空格说话；`infiniti-agent live --auto` 使用连续 VAD 模式 ──
   const resolveVoiceMicWire = (): LiveUiVoiceMicWire => {
     const vm = window.infinitiLiveUi?.voiceMic
@@ -1549,7 +2165,14 @@ async function bootstrap(): Promise<void> {
         ? false
         : VOICE_MIC_DEFAULT_SUPPRESS_INTERRUPT_DURING_TTS
     const mode = vm?.mode === 'auto' ? 'auto' : 'push_to_talk'
-    return { speechRmsThreshold: speech, silenceEndMs: silence, suppressInterruptDuringTts: suppress, mode }
+    return {
+      speechRmsThreshold: speech,
+      silenceEndMs: silence,
+      suppressInterruptDuringTts: suppress,
+      mode,
+      ttsAutoEnabled: vm?.ttsAutoEnabled !== false,
+      asrAutoEnabled: vm?.asrAutoEnabled === true,
+    }
   }
   const voiceMic = resolveVoiceMicWire()
   const voiceMicAuto = voiceMic.mode === 'auto'
@@ -1846,6 +2469,12 @@ async function bootstrap(): Promise<void> {
     }
   }
 
+  maybeAutoStartAsr = (): void => {
+    if (!voiceMic.asrAutoEnabled || !asrAvailable || voiceMode) return
+    void enterVoiceMode()
+  }
+  maybeAutoStartAsr()
+
   const exitVoiceMode = (): void => {
     voiceMode = false
     if (vadRaf) { cancelAnimationFrame(vadRaf); vadRaf = undefined }
@@ -1882,7 +2511,7 @@ async function bootstrap(): Promise<void> {
     if (ev.repeat || pttSpaceDown) return
     const target = ev.target as HTMLElement | null
     const tag = target?.tagName?.toLowerCase()
-    if (tag === 'button' || tag === 'select' || target?.isContentEditable) return
+    if (tag === 'input' || tag === 'textarea' || tag === 'button' || tag === 'select' || target?.isContentEditable) return
     ev.preventDefault()
     pttSpaceDown = true
     beginPushToTalk()
@@ -1902,6 +2531,7 @@ async function bootstrap(): Promise<void> {
 
   micBtn?.addEventListener('click', () => {
     if (!asrAvailable) return
+    micBtn.blur()
     if (voiceMode) {
       exitVoiceMode()
     } else {
@@ -1912,36 +2542,160 @@ async function bootstrap(): Promise<void> {
   updateMicBtn()
   updateSpeakerBtn()
 
-  // ── 手掌按钮：随机动作 ──
-  let randomMotionBusy = false
-  document.getElementById('liveui-btn-hand')?.addEventListener('click', () => {
-    if (!liveModel || randomMotionBusy) return
-    randomMotionBusy = true
-    const im = liveModel.internalModel as {
-      settings?: { motions?: Record<string, unknown> }
-      motionManager?: { definitions?: Record<string, unknown> }
+  // ── 相机按钮：单张拍照预览，确认后作为下一条消息附件 ──
+  const visionBtn = document.getElementById('liveui-btn-vision') as HTMLButtonElement | null
+  const attachBtn = document.getElementById('liveui-btn-attach') as HTMLButtonElement | null
+  const attachThumb = document.getElementById('liveui-attachment-thumb') as HTMLImageElement | null
+  const photoPreview = document.getElementById('liveui-photo-preview') as HTMLElement | null
+  const photoPreviewImg = document.getElementById('liveui-photo-preview-img') as HTMLImageElement | null
+  const photoCancelBtn = document.getElementById('liveui-photo-cancel') as HTMLButtonElement | null
+  const photoConfirmBtn = document.getElementById('liveui-photo-confirm') as HTMLButtonElement | null
+
+  const photoDataUrl = (vision: LiveUiVisionAttachment): string =>
+    `data:${vision.mediaType};base64,${vision.imageBase64}`
+
+  const updateCameraBtn = (): void => {
+    if (!visionBtn) return
+    visionBtn.disabled = cameraCapturing
+    visionBtn.setAttribute('aria-busy', String(cameraCapturing))
+    visionBtn.setAttribute('aria-pressed', 'false')
+    visionBtn.title = cameraCapturing ? '正在拍照…' : '拍照'
+  }
+
+  const finishCameraCaptureUi = (): void => {
+    cameraCapturing = false
+    activeCameraRequestId = ''
+    if (cameraUiTimeout) {
+      window.clearTimeout(cameraUiTimeout)
+      cameraUiTimeout = undefined
     }
-    /* motionManager.definitions 与 settings.motions 在 Cubism4 为同一数据源；优先读 manager，并兼容非数组条目 + 配置兜底 */
-    let allMotions = collectMotionEntriesFromDefinitions(im?.motionManager?.definitions)
-    if (allMotions.length === 0) {
-      allMotions = collectMotionEntriesFromDefinitions(im?.settings?.motions ?? null)
+    updateCameraBtn()
+  }
+
+  const setAttachedPhoto = (requestId: string, vision: LiveUiVisionAttachment): void => {
+    attachedPhotoRequestId = requestId
+    attachedPhotoVision = vision
+    if (attachThumb) {
+      attachThumb.src = photoDataUrl(vision)
+      attachThumb.hidden = false
     }
-    if (allMotions.length === 0) {
-      allMotions = [
-        ...LIVE2D_IDLE.motionPool.map((m) => ({ group: m.group, index: m.index })),
-        ...LIVE2D_BODY_POKE_MOTIONS.map((m) => ({ group: m.group, index: m.index })),
-      ]
+    attachBtn?.classList.add('liveui-attach-btn--has-photo')
+    attachBtn?.setAttribute('title', '移除照片')
+  }
+
+  clearConfirmedPhotoUi = (notifyServer = true): void => {
+    attachedPhotoRequestId = ''
+    attachedPhotoVision = null
+    if (attachThumb) {
+      attachThumb.removeAttribute('src')
+      attachThumb.hidden = true
     }
-    if (allMotions.length === 0) {
-      randomMotionBusy = false
+    attachBtn?.classList.remove('liveui-attach-btn--has-photo')
+    attachBtn?.setAttribute('title', '附件')
+    if (notifyServer && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: 'VISION_ATTACHMENT_CLEAR', data: {} }))
+    }
+  }
+
+  const hidePhotoPreview = (notifyServer = true): void => {
+    const requestId = previewPhotoRequestId
+    previewPhotoRequestId = ''
+    previewPhotoVision = null
+    if (photoPreview) photoPreview.hidden = true
+    if (photoPreviewImg) photoPreviewImg.removeAttribute('src')
+    if (notifyServer && requestId && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: 'VISION_CAPTURE_CANCEL', data: { requestId } }))
+    }
+  }
+
+  const showPhotoPreview = (requestId: string, vision: LiveUiVisionAttachment): void => {
+    previewPhotoRequestId = requestId
+    previewPhotoVision = vision
+    if (photoPreviewImg) photoPreviewImg.src = photoDataUrl(vision)
+    if (photoPreview) photoPreview.hidden = false
+    window.infinitiLiveUi?.setIgnoreMouseEvents?.(false)
+  }
+
+  const animatePhotoIntoAttachment = (source: HTMLImageElement, done: () => void): void => {
+    if (!attachBtn) {
+      done()
       return
     }
-    const pick = allMotions[Math.floor(Math.random() * allMotions.length)]!
-    console.debug(`[liveui] 随机动作: ${pick.group || '(default)'}[${pick.index}]`)
-    void liveModel.motion(pick.group, pick.index).catch(() => {}).finally(() => {
-      randomMotionBusy = false
+    const from = source.getBoundingClientRect()
+    const to = attachBtn.getBoundingClientRect()
+    const clone = document.createElement('img')
+    clone.className = 'liveui-photo-fly'
+    clone.src = source.src
+    clone.style.left = `${from.left}px`
+    clone.style.top = `${from.top}px`
+    clone.style.width = `${from.width}px`
+    clone.style.height = `${from.height}px`
+    clone.style.borderRadius = '10px'
+    document.body.appendChild(clone)
+    window.requestAnimationFrame(() => {
+      clone.style.left = `${to.left + 3}px`
+      clone.style.top = `${to.top + 3}px`
+      clone.style.width = `${Math.max(1, to.width - 6)}px`
+      clone.style.height = `${Math.max(1, to.height - 6)}px`
+      clone.style.borderRadius = '6px'
+      clone.style.opacity = '0.96'
     })
+    window.setTimeout(() => {
+      clone.remove()
+      done()
+    }, 760)
+  }
+
+  const confirmPhotoPreview = (): void => {
+    if (!previewPhotoVision || !previewPhotoRequestId) return
+    const requestId = previewPhotoRequestId
+    const vision = previewPhotoVision
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: 'VISION_CAPTURE_CONFIRM', data: { requestId, vision } }))
+    }
+    if (photoPreviewImg?.src) {
+      animatePhotoIntoAttachment(photoPreviewImg, () => setAttachedPhoto(requestId, vision))
+    } else {
+      setAttachedPhoto(requestId, vision)
+    }
+    hidePhotoPreview(false)
+  }
+
+  const requestCameraPhoto = async (): Promise<void> => {
+    if (cameraCapturing) return
+    hidePhotoPreview(true)
+    cameraCapturing = true
+    const requestId = `photo-${Date.now()}-${++cameraCaptureSeq}`
+    activeCameraRequestId = requestId
+    updateCameraBtn()
+    cameraUiTimeout = window.setTimeout(() => {
+      if (activeCameraRequestId !== requestId) return
+      console.warn('[liveui] 拍照请求超时，已恢复相机按钮')
+      finishCameraCaptureUi()
+    }, 30_000)
+    try {
+      if (socket.readyState !== WebSocket.OPEN) {
+        throw new Error('LiveUI WebSocket 未连接')
+      }
+      const location = await getCurrentLocation(1200)
+      socket.send(JSON.stringify({ type: 'VISION_CAPTURE_REQUEST', data: { requestId, location } }))
+    } catch (e) {
+      console.warn(`[liveui] 拍照失败: ${describeCameraError(e)}`)
+      if (activeCameraRequestId === requestId) finishCameraCaptureUi()
+    }
+  }
+
+  visionBtn?.addEventListener('click', () => {
+    visionBtn.blur()
+    void requestCameraPhoto()
   })
+  photoCancelBtn?.addEventListener('click', () => hidePhotoPreview(true))
+  photoConfirmBtn?.addEventListener('click', confirmPhotoPreview)
+  attachBtn?.addEventListener('click', () => {
+    if (attachedPhotoVision) clearConfirmedPhotoUi(true)
+  })
+
+  updateCameraBtn()
 
   app.ticker.add(() => {
     if (!liveModel && !expressionSprite) {
@@ -1956,8 +2710,17 @@ async function bootstrap(): Promise<void> {
     let windowIgnoring = true
 
     const isOverInteractive = (ex: number, ey: number): boolean => {
+      if (configPanelOpen || inboxPanelOpen) return true
       const dom = document.elementFromPoint(ex, ey)
-      if (dom && dom.closest('#liveui-control-bar')) return true
+      if (
+        dom &&
+        (dom.closest('#liveui-control-bar') ||
+          dom.closest('#liveui-config-panel') ||
+          dom.closest('#liveui-photo-preview') ||
+          dom.closest('#liveui-inbox'))
+      ) {
+        return true
+      }
       if (liveModel) {
         const b = liveModel.getBounds()
         if (ex >= b.x && ex <= b.x + b.width && ey >= b.y && ey <= b.y + b.height) return true

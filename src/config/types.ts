@@ -79,6 +79,7 @@ export type LiveUiSpriteExpressionsConfig = {
  * `apiKey` 优先级：`avatarGen.apiKey` → 环境变量 `INFINITI_OPENROUTER_API_KEY` / `OPENROUTER_API_KEY` → 当前默认 LLM profile 的 `apiKey`。
  */
 export type AvatarGenConfig = {
+  provider?: 'gemini' | 'chatgpt-image'
   baseUrl?: string
   apiKey?: string
   /** 默认 `google/gemini-3-pro-image-preview`（Nano Banana Pro / Gemini 3 Pro Image）；可改为 `google/gemini-3.1-flash-image-preview`（Nano Banana 2）等 */
@@ -87,9 +88,33 @@ export type AvatarGenConfig = {
   imageSize?: string
 }
 
+/** `/snap <提示词>` 合照 / 写实照片生成。 */
+export type SnapImageConfig = {
+  /** `nano-banana` 走 OpenRouter 图像模型；`gpt-image-2` 走 OpenAI Images API。 */
+  provider?: 'nano-banana' | 'gpt-image-2'
+  baseUrl?: string
+  apiKey?: string
+  /** nano-banana 默认 google/gemini-3-pro-image-preview；gpt-image-2 默认 gpt-image-2。 */
+  model?: string
+  /** OpenRouter image_config.aspect_ratio，如 16:9 / 4:3 / 1:1。 */
+  aspectRatio?: string
+  /** OpenRouter image_size 或 OpenAI size，如 auto / 1024x1024 / 1536x1024 / 1024x1536。 */
+  imageSize?: string
+  /** OpenAI quality，如 auto / high / medium / low。 */
+  quality?: 'auto' | 'high' | 'medium' | 'low'
+  /** 单次图像生成超时（毫秒），默认 120000。 */
+  timeoutMs?: number
+}
+
 export type LiveUiConfig = {
   /** WebSocket 端口；`infiniti-agent live` 未传 `--port` 时使用 */
   port?: number
+  /** LiveUI 启动后是否自动开启 TTS 播放；默认 true。 */
+  ttsAutoEnabled?: boolean
+  /** LiveUI 启动后是否自动开启 ASR 麦克风模式；默认 false。 */
+  asrAutoEnabled?: boolean
+  /** ASR 识别模式：manual = 按住空格录音；auto = VAD 自动识别。 */
+  asrMode?: 'manual' | 'auto'
   /**
    * Live2D 资源根目录（其下为各模型子目录，如 `mao_pro/runtime/…`）。
    * 与 VTuber 的 `live2d-models` 目录一致；用于把 `model_dict.json` 里以 `/live2d-models/` 开头的 `url` 映射到本地磁盘。
@@ -166,6 +191,7 @@ export type InfinitiConfig = {
   tts?: TtsConfig
   asr?: AsrConfig
   avatarGen?: AvatarGenConfig
+  snap?: SnapImageConfig
 }
 
 /**
@@ -213,8 +239,8 @@ export type MinimaxTtsConfig = {
 }
 
 /**
- * 本地 [MOSS-TTS-Nano](https://github.com/OpenMOSS/MOSS-TTS-Nano) Web Demo（`moss-tts-nano serve` / `python app.py`）HTTP 接口。
- * 需先在本机启动服务（默认 http://127.0.0.1:18083），并配置参考音频或内置 demo。
+ * 外部 [MOSS-TTS-Nano](https://github.com/OpenMOSS/MOSS-TTS-Nano) HTTP service。
+ * 本仓库只配置 service URL；本地安装、模型下载和启动由 `infiniti-tts-service` 负责。
  */
 export type MossTtsNanoConfig = {
   provider: 'moss_tts_nano'
@@ -232,8 +258,8 @@ export type MossTtsNanoConfig = {
 }
 
 /**
- * 本地 [VoxCPM2](https://github.com/OpenBMB/VoxCPM) HTTP 服务（仓库内 `scripts/voxcpm-tts-serve.py`）。
- * 需先在本机安装 voxcpm 与依赖并启动服务（默认 http://127.0.0.1:8810）。
+ * 外部 [VoxCPM2](https://github.com/OpenBMB/VoxCPM) HTTP service。
+ * 本仓库只配置 service URL；本地安装、模型下载和启动由 `infiniti-tts-service` 负责。
  */
 export type VoxcpmTtsConfig = {
   provider: 'voxcpm'
@@ -260,7 +286,16 @@ export type VoxcpmTtsConfig = {
   timeoutMs?: number
 }
 
-export type TtsConfig = MinimaxTtsConfig | MossTtsNanoConfig | VoxcpmTtsConfig
+/** OpenAI-compatible speech TTS config placeholder for custom Whisper-style services. */
+export type WhisperTtsConfig = {
+  provider: 'whisper'
+  apiKey: string
+  baseUrl: string
+  model?: string
+  voiceId?: string
+}
+
+export type TtsConfig = MinimaxTtsConfig | MossTtsNanoConfig | VoxcpmTtsConfig | WhisperTtsConfig
 
 /** 云端 Whisper ASR 配置（OpenAI-compatible）。 */
 export type WhisperAsrConfig = {
