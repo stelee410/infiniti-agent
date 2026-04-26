@@ -28,6 +28,9 @@ describe('markdownToTtsPlainText', () => {
   it('removes parenthetical asides before TTS', () => {
     expect(markdownToTtsPlainText('你好（笑一下），我来了 (whisper: soft)。')).toBe('你好 ，我来了 。')
     expect(markdownToTtsPlainText('开始（动作（内层）提示）结束')).toBe('开始 结束')
+    expect(markdownToTtsPlainText('你好[微笑]，我来了【挥手】。')).toBe('你好 ，我来了 。')
+    expect(markdownToTtsPlainText('先说{动作: 点头}再说｛不要朗读｝结束')).toBe('先说 再说 结束')
+    expect(markdownToTtsPlainText('）残留闭括号也不要读，继续。')).toBe('残留闭括号也不要读，继续。')
   })
 
   it('removes emoji and emoji sequences before TTS', () => {

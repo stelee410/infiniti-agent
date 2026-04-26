@@ -5,23 +5,31 @@ function stripParentheticalContent(source: string): string {
   const pairs = new Map<string, string>([
     ['(', ')'],
     ['（', '）'],
+    ['[', ']'],
+    ['【', '】'],
+    ['{', '}'],
+    ['｛', '｝'],
   ])
   const closes = new Set([...pairs.values()])
-  let depth = 0
+  const stack: string[] = []
   let out = ''
 
   for (const ch of source) {
-    if (pairs.has(ch)) {
-      if (depth === 0) out += ' '
-      depth++
+    const close = pairs.get(ch)
+    if (close) {
+      if (stack.length === 0) out += ' '
+      stack.push(close)
       continue
     }
-    if (closes.has(ch) && depth > 0) {
-      depth--
-      if (depth === 0) out += ' '
+    if (closes.has(ch)) {
+      if (stack.length === 0) continue
+      const expected = stack[stack.length - 1]
+      if (ch === expected) stack.pop()
+      else stack.length = Math.max(0, stack.lastIndexOf(ch))
+      if (stack.length === 0) out += ' '
       continue
     }
-    if (depth === 0) out += ch
+    if (stack.length === 0) out += ch
   }
 
   return out

@@ -12,6 +12,7 @@ const tabs = [
   ['asr', 'ASR'],
   ['avatarGen', 'AvatarGen'],
   ['snap', 'Snap'],
+  ['seedance', 'Seedance'],
 ] as const
 
 const llmProviders = ['anthropic', 'openai', 'gemini', 'minimax', 'openrouter']
@@ -31,6 +32,14 @@ function text(v: unknown): string {
 
 function num(v: unknown, fallback = ''): string {
   return typeof v === 'number' && Number.isFinite(v) ? String(v) : fallback
+}
+
+function lines(v: unknown): string {
+  return Array.isArray(v) ? v.filter((x) => typeof x === 'string').join('\n') : ''
+}
+
+function splitLines(v: string): string[] {
+  return v.split(/[\n,]/).map((x) => x.trim()).filter(Boolean)
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(
@@ -165,6 +174,18 @@ function ensureDefaultConfigNodes(cfg: JsonObj, cwd: string): void {
     quality: 'auto',
     timeoutMs: 120000,
   }
+  cfg.seedance ??= {
+    provider: 'volcengine',
+    baseUrl: 'https://ark.cn-beijing.volces.com',
+    model: 'doubao-seedance-2-0-260128',
+    ratio: '16:9',
+    duration: 5,
+    resolution: '720p',
+    generateAudio: true,
+    watermark: false,
+    pollIntervalMs: 15000,
+    timeoutMs: 900000,
+  }
 }
 
 function syncFlatLlm(cfg: JsonObj): void {
@@ -252,7 +273,8 @@ export function initConfigPanel(opts: ConfigPanelOptions): {
     else if (active === 'tts') renderTts(content)
     else if (active === 'asr') renderAsr(content)
     else if (active === 'avatarGen') renderAvatarGen(content)
-    else renderSnap(content)
+    else if (active === 'snap') renderSnap(content)
+    else renderSeedance(content)
   }
 
   const renderLlm = (root: HTMLElement): void => {
@@ -469,6 +491,31 @@ export function initConfigPanel(opts: ConfigPanelOptions): {
       field('Image Size', input(text(s.imageSize), (v) => { s.imageSize = v })),
       field('Quality', select(text(s.quality || 'auto'), [['auto', 'auto'], ['high', 'high'], ['medium', 'medium'], ['low', 'low']], (v) => { s.quality = v })),
       field('Timeout ms', input(num(s.timeoutMs, '120000'), (v) => { s.timeoutMs = Number(v) }, 'number')),
+    )
+    section.append(grid)
+    root.append(section)
+  }
+
+  const renderSeedance = (root: HTMLElement): void => {
+    cfg.seedance ??= {}
+    const s = cfg.seedance
+    const section = el('section', { class: 'config-section config-section--active' })
+    const grid = el('div', { class: 'config-grid' })
+    grid.append(
+      field('Provider', select(text(s.provider || 'volcengine'), [['volcengine', 'volcengine']], (v) => { s.provider = v })),
+      field('Base URL', input(text(s.baseUrl), (v) => { s.baseUrl = v })),
+      field('API Key', input(text(s.apiKey), (v) => { s.apiKey = v }, 'password')),
+      field('Model', input(text(s.model), (v) => { s.model = v })),
+      field('Ratio', input(text(s.ratio), (v) => { s.ratio = v })),
+      field('Duration', input(num(s.duration, '5'), (v) => { s.duration = Number(v) }, 'number')),
+      field('Resolution', input(text(s.resolution), (v) => { s.resolution = v })),
+      field('Generate Audio', select(s.generateAudio === false ? 'false' : 'true', [['true', 'true'], ['false', 'false']], (v) => { s.generateAudio = v === 'true' })),
+      field('Watermark', select(s.watermark ? 'true' : 'false', [['false', 'false'], ['true', 'true']], (v) => { s.watermark = v === 'true' })),
+      field('Poll Interval ms', input(num(s.pollIntervalMs, '15000'), (v) => { s.pollIntervalMs = Number(v) }, 'number')),
+      field('Timeout ms', input(num(s.timeoutMs, '900000'), (v) => { s.timeoutMs = Number(v) }, 'number')),
+      field('Reference Image URLs', input(lines(s.referenceImageUrls), (v) => { s.referenceImageUrls = splitLines(v) }), true),
+      field('Reference Video URLs', input(lines(s.referenceVideoUrls), (v) => { s.referenceVideoUrls = splitLines(v) }), true),
+      field('Reference Audio URLs', input(lines(s.referenceAudioUrls), (v) => { s.referenceAudioUrls = splitLines(v) }), true),
     )
     section.append(grid)
     root.append(section)

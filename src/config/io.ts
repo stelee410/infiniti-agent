@@ -11,6 +11,7 @@ import type {
   LiveUiConfig,
   LlmProfile,
   McpServerConfig,
+  SeedanceVideoConfig,
   SnapImageConfig,
   TtsConfig,
 } from './types.js'
@@ -132,6 +133,7 @@ export async function loadConfig(cwd?: string): Promise<InfinitiConfig> {
   const asr = parseAsrConfig(o.asr)
   const avatarGen = parseAvatarGenConfig(o.avatarGen)
   const snap = parseSnapImageConfig(o.snap)
+  const seedance = parseSeedanceVideoConfig(o.seedance)
 
   const flatDisableTools = llm.disableTools
   const resolvedDisableTools =
@@ -164,7 +166,14 @@ export async function loadConfig(cwd?: string): Promise<InfinitiConfig> {
     ...(asr ? { asr } : {}),
     ...(avatarGen ? { avatarGen } : {}),
     ...(snap ? { snap } : {}),
+    ...(seedance ? { seedance } : {}),
   }
+}
+
+function parseStringArray(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw)) return undefined
+  const out = raw.filter((v): v is string => typeof v === 'string').map((v) => v.trim()).filter(Boolean)
+  return out.length ? out : undefined
 }
 
 function parseAvatarGenConfig(raw: unknown): AvatarGenConfig | undefined {
@@ -194,6 +203,36 @@ function parseSnapImageConfig(raw: unknown): SnapImageConfig | undefined {
     out.quality = u.quality
   }
   if (typeof u.timeoutMs === 'number' && Number.isFinite(u.timeoutMs) && u.timeoutMs >= 5000) {
+    out.timeoutMs = Math.floor(u.timeoutMs)
+  }
+  return Object.keys(out).length ? out : undefined
+}
+
+function parseSeedanceVideoConfig(raw: unknown): SeedanceVideoConfig | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const u = raw as Record<string, unknown>
+  const out: SeedanceVideoConfig = {}
+  if (u.provider === 'volcengine') out.provider = u.provider
+  if (typeof u.baseUrl === 'string' && u.baseUrl.trim()) out.baseUrl = u.baseUrl.trim()
+  if (typeof u.apiKey === 'string' && u.apiKey.trim()) out.apiKey = u.apiKey.trim()
+  if (typeof u.model === 'string' && u.model.trim()) out.model = u.model.trim()
+  if (typeof u.ratio === 'string' && u.ratio.trim()) out.ratio = u.ratio.trim()
+  if (typeof u.duration === 'number' && Number.isFinite(u.duration) && u.duration > 0) {
+    out.duration = Math.floor(u.duration)
+  }
+  if (typeof u.resolution === 'string' && u.resolution.trim()) out.resolution = u.resolution.trim()
+  if (typeof u.generateAudio === 'boolean') out.generateAudio = u.generateAudio
+  if (typeof u.watermark === 'boolean') out.watermark = u.watermark
+  const imageUrls = parseStringArray(u.referenceImageUrls)
+  const videoUrls = parseStringArray(u.referenceVideoUrls)
+  const audioUrls = parseStringArray(u.referenceAudioUrls)
+  if (imageUrls) out.referenceImageUrls = imageUrls
+  if (videoUrls) out.referenceVideoUrls = videoUrls
+  if (audioUrls) out.referenceAudioUrls = audioUrls
+  if (typeof u.pollIntervalMs === 'number' && Number.isFinite(u.pollIntervalMs) && u.pollIntervalMs >= 1000) {
+    out.pollIntervalMs = Math.floor(u.pollIntervalMs)
+  }
+  if (typeof u.timeoutMs === 'number' && Number.isFinite(u.timeoutMs) && u.timeoutMs >= 10000) {
     out.timeoutMs = Math.floor(u.timeoutMs)
   }
   return Object.keys(out).length ? out : undefined
@@ -435,6 +474,7 @@ export async function saveConfig(input: SaveConfigInput): Promise<void> {
     ...(existing?.asr ? { asr: existing.asr } : {}),
     ...(existing?.avatarGen ? { avatarGen: existing.avatarGen } : {}),
     ...(existing?.snap ? { snap: existing.snap } : {}),
+    ...(existing?.seedance ? { seedance: existing.seedance } : {}),
   }
   const target = GLOBAL_CONFIG_PATH
   await mkdir(dirname(target), { recursive: true })

@@ -953,6 +953,36 @@ async function bootstrap(): Promise<void> {
     }
   }
 
+  const isVideoAttachment = (attachment: RenderInboxAttachment): boolean => {
+    const mt = attachment.mimeType?.toLowerCase() ?? ''
+    if (mt.startsWith('video/')) return true
+    return /\.(mp4|webm|mov|m4v)$/i.test(attachment.path)
+  }
+
+  const appendInboxSaveAction = (wrap: HTMLElement, attachment: RenderInboxAttachment): void => {
+    const actions = document.createElement('div')
+    actions.className = 'liveui-inbox-actions'
+    const saveBtn = document.createElement('button')
+    saveBtn.type = 'button'
+    saveBtn.className = 'liveui-inbox-action'
+    saveBtn.title = '另存为'
+    saveBtn.setAttribute('aria-label', '另存为')
+    saveBtn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M5 20h14v-2H5v2ZM19 9h-4V3H9v6H5l7 7 7-7Z"/></svg>'
+    saveBtn.addEventListener('click', async (ev) => {
+      ev.stopPropagation()
+      const defaultPath = attachment.path.split(/[\\/]/).pop() || filenameFromPath(attachment.path)
+      const dest = await window.infinitiLiveUi?.savePath?.({ defaultPath })
+      if (dest && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({
+          type: 'INBOX_SAVE_AS',
+          data: { sourcePath: attachment.path, destinationPath: dest },
+        }))
+      }
+    })
+    actions.appendChild(saveBtn)
+    wrap.appendChild(actions)
+  }
+
   const renderInbox = (): void => {
     if (!inboxRoot || !inboxPanel) return
     if (!inboxPanelOpen) positionInboxAtComposer()
@@ -987,33 +1017,26 @@ async function bootstrap(): Promise<void> {
       for (const attachment of item.attachments) {
         if (attachment.kind === 'image') {
           const wrap = document.createElement('div')
-          wrap.className = 'liveui-inbox-image-wrap'
+          wrap.className = 'liveui-inbox-media-wrap'
           const img = document.createElement('img')
           img.className = 'liveui-inbox-image'
           img.alt = attachment.label ?? 'generated image'
           img.src = filePathToUrl(attachment.path)
           wrap.appendChild(img)
-          const actions = document.createElement('div')
-          actions.className = 'liveui-inbox-actions'
-          const saveBtn = document.createElement('button')
-          saveBtn.type = 'button'
-          saveBtn.className = 'liveui-inbox-action'
-          saveBtn.title = '另存为'
-          saveBtn.setAttribute('aria-label', '另存为')
-          saveBtn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M5 20h14v-2H5v2ZM19 9h-4V3H9v6H5l7 7 7-7Z"/></svg>'
-          saveBtn.addEventListener('click', async (ev) => {
-            ev.stopPropagation()
-            const defaultPath = attachment.path.split(/[\\/]/).pop() || 'snap-image.png'
-            const dest = await window.infinitiLiveUi?.savePath?.({ defaultPath })
-            if (dest && socket.readyState === WebSocket.OPEN) {
-              socket.send(JSON.stringify({
-                type: 'INBOX_SAVE_AS',
-                data: { sourcePath: attachment.path, destinationPath: dest },
-              }))
-            }
-          })
-          actions.appendChild(saveBtn)
-          wrap.appendChild(actions)
+          appendInboxSaveAction(wrap, attachment)
+          mail.appendChild(wrap)
+        } else if (isVideoAttachment(attachment)) {
+          const wrap = document.createElement('div')
+          wrap.className = 'liveui-inbox-media-wrap'
+          const video = document.createElement('video')
+          video.className = 'liveui-inbox-video'
+          video.controls = true
+          video.preload = 'metadata'
+          video.playsInline = true
+          video.src = filePathToUrl(attachment.path)
+          video.title = attachment.label ?? filenameFromPath(attachment.path)
+          wrap.appendChild(video)
+          appendInboxSaveAction(wrap, attachment)
           mail.appendChild(wrap)
         }
       }

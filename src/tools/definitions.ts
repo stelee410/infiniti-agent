@@ -10,6 +10,7 @@ export type BuiltinToolName =
   | 'manage_skill'
   | 'knowledge_graph'
   | 'snap_photo'
+  | 'seedance_video'
   | 'read_file'
   | 'glob_files'
   | 'grep_files'
@@ -382,6 +383,22 @@ export const BUILTIN_TOOLS: Array<{
         prompt: {
           type: 'string',
           description: '图片内容提示词。用自然语言描述场景、人物、风格、光线、构图等。',
+        },
+      },
+      required: ['prompt'],
+    },
+  },
+  {
+    name: 'seedance_video',
+    description:
+      '异步生成一个 Seedance / 火山方舟视频，并把完成/失败邮件放进你的邮箱。适合用户想让你“生成视频、做一段视频、用 Seedance 出片、把这个场景做成视频”等请求。如果用户当前消息带有拍照图片或上传图片，工具会自动把这些图片作为参考图传给视频 API。此工具不会阻塞当前对话；调用后应自然告诉用户你已经去后台生成，完成后小信封会亮起。',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        prompt: {
+          type: 'string',
+          description: '视频内容提示词。用自然语言描述场景、镜头运动、时长节奏、主体、风格、光线、音频要求等。',
         },
       },
       required: ['prompt'],

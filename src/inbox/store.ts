@@ -46,6 +46,10 @@ function renderMarkdown(message: InboxMessage): string {
       if (a.kind === 'image') {
         return `![${a.label ?? 'image'}](${a.path})`
       }
+      const mt = a.mimeType?.toLowerCase() ?? ''
+      if (mt.startsWith('video/') || /\.(mp4|webm|mov|m4v)$/i.test(a.path)) {
+        return `<video src="${a.path}" controls preload="metadata"></video>`
+      }
       return `- ${a.label ?? 'file'}: ${a.path}`
     })
     .join('\n\n')

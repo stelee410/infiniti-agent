@@ -99,6 +99,20 @@ const COMMAND_ITEMS: SlashItem[] = [
     insert: '/snap ',
   },
   {
+    id: '/video',
+    kind: 'command',
+    label: '/video',
+    desc: '用字节 Seedance 异步生成视频，完成后写入你的邮箱',
+    insert: '/video ',
+  },
+  {
+    id: '/seedance',
+    kind: 'command',
+    label: '/seedance',
+    desc: '同 /video',
+    insert: '/seedance ',
+  },
+  {
     id: '/undo',
     kind: 'command',
     label: '/undo',

@@ -39,6 +39,7 @@ import { parseSpeakCommandLine } from '../liveui/speakCommandLine.js'
 import type { LiveUiInteractionKind, LiveUiSession } from '../liveui/wsSession.js'
 import type { LiveUiFileAttachment, LiveUiStatusVariant, LiveUiVisionAttachment } from '../liveui/protocol.js'
 import { enqueueSnapPhotoJob } from '../snap/asyncSnap.js'
+import { enqueueSeedanceVideoJob, seedanceReferenceImagesFromLiveInputs } from '../video/asyncVideo.js'
 import { listInboxMessages, markInboxMessageRead } from '../inbox/store.js'
 import {
   collectNewTtsSegments,
@@ -86,6 +87,23 @@ async function polishSnapQueuedReply(config: InfinitiConfig, prompt: string, job
       system:
         '你是 Infiniti Agent 的日常对话人格。请只输出中文正文，不要标题，不要列表，不要任务 ID，不要像系统通知。用户刚发出 /snap 图片生成命令；你的回复要像普通聊天里自然接话，亲近、轻松、简短。表达：你会在后台生成图片；用户可以继续聊天；完成后会放进你的邮箱，小信封亮起即可查看。',
       user: `用户想生成的图片：${prompt}\n内部任务 ID（不要输出）：${jobId}\n请给出一句或两句自然口语回复。参考但不要照抄：\n\n${fallback}`,
+    })
+    return out.trim() || fallback
+  } catch {
+    return fallback
+  }
+}
+
+async function polishVideoQueuedReply(config: InfinitiConfig, prompt: string, jobId: string): Promise<string> {
+  const fallback =
+    `好，我把这个视频任务交给 Seedance 在后台生成。你可以继续聊天，等视频完成后我会下载到本地并放进你的邮箱，小信封亮起来就能看见。`
+  try {
+    const out = await oneShotTextCompletion({
+      config,
+      maxOutTokens: 500,
+      system:
+        '你是 Infiniti Agent 的日常对话人格。请只输出中文正文，不要标题，不要列表，不要任务 ID，不要像系统通知。用户刚发出 /video 或 /seedance 视频生成命令；你的回复要像普通聊天里自然接话，亲近、轻松、简短。表达：你会在后台生成视频；用户可以继续聊天；完成后会下载到本地并放进你的邮箱，小信封亮起即可查看。',
+      user: `用户想生成的视频：${prompt}\n内部任务 ID（不要输出）：${jobId}\n请给出一句或两句自然口语回复。参考但不要照抄：\n\n${fallback}`,
     })
     return out.trim() || fallback
   } catch {
@@ -466,9 +484,53 @@ export function ChatApp({
       }
       if (raw === '/help') {
         setError(
-          '输入 / 可补全：斜杠命令与全部工具（↑↓ Tab）。命令: /exit /clear /reload /config /memory /inbox /undo /compact /permission /speak /snap — /config 仅 Live 模式打开配置面板；/speak 后接正文仅 TTS 朗读、不写会话；/snap 后接提示词异步生成合照/写实照片，完成后写入你的邮箱。改文件/bash/HTTP 默认需确认（Y 允许 · A 本次会话始终允许该工具 · N 拒绝）；启动时加 --dangerously-skip-permissions 可跳过所有确认。/permission 查看当前状态。/compact 压缩较早历史。卡死排查：INFINITI_AGENT_DEBUG=1。',
+          '输入 / 可补全：斜杠命令与全部工具（↑↓ Tab）。命令: /exit /clear /reload /config /memory /inbox /undo /compact /permission /speak /snap /video — /config 仅 Live 模式打开配置面板；/speak 后接正文仅 TTS 朗读、不写会话；/snap 后接提示词异步生成合照/写实照片；/video 后接提示词异步生成 Seedance 视频，完成后写入你的邮箱。改文件/bash/HTTP 默认需确认（Y 允许 · A 本次会话始终允许该工具 · N 拒绝）；启动时加 --dangerously-skip-permissions 可跳过所有确认。/permission 查看当前状态。/compact 压缩较早历史。卡死排查：INFINITI_AGENT_DEBUG=1。',
         )
         setInput('')
+        return
+      }
+      if (raw === '/video' || raw.startsWith('/video ') || raw === '/seedance' || raw.startsWith('/seedance ')) {
+        const prefix = raw.startsWith('/seedance') ? '/seedance' : '/video'
+        const prompt = raw.startsWith(`${prefix} `) ? raw.slice(prefix.length + 1).trim() : ''
+        if (!prompt) {
+          setError(`${prefix} 后请输入提示词，例如：${prefix} 夕阳海边的电影感航拍，慢速推进`)
+          setInput('')
+          return
+        }
+        if (busyRef.current) return
+        setError(null)
+        setNotice('视频任务已交给 Seedance 后台处理，完成后会放进你的邮箱')
+        setInput('')
+        const videoVision = vision ?? liveUi?.consumePendingVisionAttachment()
+        const videoAttachments = liveUi?.consumePendingFileAttachments() ?? []
+        if (videoVision) liveUi?.clearVisionAttachment()
+        const referenceImages = seedanceReferenceImagesFromLiveInputs(videoVision, videoAttachments)
+        try {
+          const job = await enqueueSeedanceVideoJob(cwd, config, prompt, referenceImages)
+          const content = await polishVideoQueuedReply(config, prompt, job.id)
+          const next: PersistedMessage[] = [
+            ...messages,
+            { role: 'user', content: raw },
+            { role: 'assistant', content },
+          ]
+          setMessages(next)
+          await saveSession(cwd, next)
+          setNotice(content)
+          setTimeout(() => setNotice(null), 12000)
+          if (liveUi) {
+            liveUi.sendAssistantStream(content, true, true)
+            if (liveUi.hasTts) {
+              const clean = ttsDisplayCleanForLiveUi(content, expressionManifest)
+              liveUi.resetAudio()
+              for (const seg of splitTtsSegments(clean)) {
+                liveUi.enqueueTts(seg)
+              }
+            }
+          }
+        } catch (e: unknown) {
+          setError(formatChatError(e))
+          setNotice(null)
+        }
         return
       }
       if (raw === '/snap' || raw.startsWith('/snap ')) {
