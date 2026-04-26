@@ -28,7 +28,8 @@ import { runLink } from './link.js'
 import { LiveUiSession } from './liveui/wsSession.js'
 import { createMinimaxTts } from './tts/minimaxTts.js'
 import { createMossTtsNano } from './tts/mossTtsNano.js'
-import { createVoxcpmTts } from './tts/voxcpmTts.js'
+import { checkVoxcpmTtsHealth, createVoxcpmTts } from './tts/voxcpmTts.js'
+import { createWhisperTts } from './tts/whisperTts.js'
 import { createWhisperAsr } from './asr/whisperAsr.js'
 import { createSherpaOnnxAsr } from './asr/sherpaOnnxAsr.js'
 import { spawnLiveElectron } from './liveui/spawnRenderer.js'
@@ -54,6 +55,114 @@ function applyThinkingOverride(cfg: Awaited<ReturnType<typeof loadConfig>>, disa
   return { ...cfg, thinking: { ...cfg.thinking, mode: 'disabled' as const } }
 }
 
+async function configureLiveUiEngines(
+  liveUi: LiveUiSession,
+  cfg: Awaited<ReturnType<typeof loadConfig>>,
+): Promise<void> {
+  liveUi.resetAudio()
+  liveUi.setTtsEnabled(cfg.liveUi?.ttsAutoEnabled !== false)
+  if (cfg.tts?.provider === 'minimax') {
+    try {
+      liveUi.setTtsEngine(createMinimaxTts(cfg.tts))
+      console.error(
+        `[liveui] MiniMax TTS 已启用 (model: ${cfg.tts.model ?? 'speech-02-turbo'}, voice: ${cfg.tts.voiceId ?? 'female-shaonv'})`,
+      )
+    } catch (e) {
+      console.warn(`[liveui] TTS 未启用（配置或初始化失败）: ${(e as Error).message}`)
+      liveUi.setTtsEngine(null)
+    }
+  } else if (cfg.tts?.provider === 'moss_tts_nano') {
+    try {
+      liveUi.setTtsEngine(createMossTtsNano(cfg.tts, cwd))
+      console.error(`[liveui] MOSS-TTS-Nano 已启用 (baseUrl: ${cfg.tts.baseUrl})`)
+    } catch (e) {
+      console.warn(`[liveui] TTS 未启用（MOSS-TTS-Nano 初始化失败）: ${(e as Error).message}`)
+      liveUi.setTtsEngine(null)
+    }
+  } else if (cfg.tts?.provider === 'voxcpm') {
+    try {
+      const health = await checkVoxcpmTtsHealth(cfg.tts)
+      console.error(`[liveui] VoxCPM TTS 服务健康检查通过: ${health.slice(0, 160)}`)
+      liveUi.setTtsEngine(createVoxcpmTts(cfg.tts, cwd))
+      console.error(`[liveui] VoxCPM TTS 已启用 (baseUrl: ${cfg.tts.baseUrl})`)
+    } catch (e) {
+      console.warn(
+        `[liveui] TTS 未启用（VoxCPM 服务不可用）: ${(e as Error).message}\n` +
+          '  请先启动: cd ../infiniti-tts-service && ./scripts/start-voxcpm-tts-serve-mac.sh --port 8810',
+      )
+      liveUi.setTtsEngine(null)
+    }
+  } else if (cfg.tts?.provider === 'whisper') {
+    try {
+      liveUi.setTtsEngine(createWhisperTts(cfg.tts))
+      console.error(
+        `[liveui] Whisper TTS 已启用 (model: ${cfg.tts.model ?? 'gpt-4o-mini-tts'}, voice: ${cfg.tts.voiceId ?? 'alloy'})`,
+      )
+    } catch (e) {
+      console.warn(`[liveui] TTS 未启用（Whisper 初始化失败）: ${(e as Error).message}`)
+      liveUi.setTtsEngine(null)
+    }
+  } else {
+    liveUi.setTtsEngine(null)
+  }
+
+  if (cfg.asr?.provider === 'whisper') {
+    try {
+      liveUi.setAsrEngine(createWhisperAsr(cfg.asr))
+      console.error(
+        `[liveui] Whisper ASR 已启用 (model: ${cfg.asr.model ?? 'whisper-large-v3-turbo'}, baseUrl: ${cfg.asr.baseUrl})`,
+      )
+    } catch (e) {
+      console.warn(`[liveui] ASR 未启用（Whisper 初始化失败）: ${(e as Error).message}`)
+      liveUi.setAsrEngine(null)
+    }
+  } else if (cfg.asr?.provider === 'sherpa_onnx') {
+    try {
+      liveUi.setAsrEngine(await createSherpaOnnxAsr(cfg.asr, cwd))
+      console.error(`[liveui] sherpa-onnx ASR 已启用 (model: ${cfg.asr.model})`)
+    } catch (e) {
+      console.warn(`[liveui] ASR 未启用（sherpa-onnx 加载失败）: ${(e as Error).message}`)
+      liveUi.setAsrEngine(null)
+    }
+  } else {
+    liveUi.setAsrEngine(null)
+  }
+}
+
+function restartLiveUiElectron(
+  liveUi: LiveUiSession,
+  cfg: Awaited<ReturnType<typeof loadConfig>>,
+  opts: { auto?: boolean; figureZoom?: number } = {},
+): void {
+  const spriteResolved = resolveSpriteExpressionDirForUi(cwd, cfg.liveUi)
+  for (const w of spriteResolved?.warnings ?? []) {
+    console.error(`[liveui] ${w}`)
+  }
+
+  const resolved = resolveLive2dModelForUi(cwd, cfg.liveUi)
+  for (const w of resolved?.warnings ?? []) {
+    console.error(`[liveui] ${w}`)
+  }
+
+  const useSprite = Boolean(spriteResolved?.dirFileUrl)
+  if (useSprite) {
+    console.error(`[liveui] 已启用 spriteExpressions（PNG），不使用 Live2D 模型 URL`)
+  }
+
+  const child = spawnLiveElectron(liveUi.port, {
+    model3FileUrl: useSprite ? undefined : resolved?.model3FileUrl,
+    spriteExpressionDirFileUrl: spriteResolved?.dirFileUrl,
+    voiceMicJson: buildLiveUiVoiceMicEnvJson(cfg.liveUi, { auto: opts.auto === true }),
+    figureZoom: opts.figureZoom,
+  })
+  liveUi.setElectronChild(child)
+  if (!child) {
+    console.error('[liveui] Electron 未启动：已启动 WebSocket，可稍后自行对接渲染端。')
+  } else {
+    console.error(`[liveui] WebSocket ws://127.0.0.1:${liveUi.port} · Electron 已启动`)
+  }
+}
+
 async function runChatTui(
   opts: {
     skipPermissions?: boolean
@@ -66,6 +175,7 @@ async function runChatTui(
     liveUiVoiceMicJson?: string
     /** `live --zoom` 注入：人物显示缩放（0.4 ~ 1.5），不影响控制条/输入框 */
     liveUiFigureZoom?: number
+    onConfigReload?: (config: Awaited<ReturnType<typeof loadConfig>>) => Promise<void>
   } = {},
 ): Promise<void> {
   if (!configExistsSync(cwd)) {
@@ -92,56 +202,7 @@ async function runChatTui(
       }
       await liveUi.start()
       liveUi.startMouthPump()
-      if (cfg.tts?.provider === 'minimax') {
-        try {
-          liveUi.setTtsEngine(createMinimaxTts(cfg.tts))
-          console.error(
-            `[liveui] MiniMax TTS 已启用 (model: ${cfg.tts.model ?? 'speech-02-turbo'}, voice: ${cfg.tts.voiceId ?? 'female-shaonv'})`,
-          )
-        } catch (e) {
-          console.warn(`[liveui] TTS 未启用（配置或初始化失败）: ${(e as Error).message}`)
-          liveUi.setTtsEngine(null)
-        }
-      } else if (cfg.tts?.provider === 'moss_tts_nano') {
-        try {
-          liveUi.setTtsEngine(createMossTtsNano(cfg.tts, cwd))
-          console.error(`[liveui] MOSS-TTS-Nano 已启用 (baseUrl: ${cfg.tts.baseUrl})`)
-        } catch (e) {
-          console.warn(`[liveui] TTS 未启用（MOSS-TTS-Nano 初始化失败）: ${(e as Error).message}`)
-          liveUi.setTtsEngine(null)
-        }
-      } else if (cfg.tts?.provider === 'voxcpm') {
-        try {
-          liveUi.setTtsEngine(createVoxcpmTts(cfg.tts, cwd))
-          console.error(`[liveui] VoxCPM TTS 已启用 (baseUrl: ${cfg.tts.baseUrl})`)
-        } catch (e) {
-          console.warn(`[liveui] TTS 未启用（VoxCPM 初始化失败）: ${(e as Error).message}`)
-          liveUi.setTtsEngine(null)
-        }
-      } else {
-        liveUi.setTtsEngine(null)
-      }
-      if (cfg.asr?.provider === 'whisper') {
-        try {
-          liveUi.setAsrEngine(createWhisperAsr(cfg.asr))
-          console.error(
-            `[liveui] Whisper ASR 已启用 (model: ${cfg.asr.model ?? 'whisper-large-v3-turbo'}, baseUrl: ${cfg.asr.baseUrl})`,
-          )
-        } catch (e) {
-          console.warn(`[liveui] ASR 未启用（Whisper 初始化失败）: ${(e as Error).message}`)
-          liveUi.setAsrEngine(null)
-        }
-      } else if (cfg.asr?.provider === 'sherpa_onnx') {
-        try {
-          liveUi.setAsrEngine(await createSherpaOnnxAsr(cfg.asr, cwd))
-          console.error(`[liveui] sherpa-onnx ASR 已启用 (model: ${cfg.asr.model})`)
-        } catch (e) {
-          console.warn(`[liveui] ASR 未启用（sherpa-onnx 加载失败）: ${(e as Error).message}`)
-          liveUi.setAsrEngine(null)
-        }
-      } else {
-        liveUi.setAsrEngine(null)
-      }
+      await configureLiveUiEngines(liveUi, cfg)
       const child = spawnLiveElectron(liveUi.port, {
         model3FileUrl: opts.liveUiModel3FileUrl,
         spriteExpressionDirFileUrl: opts.liveUiSpriteExpressionDirFileUrl,
@@ -163,6 +224,7 @@ async function runChatTui(
         mcp={mcp}
         dangerouslySkipPermissions={skipPerm}
         liveUi={liveUi}
+        onConfigReload={opts.onConfigReload}
       />,
       { maxFps: 15, incrementalRendering: true },
     )
@@ -421,6 +483,18 @@ async function main(): Promise<void> {
         liveUiSpriteExpressionDirFileUrl: spriteResolved?.dirFileUrl,
         liveUiVoiceMicJson: buildLiveUiVoiceMicEnvJson(cfg.liveUi, { auto: cmdOpts.auto === true }),
         liveUiFigureZoom: figureZoom,
+        onConfigReload: async (nextCfg) => {
+          if (nextCfg.liveUi?.port && nextCfg.liveUi.port !== liveUi.port) {
+            console.warn(
+              `[liveui] liveUi.port 已保存为 ${nextCfg.liveUi.port}，当前会话仍使用 ws://127.0.0.1:${liveUi.port}；端口变更需下次启动生效。`,
+            )
+          }
+          await configureLiveUiEngines(liveUi, nextCfg)
+          restartLiveUiElectron(liveUi, nextCfg, {
+            auto: cmdOpts.auto === true,
+            figureZoom,
+          })
+        },
       })
     })
 

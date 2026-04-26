@@ -50,6 +50,13 @@ const COMMAND_ITEMS: SlashItem[] = [
     insert: '/reload ',
   },
   {
+    id: '/config',
+    kind: 'command',
+    label: '/config',
+    desc: '打开 Live 模式 Electron 配置面板',
+    insert: '/config ',
+  },
+  {
     id: '/reload-skills',
     kind: 'command',
     label: '/reload-skills',

@@ -10,6 +10,7 @@ type Props = {
   mcp: McpManager
   dangerouslySkipPermissions?: boolean
   liveUi?: LiveUiSession | null
+  onConfigReload?: (config: InfinitiConfig) => Promise<void>
 }
 
 export function ChatWithSplash({
@@ -17,6 +18,7 @@ export function ChatWithSplash({
   mcp,
   dangerouslySkipPermissions,
   liveUi = null,
+  onConfigReload,
 }: Props): React.ReactElement {
   const [phase, setPhase] = useState<'splash' | 'chat'>('splash')
   const onSplashDone = useCallback(() => setPhase('chat'), [])
@@ -29,6 +31,7 @@ export function ChatWithSplash({
       mcp={mcp}
       dangerouslySkipPermissions={dangerouslySkipPermissions}
       liveUi={liveUi}
+      onConfigReload={onConfigReload}
     />
   )
 }

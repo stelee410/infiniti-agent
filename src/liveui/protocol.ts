@@ -59,7 +59,7 @@ export type LiveUiAudioResetMessage = {
 /** 告知渲染端 TTS 引擎是否可用（连接时推送）。 */
 export type LiveUiTtsStatusMessage = {
   type: 'TTS_STATUS'
-  data: { available: boolean }
+  data: { available: boolean; enabled?: boolean }
 }
 
 /** 告知渲染端 ASR 是否可用（连接时推送）。 */
@@ -92,6 +92,33 @@ export type LiveUiSlashCompletionMessage = {
   }
 }
 
+export type LiveUiConfigOpenMessage = {
+  type: 'CONFIG_OPEN'
+  data: {
+    cwd: string
+    config: unknown
+  }
+}
+
+export type LiveUiConfigStatusMessage = {
+  type: 'CONFIG_STATUS'
+  data: {
+    ok: boolean
+    message: string
+  }
+}
+
+export type LiveUiVisionAttachment = {
+  imageBase64: string
+  mediaType: 'image/jpeg' | 'image/png' | 'image/webp'
+  capturedAt: string
+  location?: {
+    latitude: number
+    longitude: number
+    accuracy?: number
+  }
+}
+
 export type LiveUiMessage =
   | LiveUiSyncParamMessage
   | LiveUiActionMessage
@@ -103,6 +130,8 @@ export type LiveUiMessage =
   | LiveUiAsrStatusMessage
   | LiveUiAsrResultMessage
   | LiveUiSlashCompletionMessage
+  | LiveUiConfigOpenMessage
+  | LiveUiConfigStatusMessage
 
 export function isLiveUiMessage(x: unknown): x is LiveUiMessage {
   if (!x || typeof x !== 'object') return false
@@ -182,6 +211,18 @@ export function isLiveUiMessage(x: unknown): x is LiveUiMessage {
         typeof o2.insert === 'string'
       )
     })
+  }
+  if (o.type === 'CONFIG_OPEN') {
+    const d = (x as { data?: unknown }).data
+    if (!d || typeof d !== 'object') return false
+    const dd = d as { cwd?: unknown; config?: unknown }
+    return typeof dd.cwd === 'string' && !!dd.config && typeof dd.config === 'object'
+  }
+  if (o.type === 'CONFIG_STATUS') {
+    const d = (x as { data?: unknown }).data
+    if (!d || typeof d !== 'object') return false
+    const dd = d as { ok?: unknown; message?: unknown }
+    return typeof dd.ok === 'boolean' && typeof dd.message === 'string'
   }
   return false
 }

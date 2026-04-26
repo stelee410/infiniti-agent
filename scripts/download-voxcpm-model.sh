@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# 将 openbmb/VoxCPM2 权重下载到 ./models/VoxCPM2（与 start-voxcpm-tts-serve.sh 默认 VOXCPM_MODEL_ID 一致）
+# 将 openbmb/VoxCPM2 权重下载到共享模型目录（与 start-voxcpm-tts-serve.sh 默认 VOXCPM_MODEL_ID 一致）
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-export DEST="${VOXCPM_MODEL_DIR:-$REPO_ROOT/models/VoxCPM2}"
+DEFAULT_MODEL_DIR="${HOME}/Dev/models/VoxCPM2"
+export DEST="${VOXCPM_MODEL_DIR:-$DEFAULT_MODEL_DIR}"
 export REPO_ID="${VOXCPM_HF_REPO:-openbmb/VoxCPM2}"
 
 VENV_DIR="${VOXCPM_VENV:-$REPO_ROOT/third_party/voxcpm-venv}"

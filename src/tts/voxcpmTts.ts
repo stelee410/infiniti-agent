@@ -148,3 +148,15 @@ export function createVoxcpmTts(cfg: VoxcpmTtsConfig, cwd = process.cwd()): TtsE
     },
   }
 }
+
+export async function checkVoxcpmTtsHealth(cfg: VoxcpmTtsConfig): Promise<string> {
+  const base = trimBaseUrl(cfg.baseUrl)
+  const res = await fetch(`${base}/health`, {
+    signal: AbortSignal.timeout(3000),
+  })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(`VoxCPM health HTTP ${res.status}: ${text.slice(0, 300)}`)
+  }
+  return await res.text()
+}

@@ -17,6 +17,8 @@ export type LiveUiVoiceMicWire = {
   silenceEndMs: number
   suppressInterruptDuringTts: boolean
   mode: 'push_to_talk' | 'auto'
+  ttsAutoEnabled: boolean
+  asrAutoEnabled: boolean
 }
 
 /**
@@ -43,7 +45,9 @@ export function buildLiveUiVoiceMicEnvJson(
     speechRmsThreshold: speech,
     silenceEndMs: silence,
     suppressInterruptDuringTts: suppress,
-    mode: opts.auto ? 'auto' : 'push_to_talk',
+    mode: opts.auto || lu?.asrMode === 'auto' ? 'auto' : 'push_to_talk',
+    ttsAutoEnabled: lu?.ttsAutoEnabled !== false,
+    asrAutoEnabled: lu?.asrAutoEnabled === true,
   }
   return JSON.stringify(wire)
 }

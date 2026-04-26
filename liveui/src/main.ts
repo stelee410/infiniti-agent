@@ -6,7 +6,7 @@ import {
   stripLiveUiKnownEmotionTagsEverywhere,
   type StreamLiveUiState,
 } from '../../src/liveui/emotionParse.ts'
-import type { LiveUiStatusVariant } from '../../src/liveui/protocol.ts'
+import type { LiveUiStatusVariant, LiveUiVisionAttachment } from '../../src/liveui/protocol.ts'
 import type { LiveUiVoiceMicWire } from '../../src/liveui/voiceMicEnv.ts'
 import {
   VOICE_MIC_DEFAULT_SILENCE_END_MS,
@@ -26,6 +26,7 @@ import {
   parseSpriteExpressionManifest,
   type SpriteExpressionManifestV1,
 } from '../../src/liveui/spriteExpressionManifestCore.ts'
+import { initConfigPanel } from './configPanel.ts'
 
 /** 由 expressions.json 注入，覆盖默认 exp_xx 映射 */
 let spriteEmotionToIdOverride: Record<string, string> | null = null
@@ -45,6 +46,14 @@ declare global {
       setIgnoreMouseEvents?: (ignore: boolean, opts?: { forward?: boolean }) => void
       /** Electron：首帧后按人物包围盒收紧窗口高度 */
       compactWindowHeight?: (height: number) => void
+      /** Electron：配置面板打开时临时切换到较大的可交互窗口 */
+      setConfigPanelOpen?: (open: boolean) => void
+      /** Electron：读取窗口位置，供自绘拖拽按钮使用 */
+      getWindowBounds?: () => Promise<{ x: number; y: number; width: number; height: number } | null>
+      /** Electron：移动窗口，供自绘拖拽按钮使用 */
+      setWindowPosition?: (x: number, y: number) => void
+      /** Electron：选择本地文件或目录 */
+      selectPath?: (opts: { kind: 'file' | 'directory'; defaultPath?: string }) => Promise<string | null>
     }
     /** pixi-live2d-display 依赖全局 PIXI.Ticker */
     PIXI: typeof PIXI
@@ -84,13 +93,23 @@ type AudioChunkMsg = {
 
 type AudioResetMsg = { type: 'AUDIO_RESET' }
 
-type TtsStatusMsg = { type: 'TTS_STATUS'; data: { available: boolean } }
+type TtsStatusMsg = { type: 'TTS_STATUS'; data: { available: boolean; enabled?: unknown } }
 type AsrStatusMsg = { type: 'ASR_STATUS'; data: { available: boolean } }
 type AsrResultMsg = { type: 'ASR_RESULT'; data: { text: string } }
 
 type SlashCompletionMsg = {
   type: 'SLASH_COMPLETION'
   data: { open?: boolean; items?: unknown }
+}
+
+type ConfigOpenMsg = {
+  type: 'CONFIG_OPEN'
+  data: { cwd?: unknown; config?: unknown }
+}
+
+type ConfigStatusMsg = {
+  type: 'CONFIG_STATUS'
+  data: { ok?: unknown; message?: unknown }
 }
 
 type Msg =
@@ -104,6 +123,8 @@ type Msg =
   | AsrStatusMsg
   | AsrResultMsg
   | SlashCompletionMsg
+  | ConfigOpenMsg
+  | ConfigStatusMsg
 
 const FACE_RADIUS = 110
 
@@ -729,6 +750,16 @@ async function bootstrap(): Promise<void> {
   const port = readPort()
   const wsUrl = `ws://127.0.0.1:${port}`
   const socket = new WebSocket(wsUrl)
+  let configPanelOpen = false
+  const configPanel = initConfigPanel({
+    socket,
+    onOpenChange: (open) => {
+      configPanelOpen = open
+      document.body.classList.toggle('liveui-config-open', open)
+      window.infinitiLiveUi?.setConfigPanelOpen?.(open)
+      window.infinitiLiveUi?.setIgnoreMouseEvents?.(!open, { forward: true })
+    },
+  })
 
   const INPUT_HISTORY_STORAGE_KEY = 'infiniti-liveui-input-history-v1'
   const INPUT_HISTORY_MAX = 100
@@ -880,6 +911,7 @@ async function bootstrap(): Promise<void> {
   let lastConvActivity = Date.now()
   let statusPillVariant: LiveUiStatusVariant = 'ready'
   let idleMotionBusy = false
+  let maybeAutoStartAsr = (): void => {}
 
   const touchConvActivity = (): void => {
     lastConvActivity = Date.now()
@@ -889,6 +921,78 @@ async function bootstrap(): Promise<void> {
     touchConvActivity()
     if (socket.readyState !== WebSocket.OPEN) return
     socket.send(JSON.stringify({ type: 'LIVEUI_INTERACTION', data: { kind } }))
+  }
+
+  let visionEnabled = false
+  let visionStream: MediaStream | null = null
+  let visionLocation: LiveUiVisionAttachment['location'] | undefined
+  const visionVideo = document.createElement('video')
+  visionVideo.muted = true
+  visionVideo.playsInline = true
+
+  const getCurrentLocation = (timeoutMs = 1500): Promise<LiveUiVisionAttachment['location'] | undefined> => {
+    if (!navigator.geolocation) return Promise.resolve(undefined)
+    return new Promise((resolve) => {
+      let settled = false
+      const done = (value: LiveUiVisionAttachment['location'] | undefined): void => {
+        if (settled) return
+        settled = true
+        resolve(value)
+      }
+      const timer = window.setTimeout(() => done(undefined), timeoutMs)
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          window.clearTimeout(timer)
+          done({
+            latitude: pos.coords.latitude,
+            longitude: pos.coords.longitude,
+            accuracy: pos.coords.accuracy,
+          })
+        },
+        () => {
+          window.clearTimeout(timer)
+          done(undefined)
+        },
+        { enableHighAccuracy: false, maximumAge: 60_000, timeout: timeoutMs },
+      )
+    })
+  }
+
+  const captureVisionAttachment = async (): Promise<LiveUiVisionAttachment | undefined> => {
+    if (!visionEnabled || !visionStream || visionVideo.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+      return undefined
+    }
+    const videoW = visionVideo.videoWidth || 640
+    const videoH = visionVideo.videoHeight || 480
+    if (videoW <= 0 || videoH <= 0) return undefined
+    const maxSide = 640
+    const scale = Math.min(1, maxSide / Math.max(videoW, videoH))
+    const w = Math.max(1, Math.round(videoW * scale))
+    const h = Math.max(1, Math.round(videoH * scale))
+    const canvasEl = document.createElement('canvas')
+    canvasEl.width = w
+    canvasEl.height = h
+    const ctx = canvasEl.getContext('2d')
+    if (!ctx) return undefined
+    ctx.drawImage(visionVideo, 0, 0, w, h)
+    const dataUrl = canvasEl.toDataURL('image/jpeg', 0.72)
+    const imageBase64 = dataUrl.split(',')[1]
+    if (!imageBase64) return undefined
+    const freshLocation = await getCurrentLocation()
+    if (freshLocation) visionLocation = freshLocation
+    return {
+      imageBase64,
+      mediaType: 'image/jpeg',
+      capturedAt: new Date().toISOString(),
+      ...(visionLocation ? { location: visionLocation } : {}),
+    }
+  }
+
+  const sendUserCommand = async (line: string): Promise<void> => {
+    touchConvActivity()
+    if (socket.readyState !== WebSocket.OPEN) return
+    const vision = await captureVisionAttachment()
+    socket.send(JSON.stringify({ type: 'USER_INPUT', data: { line, ...(vision ? { vision } : {}) } }))
   }
 
   const classifyHitNames = (hits: string[]): 'head' | 'body' | null => {
@@ -948,7 +1052,7 @@ async function bootstrap(): Promise<void> {
   }
 
   // ── TTS 开关 ──
-  let ttsEnabled = true
+  let ttsEnabled = window.infinitiLiveUi?.voiceMic?.ttsAutoEnabled !== false
   let ttsAvailable = false
 
   // ── 音频播放系统（TTS AUDIO_CHUNK） ──
@@ -1346,10 +1450,12 @@ async function bootstrap(): Promise<void> {
       }
     } else if (msg.type === 'TTS_STATUS') {
       ttsAvailable = !!msg.data?.available
+      if (typeof msg.data?.enabled === 'boolean') ttsEnabled = msg.data.enabled
       updateSpeakerBtn()
     } else if (msg.type === 'ASR_STATUS') {
       asrAvailable = !!msg.data?.available
       updateMicBtn()
+      maybeAutoStartAsr()
     } else if (msg.type === 'ASR_RESULT') {
       const text = msg.data?.text
       if (typeof text === 'string' && text.trim()) {
@@ -1393,6 +1499,13 @@ async function bootstrap(): Promise<void> {
       slashMenuOpenLive = open
       slashRows = next
       renderLiveSlashMenu()
+    } else if (msg.type === 'CONFIG_OPEN') {
+      const cwd = typeof msg.data?.cwd === 'string' ? msg.data.cwd : ''
+      configPanel.open(cwd, msg.data?.config)
+    } else if (msg.type === 'CONFIG_STATUS') {
+      const ok = !!msg.data?.ok
+      configPanel.setStatus(ok, typeof msg.data?.message === 'string' ? msg.data.message : '')
+      if (ok) configPanel.close()
     } else if (msg.type === 'AUDIO_CHUNK') {
       if (ttsEnabled && msg.data) enqueueAudioChunk(msg.data)
     } else if (msg.type === 'AUDIO_RESET') {
@@ -1478,7 +1591,7 @@ async function bootstrap(): Promise<void> {
     if (socket.readyState !== WebSocket.OPEN) return
     touchConvActivity()
     rememberInputHistory(v)
-    socket.send(JSON.stringify({ type: 'USER_INPUT', data: { line: v } }))
+    void sendUserCommand(v)
     userLineInput.value = ''
     inputHistoryIndex = inputHistory.length
     inputHistoryDraft = ''
@@ -1531,6 +1644,64 @@ async function bootstrap(): Promise<void> {
     if (!ttsEnabled) resetAudioQueue()
   })
 
+  document.getElementById('liveui-btn-config')?.addEventListener('click', () => {
+    void sendUserCommand('/config')
+  })
+
+  document.getElementById('liveui-btn-exit')?.addEventListener('click', () => {
+    void sendUserCommand('/exit')
+  })
+
+  const dragBtn = document.querySelector('.liveui-window-tool--drag') as HTMLElement | null
+  dragBtn?.addEventListener('pointerdown', (ev) => {
+    if (ev.button !== 0) return
+    const api = window.infinitiLiveUi
+    if (!api?.getWindowBounds || !api.setWindowPosition) return
+    ev.preventDefault()
+    ev.stopPropagation()
+    dragBtn.setPointerCapture?.(ev.pointerId)
+    dragBtn.classList.add('liveui-window-tool--dragging')
+    document.body.classList.add('liveui-window-dragging')
+    const startScreenX = ev.screenX
+    const startScreenY = ev.screenY
+    void api.getWindowBounds().then((bounds) => {
+      if (!bounds) {
+        dragBtn.classList.remove('liveui-window-tool--dragging')
+        document.body.classList.remove('liveui-window-dragging')
+        return
+      }
+      let dragging = true
+      const move = (moveEv: PointerEvent): void => {
+        if (!dragging) return
+        if ((moveEv.buttons & 1) === 0) {
+          end(moveEv)
+          return
+        }
+        moveEv.preventDefault()
+        api.setWindowPosition?.(
+          bounds.x + moveEv.screenX - startScreenX,
+          bounds.y + moveEv.screenY - startScreenY,
+        )
+      }
+      const end = (endEv: PointerEvent): void => {
+        if (!dragging) return
+        dragging = false
+        dragBtn.releasePointerCapture?.(endEv.pointerId)
+        dragBtn.classList.remove('liveui-window-tool--dragging')
+        document.body.classList.remove('liveui-window-dragging')
+        window.removeEventListener('pointermove', move, true)
+        window.removeEventListener('pointerup', end, true)
+        window.removeEventListener('pointercancel', end, true)
+      }
+      window.addEventListener('pointermove', move, true)
+      window.addEventListener('pointerup', end, true)
+      window.addEventListener('pointercancel', end, true)
+    }).catch(() => {
+      dragBtn.classList.remove('liveui-window-tool--dragging')
+      document.body.classList.remove('liveui-window-dragging')
+    })
+  })
+
   // ── 麦克风按钮：默认按住空格说话；`infiniti-agent live --auto` 使用连续 VAD 模式 ──
   const resolveVoiceMicWire = (): LiveUiVoiceMicWire => {
     const vm = window.infinitiLiveUi?.voiceMic
@@ -1549,7 +1720,14 @@ async function bootstrap(): Promise<void> {
         ? false
         : VOICE_MIC_DEFAULT_SUPPRESS_INTERRUPT_DURING_TTS
     const mode = vm?.mode === 'auto' ? 'auto' : 'push_to_talk'
-    return { speechRmsThreshold: speech, silenceEndMs: silence, suppressInterruptDuringTts: suppress, mode }
+    return {
+      speechRmsThreshold: speech,
+      silenceEndMs: silence,
+      suppressInterruptDuringTts: suppress,
+      mode,
+      ttsAutoEnabled: vm?.ttsAutoEnabled !== false,
+      asrAutoEnabled: vm?.asrAutoEnabled === true,
+    }
   }
   const voiceMic = resolveVoiceMicWire()
   const voiceMicAuto = voiceMic.mode === 'auto'
@@ -1846,6 +2024,12 @@ async function bootstrap(): Promise<void> {
     }
   }
 
+  maybeAutoStartAsr = (): void => {
+    if (!voiceMic.asrAutoEnabled || !asrAvailable || voiceMode) return
+    void enterVoiceMode()
+  }
+  maybeAutoStartAsr()
+
   const exitVoiceMode = (): void => {
     voiceMode = false
     if (vadRaf) { cancelAnimationFrame(vadRaf); vadRaf = undefined }
@@ -1882,7 +2066,7 @@ async function bootstrap(): Promise<void> {
     if (ev.repeat || pttSpaceDown) return
     const target = ev.target as HTMLElement | null
     const tag = target?.tagName?.toLowerCase()
-    if (tag === 'button' || tag === 'select' || target?.isContentEditable) return
+    if (tag === 'input' || tag === 'textarea' || tag === 'button' || tag === 'select' || target?.isContentEditable) return
     ev.preventDefault()
     pttSpaceDown = true
     beginPushToTalk()
@@ -1902,6 +2086,7 @@ async function bootstrap(): Promise<void> {
 
   micBtn?.addEventListener('click', () => {
     if (!asrAvailable) return
+    micBtn.blur()
     if (voiceMode) {
       exitVoiceMode()
     } else {
@@ -1912,36 +2097,77 @@ async function bootstrap(): Promise<void> {
   updateMicBtn()
   updateSpeakerBtn()
 
-  // ── 手掌按钮：随机动作 ──
-  let randomMotionBusy = false
-  document.getElementById('liveui-btn-hand')?.addEventListener('click', () => {
-    if (!liveModel || randomMotionBusy) return
-    randomMotionBusy = true
-    const im = liveModel.internalModel as {
-      settings?: { motions?: Record<string, unknown> }
-      motionManager?: { definitions?: Record<string, unknown> }
-    }
-    /* motionManager.definitions 与 settings.motions 在 Cubism4 为同一数据源；优先读 manager，并兼容非数组条目 + 配置兜底 */
-    let allMotions = collectMotionEntriesFromDefinitions(im?.motionManager?.definitions)
-    if (allMotions.length === 0) {
-      allMotions = collectMotionEntriesFromDefinitions(im?.settings?.motions ?? null)
-    }
-    if (allMotions.length === 0) {
-      allMotions = [
-        ...LIVE2D_IDLE.motionPool.map((m) => ({ group: m.group, index: m.index })),
-        ...LIVE2D_BODY_POKE_MOTIONS.map((m) => ({ group: m.group, index: m.index })),
-      ]
-    }
-    if (allMotions.length === 0) {
-      randomMotionBusy = false
+  // ── 视觉按钮：摄像头 + 位置开关，每次发送消息时附带一帧 ──
+  const visionBtn = document.getElementById('liveui-btn-vision') as HTMLButtonElement | null
+  const visionIconOn = document.getElementById('liveui-vision-icon-on')
+  const visionIconOff = document.getElementById('liveui-vision-icon-off')
+
+  const updateVisionBtn = (): void => {
+    if (!visionBtn) return
+    visionBtn.setAttribute('aria-pressed', String(visionEnabled))
+    visionBtn.title = visionEnabled
+      ? '视觉已开启：每次发送会附带一张摄像头照片和当前位置；点击关闭'
+      : '视觉已关闭：点击申请摄像头与位置权限'
+    if (visionIconOn) visionIconOn.style.display = visionEnabled ? '' : 'none'
+    if (visionIconOff) visionIconOff.style.display = visionEnabled ? 'none' : ''
+  }
+
+  const enterVisionMode = async (): Promise<void> => {
+    if (visionEnabled) return
+    if (!navigator.mediaDevices?.getUserMedia) {
+      console.warn('[liveui] 当前环境不支持摄像头')
       return
     }
-    const pick = allMotions[Math.floor(Math.random() * allMotions.length)]!
-    console.debug(`[liveui] 随机动作: ${pick.group || '(default)'}[${pick.index}]`)
-    void liveModel.motion(pick.group, pick.index).catch(() => {}).finally(() => {
-      randomMotionBusy = false
-    })
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: 'user',
+          width: { ideal: 640 },
+          height: { ideal: 480 },
+        },
+        audio: false,
+      })
+      visionStream = stream
+      visionVideo.srcObject = stream
+      await visionVideo.play()
+      visionLocation = await getCurrentLocation(4000)
+      visionEnabled = true
+      updateVisionBtn()
+      console.debug('[liveui] 视觉模式已开启')
+    } catch (e) {
+      visionEnabled = false
+      if (visionStream) {
+        visionStream.getTracks().forEach((t) => t.stop())
+        visionStream = null
+      }
+      console.warn('[liveui] 视觉模式开启失败:', e)
+      updateVisionBtn()
+    }
+  }
+
+  const exitVisionMode = (): void => {
+    visionEnabled = false
+    if (visionStream) {
+      visionStream.getTracks().forEach((t) => t.stop())
+      visionStream = null
+    }
+    visionVideo.pause()
+    visionVideo.srcObject = null
+    visionLocation = undefined
+    updateVisionBtn()
+    console.debug('[liveui] 视觉模式已关闭')
+  }
+
+  visionBtn?.addEventListener('click', () => {
+    visionBtn.blur()
+    if (visionEnabled) {
+      exitVisionMode()
+    } else {
+      void enterVisionMode()
+    }
   })
+
+  updateVisionBtn()
 
   app.ticker.add(() => {
     if (!liveModel && !expressionSprite) {
@@ -1956,8 +2182,9 @@ async function bootstrap(): Promise<void> {
     let windowIgnoring = true
 
     const isOverInteractive = (ex: number, ey: number): boolean => {
+      if (configPanelOpen) return true
       const dom = document.elementFromPoint(ex, ey)
-      if (dom && dom.closest('#liveui-control-bar')) return true
+      if (dom && (dom.closest('#liveui-control-bar') || dom.closest('#liveui-config-panel'))) return true
       if (liveModel) {
         const b = liveModel.getBounds()
         if (ex >= b.x && ex <= b.x + b.width && ey >= b.y && ey <= b.y + b.height) return true

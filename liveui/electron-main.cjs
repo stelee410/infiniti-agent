@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
-const { app, BrowserWindow, Menu, ipcMain } = require('electron')
+const { app, BrowserWindow, Menu, ipcMain, dialog } = require('electron')
 const path = require('path')
 
 // LiveUI TTS：Web Audio 在无用户手势时默认 suspended；放宽策略以便首包语音可播。
@@ -60,6 +60,7 @@ function createWindow() {
   const indexHtml = path.join(__dirname, 'dist', 'index.html')
 
   const preload = path.join(__dirname, 'preload.cjs')
+  let preConfigBounds = null
 
   const win = new BrowserWindow({
     title: 'Infiniti LiveUI',
@@ -85,6 +86,14 @@ function createWindow() {
     win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
   }
 
+  win.webContents.session.setPermissionRequestHandler((_webContents, permission, callback) => {
+    if (permission === 'media' || permission === 'geolocation') {
+      callback(true)
+      return
+    }
+    callback(false)
+  })
+
   /**
    * macOS 透明窗口默认在透明像素处穿透点击。
    * 用 forward: true 让 mousemove 仍然到达渲染进程，
@@ -103,6 +112,7 @@ function createWindow() {
   /** 仅调高度：由渲染端在首帧布局后请求一次，去掉头顶大块留白（不设复杂循环） */
   ipcMain.on('liveui-compact-height', (_e, payload) => {
     try {
+      if (preConfigBounds) return
       const h = payload && Number.isFinite(payload.height) ? Math.round(payload.height) : 0
       if (h <= 0) return
       const [, curH] = win.getSize()
@@ -110,6 +120,53 @@ function createWindow() {
       if (nextH === curH) return
       win.setSize(win.getSize()[0], nextH)
     } catch { /* window may be destroyed */ }
+  })
+
+  ipcMain.on('liveui-config-panel-open', (_e, open) => {
+    try {
+      if (open) {
+        if (!preConfigBounds) preConfigBounds = win.getBounds()
+        win.setIgnoreMouseEvents(false)
+        win.setSize(debugWindow ? 760 : 860, debugWindow ? 780 : 720)
+        win.center()
+      } else if (preConfigBounds) {
+        win.setBounds(preConfigBounds)
+        preConfigBounds = null
+        if (!debugWindow) win.setIgnoreMouseEvents(true, { forward: true })
+      }
+    } catch { /* window may be destroyed */ }
+  })
+
+  ipcMain.handle('liveui-get-window-bounds', () => {
+    try {
+      return win.getBounds()
+    } catch {
+      return null
+    }
+  })
+
+  ipcMain.on('liveui-set-window-position', (_e, payload) => {
+    try {
+      const x = payload && Number.isFinite(payload.x) ? Math.round(payload.x) : null
+      const y = payload && Number.isFinite(payload.y) ? Math.round(payload.y) : null
+      if (x === null || y === null) return
+      win.setPosition(x, y, false)
+    } catch { /* window may be destroyed */ }
+  })
+
+  ipcMain.handle('liveui-select-path', async (_e, payload) => {
+    const kind = payload && payload.kind === 'directory' ? 'directory' : 'file'
+    const defaultPath =
+      payload && typeof payload.defaultPath === 'string' && payload.defaultPath.trim()
+        ? payload.defaultPath.trim()
+        : undefined
+    const result = await dialog.showOpenDialog(win, {
+      title: kind === 'directory' ? '选择目录' : '选择文件',
+      ...(defaultPath ? { defaultPath } : {}),
+      properties: kind === 'directory' ? ['openDirectory'] : ['openFile'],
+    })
+    if (result.canceled || result.filePaths.length === 0) return null
+    return result.filePaths[0] || null
   })
 
   win.loadFile(indexHtml, { query: { port } }).catch((err) => {

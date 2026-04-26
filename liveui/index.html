@@ -36,6 +36,10 @@
       #liveui-bottom-dock > * {
         pointer-events: auto;
       }
+      body.liveui-config-open #liveui-bottom-dock,
+      body.liveui-config-open #speech-bubble {
+        display: none !important;
+      }
       /* 气泡：脱离底部 dock，半透明叠在人物身上 */
       #speech-bubble {
         position: fixed;
@@ -164,6 +168,7 @@
       }
       #liveui-control-bar {
         box-sizing: border-box;
+        position: relative;
         width: 100%;
         padding: 10px 12px 12px;
         border-radius: 18px;
@@ -177,6 +182,87 @@
       }
       #liveui-control-bar:active {
         cursor: grabbing;
+      }
+      #liveui-window-tools {
+        position: absolute;
+        top: -18px;
+        right: 16px;
+        z-index: 2;
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        -webkit-app-region: no-drag;
+        app-region: no-drag;
+      }
+      .liveui-window-tool {
+        box-sizing: border-box;
+        width: 34px;
+        height: 34px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin: 0;
+        padding: 0;
+        border: 1px solid rgba(148, 163, 184, 0.45);
+        border-radius: 9px;
+        background: #243244;
+        color: #f8fafc;
+        box-shadow: 0 8px 18px rgba(0, 0, 0, 0.36);
+        cursor: pointer;
+        transition:
+          transform 0.12s ease,
+          background 0.12s ease,
+          color 0.12s ease,
+          border-color 0.12s ease;
+        -webkit-app-region: no-drag;
+        app-region: no-drag;
+      }
+      .liveui-window-tool:hover {
+        transform: translateY(-1px);
+        background: #334155;
+        border-color: rgba(226, 232, 240, 0.62);
+        color: #ffffff;
+      }
+      .liveui-window-tool svg {
+        width: 19px;
+        height: 19px;
+        display: block;
+        pointer-events: none;
+        cursor: inherit;
+      }
+      .liveui-window-tool--drag {
+        background: #155e75;
+        border-color: rgba(103, 232, 249, 0.48);
+      }
+      .liveui-window-tool--drag {
+        cursor: -webkit-grab;
+        cursor: grab;
+        -webkit-app-region: no-drag;
+        app-region: no-drag;
+        user-select: none;
+      }
+      .liveui-window-tool--drag:hover {
+        background: #0e7490;
+        border-color: rgba(165, 243, 252, 0.72);
+      }
+      .liveui-window-tool--drag:active {
+        cursor: -webkit-grabbing;
+        cursor: grabbing;
+      }
+      .liveui-window-tool--drag.liveui-window-tool--dragging,
+      body.liveui-window-dragging,
+      body.liveui-window-dragging * {
+        cursor: -webkit-grabbing !important;
+        cursor: grabbing !important;
+      }
+      .liveui-window-tool--close {
+        background: #7f1d1d;
+        border-color: rgba(252, 165, 165, 0.5);
+      }
+      .liveui-window-tool--close:hover {
+        background: #b91c1c;
+        border-color: rgba(254, 202, 202, 0.78);
+        color: #fff7f7;
       }
       #liveui-bar-body {
         display: flex;
@@ -267,12 +353,6 @@
         height: 20px;
         display: block;
       }
-      .liveui-hand-emoji {
-        font-size: 19px;
-        line-height: 1;
-        display: block;
-        filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.25));
-      }
       .liveui-icon-btn--speaker {
         background: linear-gradient(180deg, #34d399 0%, #059669 100%);
         box-shadow: 0 2px 6px rgba(5, 150, 105, 0.35);
@@ -292,9 +372,15 @@
         background: linear-gradient(180deg, #ef4444 0%, #dc2626 100%);
         box-shadow: 0 2px 6px rgba(220,38,38,0.45);
       }
-      .liveui-icon-btn--hand {
-        background: linear-gradient(180deg, #fbbf24 0%, #d97706 100%);
+      .liveui-icon-btn--vision {
+        background: linear-gradient(180deg, #f59e0b 0%, #d97706 100%);
         box-shadow: 0 2px 6px rgba(217, 119, 6, 0.35);
+        transition: background 0.2s, box-shadow 0.2s, opacity 0.2s;
+      }
+      .liveui-icon-btn--vision[aria-pressed="false"] {
+        background: linear-gradient(180deg, #52525b 0%, #3f3f46 100%);
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.08);
+        opacity: 0.75;
       }
       #liveui-composer {
         flex: 1;
@@ -432,9 +518,222 @@
         color: rgba(255, 255, 255, 0.55);
         font-size: 12px;
       }
+      #liveui-config-panel {
+        position: fixed;
+        inset: 14px;
+        z-index: 320;
+        display: grid;
+        grid-template-rows: auto 1fr;
+        min-height: 0;
+        border-radius: 14px;
+        border: 1px solid rgba(148, 163, 184, 0.45);
+        background: rgba(18, 21, 28, 0.98);
+        box-shadow: 0 22px 60px rgba(0, 0, 0, 0.55);
+        color: rgba(255, 255, 255, 0.92);
+        -webkit-app-region: no-drag;
+        app-region: no-drag;
+      }
+      #liveui-config-panel[hidden] {
+        display: none !important;
+      }
+      .config-topbar {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 12px;
+        padding: 12px 14px;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.25);
+      }
+      .config-title {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        min-width: 0;
+      }
+      .config-title strong {
+        font: 700 15px/1.2 system-ui, sans-serif;
+      }
+      .config-title span {
+        color: rgba(255, 255, 255, 0.48);
+        font: 12px/1.3 system-ui, sans-serif;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .config-actions {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 8px;
+        flex: 0 0 auto;
+      }
+      .config-btn {
+        border: 1px solid rgba(148, 163, 184, 0.32);
+        border-radius: 8px;
+        background: rgba(30, 41, 59, 0.85);
+        color: rgba(255, 255, 255, 0.92);
+        min-height: 32px;
+        padding: 0 12px;
+        font: 600 13px system-ui, sans-serif;
+        cursor: pointer;
+      }
+      .config-btn:hover {
+        background: rgba(51, 65, 85, 0.95);
+      }
+      .config-btn--primary {
+        border-color: rgba(34, 211, 238, 0.45);
+        background: #0891b2;
+      }
+      .config-body {
+        display: grid;
+        grid-template-columns: 150px minmax(0, 1fr);
+        min-height: 0;
+      }
+      .config-tabs {
+        padding: 10px;
+        border-right: 1px solid rgba(148, 163, 184, 0.22);
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .config-tab {
+        border: none;
+        border-radius: 8px;
+        background: transparent;
+        color: rgba(255, 255, 255, 0.68);
+        text-align: left;
+        padding: 9px 10px;
+        font: 600 13px system-ui, sans-serif;
+        cursor: pointer;
+      }
+      .config-tab--active {
+        background: rgba(34, 211, 238, 0.14);
+        color: #67e8f9;
+      }
+      .config-content {
+        overflow: auto;
+        padding: 14px;
+      }
+      .config-section {
+        display: none;
+        max-width: 760px;
+      }
+      .config-section--active {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .config-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+      .config-field {
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+        min-width: 0;
+      }
+      .config-field label {
+        color: rgba(255, 255, 255, 0.62);
+        font: 600 12px/1.25 system-ui, sans-serif;
+      }
+      .config-field input,
+      .config-field select,
+      .config-field textarea {
+        box-sizing: border-box;
+        width: 100%;
+        border: 1px solid rgba(148, 163, 184, 0.28);
+        border-radius: 8px;
+        background: rgba(15, 23, 42, 0.9);
+        color: rgba(255, 255, 255, 0.92);
+        min-height: 34px;
+        padding: 7px 9px;
+        font: 13px/1.35 system-ui, sans-serif;
+      }
+      .config-field textarea {
+        min-height: 74px;
+        resize: vertical;
+      }
+      .config-span-2 {
+        grid-column: 1 / -1;
+      }
+      .config-row {
+        display: flex;
+        gap: 8px;
+        align-items: end;
+      }
+      .config-list {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .config-card {
+        border: 1px solid rgba(148, 163, 184, 0.2);
+        border-radius: 8px;
+        padding: 10px;
+        background: rgba(15, 23, 42, 0.52);
+      }
+      #liveui-config-status {
+        color: rgba(255, 255, 255, 0.58);
+        font: 12px/1.4 system-ui, sans-serif;
+        max-width: 260px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      #liveui-config-status.ok {
+        color: #86efac;
+      }
+      #liveui-config-status.err {
+        color: #fca5a5;
+      }
+      @media (max-width: 560px) {
+        #liveui-config-panel {
+          inset: 8px;
+        }
+        .config-body {
+          grid-template-columns: 1fr;
+        }
+        .config-topbar {
+          grid-template-columns: 1fr;
+        }
+        .config-actions {
+          justify-content: space-between;
+        }
+        .config-tabs {
+          flex-direction: row;
+          overflow-x: auto;
+          border-right: none;
+          border-bottom: 1px solid rgba(148, 163, 184, 0.22);
+        }
+        .config-grid {
+          grid-template-columns: 1fr;
+        }
+        .config-span-2 {
+          grid-column: auto;
+        }
+      }
     </style>
   </head>
   <body>
+    <div id="liveui-config-panel" hidden aria-hidden="true">
+      <div class="config-topbar">
+        <div class="config-title">
+          <strong>Infiniti 配置</strong>
+          <span id="liveui-config-path"></span>
+        </div>
+        <div class="config-actions">
+          <span id="liveui-config-status"></span>
+          <button type="button" class="config-btn" id="liveui-config-close">取消</button>
+          <button type="button" class="config-btn config-btn--primary" id="liveui-config-save">保存</button>
+        </div>
+      </div>
+      <div class="config-body">
+        <nav class="config-tabs" id="liveui-config-tabs"></nav>
+        <main class="config-content" id="liveui-config-content"></main>
+      </div>
+    </div>
     <div id="speech-bubble" aria-hidden="true">
       <div id="speech-bubble-text" class="liveui-md-root"></div>
     </div>
@@ -451,6 +750,40 @@
         <ul id="liveui-slash-menu-list"></ul>
       </div>
       <div id="liveui-control-bar">
+        <div id="liveui-window-tools" aria-label="窗口操作">
+          <button
+            type="button"
+            class="liveui-window-tool"
+            id="liveui-btn-config"
+            title="设置"
+            aria-label="设置"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path fill="currentColor" d="M19.43 12.98c.04-.32.07-.65.07-.98s-.02-.66-.07-.98l2.11-1.65-2-3.46-2.49 1a7.1 7.1 0 0 0-1.69-.98L15 3.25h-4l-.36 2.68c-.6.23-1.16.56-1.69.98l-2.49-1-2 3.46 2.11 1.65c-.04.32-.07.65-.07.98s.02.66.07.98l-2.11 1.65 2 3.46 2.49-1c.53.41 1.09.74 1.69.98l.36 2.68h4l.36-2.68c.6-.23 1.16-.56 1.69-.98l2.49 1 2-3.46-2.11-1.65zM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z"/>
+            </svg>
+          </button>
+          <div
+            class="liveui-window-tool liveui-window-tool--drag"
+            title="拖动窗口"
+            aria-label="拖动窗口"
+            role="button"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path fill="currentColor" d="M10 4h4v4h3l-5 5-5-5h3V4zm2 7 5 5h-3v4h-4v-4H7l5-5zM4 10h4v4H4v-4zm12 0h4v4h-4v-4z"/>
+            </svg>
+          </div>
+          <button
+            type="button"
+            class="liveui-window-tool liveui-window-tool--close"
+            id="liveui-btn-exit"
+            title="关闭退出"
+            aria-label="关闭退出"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path fill="currentColor" d="M18.3 5.71 12 12l6.3 6.29-1.41 1.41L10.59 13.41 4.29 19.7 2.88 18.29 9.17 12 2.88 5.71 4.29 4.3l6.3 6.29 6.3-6.29 1.41 1.41z"/>
+            </svg>
+          </button>
+        </div>
         <div id="liveui-bar-body">
           <aside id="liveui-bar-side">
             <div
@@ -501,12 +834,18 @@
               </button>
               <button
                 type="button"
-                class="liveui-icon-btn liveui-icon-btn--hand"
-                id="liveui-btn-hand"
-                title="举手 / 打断（即将支持）"
-                aria-label="举手，即将支持"
+                class="liveui-icon-btn liveui-icon-btn--vision"
+                id="liveui-btn-vision"
+                title="视觉已关闭：点击申请摄像头与位置权限"
+                aria-label="视觉输入开关"
+                aria-pressed="false"
               >
-                <span class="liveui-hand-emoji" aria-hidden="true">✋</span>
+                <svg id="liveui-vision-icon-on" viewBox="0 0 24 24" aria-hidden="true" style="display:none">
+                  <path fill="currentColor" d="M12 5c5.1 0 9.27 3.11 11 7-1.73 3.89-5.9 7-11 7S2.73 15.89 1 12c1.73-3.89 5.9-7 11-7zm0 2C8.2 7 5.05 9.03 3.27 12 5.05 14.97 8.2 17 12 17s6.95-2.03 8.73-5C18.95 9.03 15.8 7 12 7zm0 2.25A2.75 2.75 0 1 1 12 14.75 2.75 2.75 0 0 1 12 9.25z"/>
+                </svg>
+                <svg id="liveui-vision-icon-off" viewBox="0 0 24 24" aria-hidden="true">
+                  <path fill="currentColor" d="M2.1 3.51 3.51 2.1 21.9 20.49l-1.41 1.41-3.02-3.02A11.76 11.76 0 0 1 12 20C6.9 20 2.73 16.89 1 13c.8-1.79 2.11-3.41 3.78-4.67L2.1 5.65V3.51zM6.2 9.75A10.19 10.19 0 0 0 3.27 13C5.05 15.97 8.2 18 12 18c1.43 0 2.78-.29 4-.82l-2.08-2.08A3.75 3.75 0 0 1 8.9 10.08L6.2 9.75zm5.67-4.74L12 5c5.1 0 9.27 3.11 11 7a12.58 12.58 0 0 1-3.24 4.09l-1.43-1.43A10.42 10.42 0 0 0 20.73 12C18.97 9.07 15.88 7.06 12.13 7.01l-.26-2z"/>
+                </svg>
               </button>
             </div>
           </aside>
