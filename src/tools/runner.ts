@@ -5,6 +5,9 @@ import { executeProfileAction, type ProfileAction, type ProfileTag } from '../me
 import { searchSessions, type SearchResult } from '../session/archive.js'
 import { executeSkillAction, type SkillAction } from '../skills/manager.js'
 import { executeKgAction, type KgAction } from '../memory/knowledgeGraph.js'
+import type { InfinitiConfig } from '../config/types.js'
+import { enqueueSnapPhotoJob } from '../snap/asyncSnap.js'
+import type { LiveUiVisionAttachment } from '../liveui/protocol.js'
 import type { BuiltinToolName } from './definitions.js'
 import type { EditHistory } from '../session/editHistory.js'
 import {
@@ -27,6 +30,8 @@ const HTTP_DEFAULT_HEADERS: Record<string, string> = {
 
 export type ToolRunContext = {
   sessionCwd: string
+  config: InfinitiConfig
+  snapVision?: LiveUiVisionAttachment
   editHistory?: EditHistory
 }
 
@@ -390,6 +395,20 @@ export async function runBuiltinTool(
           }
         : { action: 'delete', name: skillName }
     return JSON.stringify(await executeSkillAction(ctx.sessionCwd, act))
+  }
+
+  if (name === 'snap_photo') {
+    const prompt = String(args.prompt ?? '').trim()
+    if (!prompt) {
+      return JSON.stringify({ ok: false, error: 'prompt 不能为空' })
+    }
+    const job = await enqueueSnapPhotoJob(ctx.sessionCwd, ctx.config, prompt, ctx.snapVision)
+    return JSON.stringify({
+      ok: true,
+      jobId: job.id,
+      jobPath: job.jobPath,
+      message: '图片生成任务已在后台开始；完成或失败后会写入你的邮箱。',
+    })
   }
 
   if (name === 'read_file') {

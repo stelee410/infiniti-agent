@@ -94,6 +94,7 @@ function createWindow() {
 
   const preload = path.join(__dirname, 'preload.cjs')
   let preConfigBounds = null
+  let preCameraBounds = null
 
   const win = new BrowserWindow({
     title: 'Infiniti LiveUI',
@@ -177,6 +178,21 @@ function createWindow() {
     } catch { /* window may be destroyed */ }
   })
 
+  ipcMain.on('liveui-camera-capture-open', (_e, open) => {
+    try {
+      if (open) {
+        if (!preCameraBounds) preCameraBounds = win.getBounds()
+        win.setIgnoreMouseEvents(false)
+        const display = require('electron').screen.getDisplayMatching(win.getBounds())
+        win.setBounds(display.workArea)
+      } else if (preCameraBounds) {
+        win.setBounds(preCameraBounds)
+        preCameraBounds = null
+        if (!debugWindow) win.setIgnoreMouseEvents(true, { forward: true })
+      }
+    } catch { /* window may be destroyed */ }
+  })
+
   ipcMain.handle('liveui-get-window-bounds', () => {
     try {
       return win.getBounds()
@@ -207,6 +223,23 @@ function createWindow() {
     })
     if (result.canceled || result.filePaths.length === 0) return null
     return result.filePaths[0] || null
+  })
+
+  ipcMain.handle('liveui-select-attachments', async () => {
+    const result = await dialog.showOpenDialog(win, {
+      title: '选择附件',
+      properties: ['openFile', 'multiSelections'],
+      filters: [
+        {
+          name: '支持的附件',
+          extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'pdf', 'md', 'markdown', 'docx', 'csv'],
+        },
+        { name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif'] },
+        { name: '文档', extensions: ['pdf', 'md', 'markdown', 'docx', 'csv'] },
+      ],
+    })
+    if (result.canceled || result.filePaths.length === 0) return []
+    return result.filePaths
   })
 
   ipcMain.handle('liveui-save-path', async (_e, payload) => {

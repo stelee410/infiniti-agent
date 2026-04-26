@@ -18,6 +18,7 @@ const ALWAYS_SAFE = new Set([
   'file_info',
   'search_files',
   'read_notebook_cell',
+  'snap_photo',
 ])
 
 // ── 上下文感知：用户在前轮 block 后明确批准 → 放行 ──

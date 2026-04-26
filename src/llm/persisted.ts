@@ -15,8 +15,19 @@ export type UserVisionAttachment = {
   }
 }
 
+export type UserFileAttachment = {
+  id: string
+  name: string
+  mediaType: string
+  base64: string
+  size: number
+  kind: 'image' | 'document'
+  capturedAt: string
+  text?: string
+}
+
 export type PersistedMessage =
-  | { role: 'user'; content: string; vision?: UserVisionAttachment }
+  | { role: 'user'; content: string; vision?: UserVisionAttachment; attachments?: UserFileAttachment[] }
   | {
       role: 'assistant'
       content: string | null
@@ -46,8 +57,8 @@ export function truncateToolResults(
   maxChars: number = MAX_TOOL_RESULT_CHARS,
 ): PersistedMessage[] {
   return messages.map((m) => {
-    if (m.role === 'user' && m.vision) {
-      const { vision: _vision, ...rest } = m
+    if (m.role === 'user' && (m.vision || m.attachments?.length)) {
+      const { vision: _vision, attachments: _attachments, ...rest } = m
       return rest
     }
     if (m.role !== 'tool' || m.content.length <= maxChars) return m

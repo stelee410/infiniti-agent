@@ -1,6 +1,7 @@
 import { readdir, readFile, stat } from 'fs/promises'
 import { join } from 'path'
 import { localSkillsDir, expandUserPath } from '../paths.js'
+import { BUILTIN_SKILLS } from './builtin.js'
 
 export type LoadedSkill = {
   id: string
@@ -59,7 +60,12 @@ export async function loadSkillsFromDirs(
 }
 
 export async function loadSkillsForCwd(cwd: string): Promise<LoadedSkill[]> {
-  return loadSkillsFromDirs([localSkillsDir(cwd)])
+  const local = await loadSkillsFromDirs([localSkillsDir(cwd)])
+  const seen = new Set(local.map((s) => s.id))
+  return [
+    ...local,
+    ...BUILTIN_SKILLS.filter((s) => !seen.has(s.id)),
+  ]
 }
 
 export function skillsToSystemBlock(skills: LoadedSkill[]): string {
@@ -69,5 +75,5 @@ export function skillsToSystemBlock(skills: LoadedSkill[]): string {
   const parts = skills.map(
     (s) => `### ${s.title} (\`${s.id}\`)\n\n${s.body}`,
   )
-  return `## 已安装的 Skills（第三方）\n\n${parts.join('\n\n---\n\n')}`
+  return `## 已安装的 Skills\n\n${parts.join('\n\n---\n\n')}`
 }

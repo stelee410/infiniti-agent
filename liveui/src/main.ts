@@ -48,12 +48,16 @@ declare global {
       compactWindowHeight?: (height: number) => void
       /** Electron：配置面板打开时临时切换到较大的可交互窗口 */
       setConfigPanelOpen?: (open: boolean) => void
+      /** Electron：拍照倒计时/闪光时临时铺满屏幕 */
+      setCameraCaptureOpen?: (open: boolean) => void
       /** Electron：读取窗口位置，供自绘拖拽按钮使用 */
       getWindowBounds?: () => Promise<{ x: number; y: number; width: number; height: number } | null>
       /** Electron：移动窗口，供自绘拖拽按钮使用 */
       setWindowPosition?: (x: number, y: number) => void
       /** Electron：选择本地文件或目录 */
       selectPath?: (opts: { kind: 'file' | 'directory'; defaultPath?: string }) => Promise<string | null>
+      /** Electron：选择对话附件 */
+      selectAttachments?: () => Promise<string[]>
       /** Electron：打开系统另存为对话框 */
       savePath?: (opts: { defaultPath?: string }) => Promise<string | null>
     }
@@ -150,6 +154,17 @@ type InboxUpdateMsg = {
 type InboxSaveResultMsg = {
   type: 'INBOX_SAVE_RESULT'
   data: { ok?: unknown; message?: unknown }
+}
+
+type ChatAttachment = {
+  id: string
+  name: string
+  mediaType: string
+  base64: string
+  size: number
+  kind: 'image' | 'document'
+  capturedAt: string
+  text?: string
 }
 
 type Msg =
@@ -784,6 +799,54 @@ async function bootstrap(): Promise<void> {
     }
   }
 
+  const delay = (ms: number): Promise<void> => new Promise((resolve) => window.setTimeout(resolve, ms))
+
+  const temporarilyUseSpriteExpression = async (expBase: string): Promise<(() => void) | null> => {
+    if (!expressionSprite || !spriteExpressionDirFileUrl) return null
+    try {
+      const tex = await loadSpritePngTexture(spritePngUrl(expBase))
+      if (!expressionSprite) {
+        tex.destroy(true)
+        return null
+      }
+      const sprite = expressionSprite
+      const prevTexture = sprite.texture
+      const prevW = spriteNaturalW
+      const prevH = spriteNaturalH
+      sprite.texture = tex
+      spriteNaturalW = Math.max(tex.width, 1)
+      spriteNaturalH = Math.max(tex.height, 1)
+      layoutFigureInStage()
+      return () => {
+        if (!expressionSprite || expressionSprite !== sprite) {
+          tex.destroy(true)
+          return
+        }
+        sprite.texture = prevTexture
+        spriteNaturalW = prevW
+        spriteNaturalH = prevH
+        layoutFigureInStage()
+        tex.destroy(true)
+      }
+    } catch {
+      return null
+    }
+  }
+
+  const temporarilyUseLive2dExpression = async (expId: string): Promise<(() => void) | null> => {
+    if (!liveModel || expressionSprite) return null
+    try {
+      await liveModel.expression(expId)
+      return () => {
+        void liveModel?.expression(emotionToExpressionId(expression || 'neutral')).catch(() => {
+          void liveModel?.expression(0).catch(() => {})
+        })
+      }
+    } catch {
+      return null
+    }
+  }
+
   window.addEventListener('resize', () => {
     app.renderer.resize(window.innerWidth, window.innerHeight)
     layoutFigureInStage()
@@ -851,6 +914,11 @@ async function bootstrap(): Promise<void> {
   const filePathToUrl = (p: string): string => {
     if (/^file:/i.test(p) || /^https?:/i.test(p) || /^data:/i.test(p)) return p
     return `file://${p.split('/').map((part) => encodeURIComponent(part)).join('/')}`
+  }
+
+  const filenameFromPath = (p: string): string => {
+    const parts = p.split(/[\\/]/)
+    return parts[parts.length - 1] || 'attachment'
   }
 
   const parseInboxAttachment = (raw: InboxAttachment): RenderInboxAttachment | null => {
@@ -1146,6 +1214,7 @@ async function bootstrap(): Promise<void> {
   let previewPhotoVision: LiveUiVisionAttachment | null = null
   let attachedPhotoRequestId = ''
   let attachedPhotoVision: LiveUiVisionAttachment | null = null
+  let attachedFiles: ChatAttachment[] = []
   let clearConfirmedPhotoUi: (notifyServer?: boolean) => void = () => {}
   let cameraUiTimeout: number | undefined
 
@@ -1363,6 +1432,63 @@ async function bootstrap(): Promise<void> {
     }
   }
 
+  type PreparedCameraCapture = {
+    stream: MediaStream
+    video: HTMLVideoElement
+    capture: (location: LiveUiVisionAttachment['location'] | undefined) => LiveUiVisionAttachment
+    close: () => void
+  }
+
+  const prepareCameraCapture = async (): Promise<PreparedCameraCapture> => {
+    const stream = await getCameraStreamWithTimeout()
+    const video = document.createElement('video')
+    video.muted = true
+    video.playsInline = true
+    video.autoplay = true
+    video.style.position = 'fixed'
+    video.style.left = '-9999px'
+    video.style.top = '0'
+    video.style.width = '1px'
+    video.style.height = '1px'
+    video.srcObject = stream
+    document.body.appendChild(video)
+    console.debug('[liveui] camera prepare video play start')
+    video.play().then(
+      () => console.debug('[liveui] camera prepare video play resolved'),
+      (e) => console.warn(`[liveui] camera prepare video play rejected: ${describeCameraError(e)}`),
+    )
+    await new Promise<void>((resolve, reject) => {
+      const startedAt = performance.now()
+      const tick = (): void => {
+        if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && video.videoWidth > 0 && video.videoHeight > 0) {
+          resolve()
+          return
+        }
+        if (performance.now() - startedAt > 4_000) {
+          reject(new Error('摄像头没有输出视频帧'))
+          return
+        }
+        requestAnimationFrame(tick)
+      }
+      requestAnimationFrame(tick)
+    })
+    let closed = false
+    const close = (): void => {
+      if (closed) return
+      closed = true
+      video.pause()
+      video.srcObject = null
+      video.remove()
+      stopMediaStream(stream)
+    }
+    return {
+      stream,
+      video,
+      capture: (location) => drawCameraSourceToVision(video, video.videoWidth, video.videoHeight, location),
+      close,
+    }
+  }
+
   const parseVisionAttachment = (raw: unknown): LiveUiVisionAttachment | null => {
     if (!raw || typeof raw !== 'object') return null
     const v = raw as {
@@ -1403,9 +1529,15 @@ async function bootstrap(): Promise<void> {
   const sendUserCommand = (line: string): void => {
     touchConvActivity()
     if (socket.readyState !== WebSocket.OPEN) return
-    socket.send(JSON.stringify({ type: 'USER_INPUT', data: { line } }))
-    if (attachedPhotoVision && !line.trimStart().startsWith('/')) {
+    const payload = {
+      line,
+      ...(attachedFiles.length && !line.trimStart().startsWith('/') ? { attachments: attachedFiles } : {}),
+    }
+    socket.send(JSON.stringify({ type: 'USER_INPUT', data: payload }))
+    if ((attachedPhotoVision || attachedFiles.length) && !line.trimStart().startsWith('/')) {
       clearConfirmedPhotoUi(false)
+      attachedFiles = []
+      renderAttachments()
     }
   }
 
@@ -2550,9 +2682,106 @@ async function bootstrap(): Promise<void> {
   const photoPreviewImg = document.getElementById('liveui-photo-preview-img') as HTMLImageElement | null
   const photoCancelBtn = document.getElementById('liveui-photo-cancel') as HTMLButtonElement | null
   const photoConfirmBtn = document.getElementById('liveui-photo-confirm') as HTMLButtonElement | null
+  const cameraCountdown = document.getElementById('liveui-camera-countdown') as HTMLElement | null
+  const cameraCountdownIcon = document.getElementById('liveui-camera-countdown-icon') as SVGElement | null
+  const cameraCountdownNumber = document.getElementById('liveui-camera-countdown-number') as HTMLElement | null
+  const cameraFlash = document.getElementById('liveui-camera-flash') as HTMLElement | null
+  const attachmentList = document.getElementById('liveui-attachment-list')
 
   const photoDataUrl = (vision: LiveUiVisionAttachment): string =>
     `data:${vision.mediaType};base64,${vision.imageBase64}`
+
+  const attachmentMediaType = (path: string): string | null => {
+    const name = filenameFromPath(path).toLowerCase()
+    if (/\.(jpe?g)$/.test(name)) return 'image/jpeg'
+    if (/\.png$/.test(name)) return 'image/png'
+    if (/\.webp$/.test(name)) return 'image/webp'
+    if (/\.gif$/.test(name)) return 'image/gif'
+    if (/\.pdf$/.test(name)) return 'application/pdf'
+    if (/\.md$|\.markdown$/.test(name)) return 'text/markdown'
+    if (/\.csv$/.test(name)) return 'text/csv'
+    if (/\.docx$/.test(name)) return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    return null
+  }
+
+  const readBlobBase64 = (blob: Blob): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onerror = () => reject(reader.error ?? new Error('读取附件失败'))
+      reader.onload = () => {
+        const s = String(reader.result ?? '')
+        resolve(s.includes(',') ? s.split(',')[1] ?? '' : s)
+      }
+      reader.readAsDataURL(blob)
+    })
+
+  const renderAttachments = (): void => {
+    if (!attachmentList) return
+    attachmentList.replaceChildren()
+    attachmentList.hidden = attachedFiles.length === 0
+    for (const file of attachedFiles) {
+      const chip = document.createElement('div')
+      chip.className = 'liveui-attachment-chip'
+      if (file.kind === 'image') {
+        const img = document.createElement('img')
+        img.src = `data:${file.mediaType};base64,${file.base64}`
+        img.alt = ''
+        chip.appendChild(img)
+      } else {
+        const icon = document.createElement('span')
+        icon.textContent = file.mediaType === 'application/pdf' ? 'PDF' : file.name.toLowerCase().endsWith('.docx') ? 'DOC' : 'TXT'
+        chip.appendChild(icon)
+      }
+      const name = document.createElement('span')
+      name.className = 'liveui-attachment-chip-name'
+      name.textContent = file.name
+      chip.appendChild(name)
+      const remove = document.createElement('button')
+      remove.type = 'button'
+      remove.className = 'liveui-attachment-chip-remove'
+      remove.textContent = '×'
+      remove.addEventListener('click', (ev) => {
+        ev.stopPropagation()
+        attachedFiles = attachedFiles.filter((a) => a.id !== file.id)
+        renderAttachments()
+      })
+      chip.appendChild(remove)
+      attachmentList.appendChild(chip)
+    }
+    attachBtn?.classList.toggle('liveui-attach-btn--has-photo', attachedPhotoVision != null)
+    attachBtn?.setAttribute('title', attachedFiles.length ? `已附加 ${attachedFiles.length} 个文件` : attachedPhotoVision ? '移除照片' : '附件')
+  }
+
+  const addAttachmentsFromPaths = async (paths: string[]): Promise<void> => {
+    let imageCount = attachedFiles.filter((a) => a.kind === 'image').length
+    for (const path of paths) {
+      const mediaType = attachmentMediaType(path)
+      if (!mediaType) continue
+      const kind: ChatAttachment['kind'] = mediaType.startsWith('image/') ? 'image' : 'document'
+      if (kind === 'image') {
+        imageCount += 1
+        if (imageCount > 9) continue
+      }
+      const response = await fetch(filePathToUrl(path))
+      const blob = await response.blob()
+      if (blob.size > 12 * 1024 * 1024) continue
+      const base64 = await readBlobBase64(blob)
+      const text = mediaType === 'text/markdown' || mediaType === 'text/csv'
+        ? (await blob.text()).slice(0, 80_000)
+        : undefined
+      attachedFiles.push({
+        id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        name: filenameFromPath(path),
+        mediaType,
+        base64,
+        size: blob.size,
+        kind,
+        capturedAt: new Date().toISOString(),
+        ...(text ? { text } : {}),
+      })
+    }
+    renderAttachments()
+  }
 
   const updateCameraBtn = (): void => {
     if (!visionBtn) return
@@ -2581,6 +2810,7 @@ async function bootstrap(): Promise<void> {
     }
     attachBtn?.classList.add('liveui-attach-btn--has-photo')
     attachBtn?.setAttribute('title', '移除照片')
+    renderAttachments()
   }
 
   clearConfirmedPhotoUi = (notifyServer = true): void => {
@@ -2592,6 +2822,7 @@ async function bootstrap(): Promise<void> {
     }
     attachBtn?.classList.remove('liveui-attach-btn--has-photo')
     attachBtn?.setAttribute('title', '附件')
+    renderAttachments()
     if (notifyServer && socket.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify({ type: 'VISION_ATTACHMENT_CLEAR', data: {} }))
     }
@@ -2661,6 +2892,41 @@ async function bootstrap(): Promise<void> {
     hidePhotoPreview(false)
   }
 
+  const triggerCameraFlash = async (): Promise<void> => {
+    if (!cameraFlash) return
+    cameraFlash.classList.remove('liveui-camera-flash--on')
+    void cameraFlash.offsetWidth
+    cameraFlash.classList.add('liveui-camera-flash--on')
+    await delay(120)
+  }
+
+  const runCameraCountdown = async (): Promise<void> => {
+    const restoreSprite = await temporarilyUseSpriteExpression('exp_take_photo')
+    const restoreLive2d = restoreSprite ? null : await temporarilyUseLive2dExpression('exp_take_photo')
+    const restorePose = restoreSprite ?? restoreLive2d
+    const hasTakePhotoPose = restorePose != null
+    if (cameraCountdown) {
+      cameraCountdown.hidden = false
+      cameraCountdown.setAttribute('aria-hidden', 'false')
+    }
+    if (cameraCountdownIcon) cameraCountdownIcon.hidden = hasTakePhotoPose
+    try {
+      for (const n of ['3', '2', '1']) {
+        if (cameraCountdownNumber) cameraCountdownNumber.textContent = n
+        await delay(720)
+      }
+      if (cameraCountdownNumber) cameraCountdownNumber.textContent = ''
+      await triggerCameraFlash()
+    } finally {
+      if (cameraCountdown) {
+        cameraCountdown.hidden = true
+        cameraCountdown.setAttribute('aria-hidden', 'true')
+      }
+      if (cameraCountdownIcon) cameraCountdownIcon.hidden = false
+      restorePose?.()
+    }
+  }
+
   const requestCameraPhoto = async (): Promise<void> => {
     if (cameraCapturing) return
     hidePhotoPreview(true)
@@ -2668,19 +2934,34 @@ async function bootstrap(): Promise<void> {
     const requestId = `photo-${Date.now()}-${++cameraCaptureSeq}`
     activeCameraRequestId = requestId
     updateCameraBtn()
+    let prepared: PreparedCameraCapture | null = null
     cameraUiTimeout = window.setTimeout(() => {
       if (activeCameraRequestId !== requestId) return
       console.warn('[liveui] 拍照请求超时，已恢复相机按钮')
+      prepared?.close()
+      window.infinitiLiveUi?.setCameraCaptureOpen?.(false)
       finishCameraCaptureUi()
     }, 30_000)
     try {
-      if (socket.readyState !== WebSocket.OPEN) {
-        throw new Error('LiveUI WebSocket 未连接')
+      window.infinitiLiveUi?.setCameraCaptureOpen?.(true)
+      prepared = await prepareCameraCapture()
+      layoutFigureInStage()
+      positionBubbleOverFigure()
+      const locationPromise = getCurrentLocation(1200)
+      await runCameraCountdown()
+      const location = await locationPromise
+      const vision = prepared.capture(location)
+      prepared.close()
+      prepared = null
+      window.infinitiLiveUi?.setCameraCaptureOpen?.(false)
+      if (activeCameraRequestId === requestId) {
+        showPhotoPreview(requestId, vision)
+        finishCameraCaptureUi()
       }
-      const location = await getCurrentLocation(1200)
-      socket.send(JSON.stringify({ type: 'VISION_CAPTURE_REQUEST', data: { requestId, location } }))
     } catch (e) {
       console.warn(`[liveui] 拍照失败: ${describeCameraError(e)}`)
+      prepared?.close()
+      window.infinitiLiveUi?.setCameraCaptureOpen?.(false)
       if (activeCameraRequestId === requestId) finishCameraCaptureUi()
     }
   }
@@ -2692,10 +2973,23 @@ async function bootstrap(): Promise<void> {
   photoCancelBtn?.addEventListener('click', () => hidePhotoPreview(true))
   photoConfirmBtn?.addEventListener('click', confirmPhotoPreview)
   attachBtn?.addEventListener('click', () => {
-    if (attachedPhotoVision) clearConfirmedPhotoUi(true)
+    attachBtn.blur()
+    void (async () => {
+      const paths = await window.infinitiLiveUi?.selectAttachments?.()
+      if (paths?.length) {
+        try {
+          await addAttachmentsFromPaths(paths)
+        } catch (e) {
+          console.warn('[liveui] 附件读取失败:', e)
+        }
+        return
+      }
+      if (attachedPhotoVision && !attachedFiles.length) clearConfirmedPhotoUi(true)
+    })()
   })
 
   updateCameraBtn()
+  renderAttachments()
 
   app.ticker.add(() => {
     if (!liveModel && !expressionSprite) {

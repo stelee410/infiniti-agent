@@ -54,6 +54,9 @@ contextBridge.exposeInMainWorld('infinitiLiveUi', {
   setConfigPanelOpen: (open) => {
     ipcRenderer.send('liveui-config-panel-open', !!open)
   },
+  setCameraCaptureOpen: (open) => {
+    ipcRenderer.send('liveui-camera-capture-open', !!open)
+  },
   getWindowBounds: () => ipcRenderer.invoke('liveui-get-window-bounds'),
   setWindowPosition: (x, y) => {
     ipcRenderer.send('liveui-set-window-position', { x, y })
@@ -63,6 +66,7 @@ contextBridge.exposeInMainWorld('infinitiLiveUi', {
     const defaultPath = opts && typeof opts.defaultPath === 'string' ? opts.defaultPath : undefined
     return ipcRenderer.invoke('liveui-select-path', { kind, defaultPath })
   },
+  selectAttachments: () => ipcRenderer.invoke('liveui-select-attachments'),
   savePath: (opts) => {
     const defaultPath = opts && typeof opts.defaultPath === 'string' ? opts.defaultPath : undefined
     return ipcRenderer.invoke('liveui-save-path', { defaultPath })

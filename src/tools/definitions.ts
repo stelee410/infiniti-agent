@@ -9,6 +9,7 @@ export type BuiltinToolName =
   | 'search_sessions'
   | 'manage_skill'
   | 'knowledge_graph'
+  | 'snap_photo'
   | 'read_file'
   | 'glob_files'
   | 'grep_files'
@@ -368,6 +369,22 @@ export const BUILTIN_TOOLS: Array<{
         },
       },
       required: ['action', 'name'],
+    },
+  },
+  {
+    name: 'snap_photo',
+    description:
+      '异步生成一张写实照片或合照，并把完成/失败邮件放进你的邮箱。适合用户想让你“生成照片、拍一张图、来张合照、把我们放到某个场景”等请求。此工具不会阻塞当前对话；调用后应自然告诉用户你已经去后台生成，完成后小信封会亮起。',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        prompt: {
+          type: 'string',
+          description: '图片内容提示词。用自然语言描述场景、人物、风格、光线、构图等。',
+        },
+      },
+      required: ['prompt'],
     },
   },
 ]

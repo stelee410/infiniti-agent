@@ -37,7 +37,7 @@ import {
 } from './slashCompletions.js'
 import { parseSpeakCommandLine } from '../liveui/speakCommandLine.js'
 import type { LiveUiInteractionKind, LiveUiSession } from '../liveui/wsSession.js'
-import type { LiveUiStatusVariant, LiveUiVisionAttachment } from '../liveui/protocol.js'
+import type { LiveUiFileAttachment, LiveUiStatusVariant, LiveUiVisionAttachment } from '../liveui/protocol.js'
 import { enqueueSnapPhotoJob } from '../snap/asyncSnap.js'
 import { listInboxMessages, markInboxMessageRead } from '../inbox/store.js'
 import {
@@ -100,10 +100,21 @@ function isPathInside(parent: string, child: string): boolean {
 
 function stripTransientVision(messages: PersistedMessage[]): PersistedMessage[] {
   return messages.map((m) => {
-    if (m.role !== 'user' || !m.vision) return m
-    const { vision: _vision, ...rest } = m
+    if (m.role !== 'user' || (!m.vision && !m.attachments?.length)) return m
+    const { vision: _vision, attachments: _attachments, ...rest } = m
     return rest
   })
+}
+
+function attachmentSummary(attachments: LiveUiFileAttachment[]): string {
+  if (!attachments.length) return ''
+  const imageCount = attachments.filter((a) => a.kind === 'image').length
+  const docCount = attachments.length - imageCount
+  const parts = [
+    imageCount ? `${imageCount} 张图片` : '',
+    docCount ? `${docCount} 个文档` : '',
+  ].filter(Boolean)
+  return parts.length ? `\n\n[已附带${parts.join('、')}]` : ''
 }
 
 function validateConfigPanelSave(raw: unknown): asserts raw is InfinitiConfig {
@@ -618,13 +629,15 @@ export function ChatApp({
       }
 
       const turnVision = vision ?? liveUi?.consumePendingVisionAttachment()
+      const turnAttachments = liveUi?.consumePendingFileAttachments() ?? []
 
       const nextMsgs: PersistedMessage[] = [
         ...baseMessages,
         {
           role: 'user',
-          content: turnVision ? `${userLine}\n\n[已附带视觉快照]` : userLine,
+          content: `${userLine}${turnVision ? '\n\n[已附带视觉快照]' : ''}${attachmentSummary(turnAttachments)}`,
           ...(turnVision ? { vision: turnVision } : {}),
+          ...(turnAttachments.length ? { attachments: turnAttachments } : {}),
         },
       ]
       setMessages(nextMsgs)

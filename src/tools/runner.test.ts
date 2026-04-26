@@ -5,13 +5,24 @@ import { tmpdir } from 'os'
 import { runBuiltinTool, type ToolRunContext } from './runner.js'
 import { loadMemoryStore } from '../memory/structured.js'
 import { loadProfileStore } from '../memory/userProfile.js'
+import type { InfinitiConfig } from '../config/types.js'
+
+const testConfig: InfinitiConfig = {
+  version: 1,
+  llm: {
+    provider: 'openai',
+    baseUrl: 'https://api.openai.com/v1',
+    model: 'gpt-4.1',
+    apiKey: 'test-key',
+  },
+}
 
 let cwd: string
 let ctx: ToolRunContext
 
 beforeEach(async () => {
   cwd = await mkdtemp(join(tmpdir(), 'infiniti-runner-test-'))
-  ctx = { sessionCwd: cwd }
+  ctx = { sessionCwd: cwd, config: testConfig }
 })
 
 afterEach(async () => {
