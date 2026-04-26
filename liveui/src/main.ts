@@ -40,11 +40,24 @@ declare global {
       renderer?: string
       real2d?: {
         enabled?: boolean
+        backend?: string
         baseUrl?: string
         fps?: number
         frameFormat?: string
         fallbackRenderer?: string
         mouthDriver?: string
+        fal?: {
+          keyEnv?: string
+          mode?: string
+          model?: string
+          imageModel?: string
+          lipsyncModel?: string
+          drivingVideoUrl?: string
+          imageUrl?: string
+          audioUrl?: string
+          pollIntervalMs?: number
+          requestTimeoutMs?: number
+        }
       } | null
       model3FileUrl: string
       /** 含尾斜杠的 `file:` URL，指向含 `exp_01.png`…的目录（与 CLI `spriteExpressions.dir` 一致） */

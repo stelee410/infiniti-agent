@@ -261,6 +261,7 @@ function parseLiveUiReal2dConfig(raw: unknown): LiveUiConfig['real2d'] | undefin
   const u = raw as Record<string, unknown>
   const out: NonNullable<LiveUiConfig['real2d']> = {}
   if (typeof u.enabled === 'boolean') out.enabled = u.enabled
+  if (u.backend === 'local' || u.backend === 'fal') out.backend = u.backend
   if (typeof u.baseUrl === 'string' && u.baseUrl.trim()) out.baseUrl = u.baseUrl.trim()
   if (typeof u.sourceImage === 'string' && u.sourceImage.trim()) out.sourceImage = u.sourceImage.trim()
   if (typeof u.emotionMap === 'string' && u.emotionMap.trim()) out.emotionMap = u.emotionMap.trim()
@@ -279,6 +280,87 @@ function parseLiveUiReal2dConfig(raw: unknown): LiveUiConfig['real2d'] | undefin
   if (typeof u.timeoutMs === 'number' && Number.isFinite(u.timeoutMs)) {
     const ms = Math.round(u.timeoutMs)
     if (ms >= 500 && ms <= 60000) out.timeoutMs = ms
+  }
+  const fal = parseLiveUiReal2dFalConfig(u.fal)
+  if (fal) out.fal = fal
+  return Object.keys(out).length ? out : undefined
+}
+
+function parseLiveUiReal2dFalConfig(raw: unknown): NonNullable<LiveUiConfig['real2d']>['fal'] | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const u = raw as Record<string, unknown>
+  const out: NonNullable<NonNullable<LiveUiConfig['real2d']>['fal']> = {}
+  if (typeof u.apiKey === 'string' && u.apiKey.trim()) out.apiKey = u.apiKey.trim()
+  if (typeof u.keyEnv === 'string' && u.keyEnv.trim()) out.keyEnv = u.keyEnv.trim()
+  if (u.mode === 'live-portrait' || u.mode === 'live-portrait-image' || u.mode === 'lipsync-video') {
+    out.mode = u.mode
+  }
+  if (typeof u.model === 'string' && u.model.trim()) out.model = u.model.trim()
+  if (typeof u.imageModel === 'string' && u.imageModel.trim()) out.imageModel = u.imageModel.trim()
+  if (typeof u.lipsyncModel === 'string' && u.lipsyncModel.trim()) out.lipsyncModel = u.lipsyncModel.trim()
+  if (typeof u.drivingVideoUrl === 'string' && u.drivingVideoUrl.trim()) out.drivingVideoUrl = u.drivingVideoUrl.trim()
+  if (typeof u.imageUrl === 'string' && u.imageUrl.trim()) out.imageUrl = u.imageUrl.trim()
+  if (typeof u.audioUrl === 'string' && u.audioUrl.trim()) out.audioUrl = u.audioUrl.trim()
+  if (typeof u.pollIntervalMs === 'number' && Number.isFinite(u.pollIntervalMs)) {
+    const ms = Math.round(u.pollIntervalMs)
+    if (ms >= 250 && ms <= 30000) out.pollIntervalMs = ms
+  }
+  if (typeof u.requestTimeoutMs === 'number' && Number.isFinite(u.requestTimeoutMs)) {
+    const ms = Math.round(u.requestTimeoutMs)
+    if (ms >= 5000 && ms <= 1800000) out.requestTimeoutMs = ms
+  }
+  const options = parseLiveUiReal2dFalOptions(u.options)
+  if (options) out.options = options
+  return Object.keys(out).length ? out : undefined
+}
+
+function parseLiveUiReal2dFalOptions(
+  raw: unknown,
+): NonNullable<NonNullable<NonNullable<LiveUiConfig['real2d']>['fal']>['options']> | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const u = raw as Record<string, unknown>
+  const out: NonNullable<NonNullable<NonNullable<LiveUiConfig['real2d']>['fal']>['options']> = {}
+  const numbers = {
+    blink: 'blink',
+    eyebrow: 'eyebrow',
+    wink: 'wink',
+    pupilX: 'pupilX',
+    pupilY: 'pupilY',
+    aaa: 'aaa',
+    eee: 'eee',
+    woo: 'woo',
+    smile: 'smile',
+    rotatePitch: 'rotatePitch',
+    rotateYaw: 'rotateYaw',
+    rotateRoll: 'rotateRoll',
+    dsize: 'dsize',
+    scale: 'scale',
+    vxRatio: 'vxRatio',
+    vyRatio: 'vyRatio',
+    batchSize: 'batchSize',
+  } as const
+  for (const [src, dest] of Object.entries(numbers)) {
+    const v = u[src]
+    if (typeof v === 'number' && Number.isFinite(v)) {
+      ;(out as Record<string, number>)[dest] = v
+    }
+  }
+  const booleans = {
+    flagLipZero: 'flagLipZero',
+    flagEyeRetargeting: 'flagEyeRetargeting',
+    flagLipRetargeting: 'flagLipRetargeting',
+    flagStitching: 'flagStitching',
+    flagRelative: 'flagRelative',
+    flagPasteback: 'flagPasteback',
+    flagDoCrop: 'flagDoCrop',
+    flagDoRot: 'flagDoRot',
+    enableSafetyChecker: 'enableSafetyChecker',
+  } as const
+  for (const [src, dest] of Object.entries(booleans)) {
+    const v = u[src]
+    if (typeof v === 'boolean') {
+      ;(out as Record<string, boolean>)[dest] = v
+    }
   }
   return Object.keys(out).length ? out : undefined
 }

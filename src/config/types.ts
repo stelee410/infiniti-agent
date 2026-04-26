@@ -76,8 +76,69 @@ export type LiveUiSpriteExpressionsConfig = {
 
 export type LiveUiRenderer = 'live2d' | 'sprite' | 'real2d'
 
+export type LiveUiReal2dBackend = 'local' | 'fal'
+
+export type LiveUiReal2dFalMode = 'live-portrait' | 'live-portrait-image' | 'lipsync-video'
+
+export type LiveUiReal2dFalConfig = {
+  /**
+   * fal.ai API key。推荐不写入配置，改用 keyEnv 指向的环境变量；默认读取 FAL_KEY。
+   */
+  apiKey?: string
+  /** fal.ai API key 环境变量名，默认 FAL_KEY。 */
+  keyEnv?: string
+  /** 生成策略：默认 live-portrait，即 image_url + driving video_url -> video。 */
+  mode?: LiveUiReal2dFalMode
+  /** fal model id，默认 fal-ai/live-portrait。 */
+  model?: string
+  /** 可选备用 image endpoint，默认 fal-ai/live-portrait/image。 */
+  imageModel?: string
+  /** 可选 lipsync endpoint，默认 creatify/lipsync。 */
+  lipsyncModel?: string
+  /** 驱动视频 URL；live-portrait 模式下 fal 要求 video_url。 */
+  drivingVideoUrl?: string
+  /** 可公开访问的人像图 URL；缺省时服务端可上传 sourceImage 后获得 URL。 */
+  imageUrl?: string
+  /** 可公开访问的音频 URL；lipsync-video 模式下使用。 */
+  audioUrl?: string
+  /** 轮询任务状态的间隔。 */
+  pollIntervalMs?: number
+  /** 单次云端生成超时。 */
+  requestTimeoutMs?: number
+  /** fal live-portrait 输入参数透传。 */
+  options?: {
+    blink?: number
+    eyebrow?: number
+    wink?: number
+    pupilX?: number
+    pupilY?: number
+    aaa?: number
+    eee?: number
+    woo?: number
+    smile?: number
+    rotatePitch?: number
+    rotateYaw?: number
+    rotateRoll?: number
+    flagLipZero?: boolean
+    flagEyeRetargeting?: boolean
+    flagLipRetargeting?: boolean
+    flagStitching?: boolean
+    flagRelative?: boolean
+    flagPasteback?: boolean
+    flagDoCrop?: boolean
+    flagDoRot?: boolean
+    dsize?: number
+    scale?: number
+    vxRatio?: number
+    vyRatio?: number
+    batchSize?: number
+    enableSafetyChecker?: boolean
+  }
+}
+
 export type LiveUiReal2dConfig = {
   enabled?: boolean
+  backend?: LiveUiReal2dBackend
   baseUrl?: string
   sourceImage?: string
   emotionMap?: string
@@ -87,6 +148,7 @@ export type LiveUiReal2dConfig = {
   autoStartService?: boolean
   mouthDriver?: 'rms' | 'musetalk' | 'wav2lip'
   timeoutMs?: number
+  fal?: LiveUiReal2dFalConfig
 }
 
 /**

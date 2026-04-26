@@ -348,11 +348,24 @@ export function initConfigPanel(opts: ConfigPanelOptions): {
     } else if (mode === 'real2d') {
       l.real2d ??= {}
       l.real2d.baseUrl ??= 'http://127.0.0.1:8921'
+      l.real2d.backend ??= 'local'
       l.real2d.fps ??= 25
       l.real2d.frameFormat ??= 'jpeg'
       l.real2d.fallbackRenderer ??= 'sprite'
       l.real2d.mouthDriver ??= 'rms'
       grid.append(
+        field('backend', select(text(l.real2d.backend || 'local'), [['local', 'local service'], ['fal', 'fal.ai cloud']], (v) => {
+          l.real2d.backend = v
+          if (v === 'fal') {
+            l.real2d.fal ??= {}
+            l.real2d.fal.keyEnv ??= 'FAL_KEY'
+            l.real2d.fal.mode ??= 'live-portrait'
+            l.real2d.fal.model ??= 'fal-ai/live-portrait'
+            l.real2d.fal.imageModel ??= 'fal-ai/live-portrait/image'
+            l.real2d.fal.lipsyncModel ??= 'creatify/lipsync'
+          }
+          rerender()
+        })),
         field('real2d baseUrl', input(text(l.real2d.baseUrl), (v) => { l.real2d.baseUrl = v })),
         pathField('sourceImage', text(l.real2d.sourceImage), 'file', (v) => { l.real2d.sourceImage = v }),
         pathField('emotionMap（可选）', text(l.real2d.emotionMap), 'file', (v) => { l.real2d.emotionMap = v }),
@@ -360,6 +373,28 @@ export function initConfigPanel(opts: ConfigPanelOptions): {
         field('frameFormat', select(text(l.real2d.frameFormat || 'jpeg'), [['jpeg', 'jpeg'], ['webp', 'webp'], ['png', 'png']], (v) => { l.real2d.frameFormat = v })),
         field('fallback', select(text(l.real2d.fallbackRenderer || 'sprite'), [['sprite', 'sprite'], ['live2d', 'live2d']], (v) => { l.real2d.fallbackRenderer = v })),
       )
+      if (l.real2d.backend === 'fal') {
+        l.real2d.fal ??= {}
+        l.real2d.fal.keyEnv ??= 'FAL_KEY'
+        l.real2d.fal.mode ??= 'live-portrait'
+        l.real2d.fal.model ??= 'fal-ai/live-portrait'
+        l.real2d.fal.imageModel ??= 'fal-ai/live-portrait/image'
+        l.real2d.fal.lipsyncModel ??= 'creatify/lipsync'
+        l.real2d.fal.pollIntervalMs ??= 1000
+        l.real2d.fal.requestTimeoutMs ??= 300000
+        grid.append(
+          field('fal key env', input(text(l.real2d.fal.keyEnv), (v) => { l.real2d.fal.keyEnv = v })),
+          field('fal mode', select(text(l.real2d.fal.mode), [['live-portrait', 'live-portrait'], ['live-portrait-image', 'live-portrait-image'], ['lipsync-video', 'lipsync-video']], (v) => { l.real2d.fal.mode = v })),
+          field('fal model', input(text(l.real2d.fal.model), (v) => { l.real2d.fal.model = v })),
+          field('image model', input(text(l.real2d.fal.imageModel), (v) => { l.real2d.fal.imageModel = v })),
+          field('lipsync model', input(text(l.real2d.fal.lipsyncModel), (v) => { l.real2d.fal.lipsyncModel = v })),
+          field('driving video URL', input(text(l.real2d.fal.drivingVideoUrl), (v) => { l.real2d.fal.drivingVideoUrl = v })),
+          field('image URL（可选）', input(text(l.real2d.fal.imageUrl), (v) => { l.real2d.fal.imageUrl = v })),
+          field('audio URL（可选）', input(text(l.real2d.fal.audioUrl), (v) => { l.real2d.fal.audioUrl = v })),
+          field('poll ms', input(num(l.real2d.fal.pollIntervalMs, '1000'), (v) => { l.real2d.fal.pollIntervalMs = Number(v) }, 'number')),
+          field('timeout ms', input(num(l.real2d.fal.requestTimeoutMs, '300000'), (v) => { l.real2d.fal.requestTimeoutMs = Number(v) }, 'number')),
+        )
+      }
     } else {
       grid.append(pathField('Live2D model3.json', text(l.live2dModel3Json), 'file', (v) => { l.live2dModel3Json = v }))
       grid.append(pathField('model_dict.json（可选）', text(l.live2dModelDict), 'file', (v) => { l.live2dModelDict = v }))

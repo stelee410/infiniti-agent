@@ -22,9 +22,11 @@ import { Real2dClient } from '../real2d/client.js'
 import type { Real2dParamVector } from '../real2d/protocol.js'
 
 type Real2dBridgeOptions = {
+  backend?: 'local' | 'fal'
   sourceImage?: string
   fps?: number
   frameFormat?: 'jpeg' | 'webp' | 'png' | 'raw'
+  fal?: Parameters<Real2dClient['startSession']>[0]['fal']
 }
 
 const DEFAULT_REAL2D_EMOTIONS: Record<string, Real2dParamVector> = {
@@ -136,9 +138,11 @@ export class LiveUiSession {
       }
       const started = await client.startSession({
         sessionId: this.real2dSessionId,
+        backend: opts.backend,
         sourceImage: opts.sourceImage,
         fps: opts.fps,
         frameFormat: opts.frameFormat,
+        fal: opts.fal,
       })
       this.broadcast({
         type: 'REAL2D_STATUS',

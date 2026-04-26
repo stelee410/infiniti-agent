@@ -45,6 +45,8 @@ import { runSetLiveAgent } from './cli/setLiveAgent.js'
 import { runSnapPhotoJob } from './snap/asyncSnap.js'
 import { disableUiLogFile, enableUiLogFile, withUiLogFile } from './utils/uiLogFile.js'
 import { Real2dClient } from './real2d/client.js'
+import type { LiveUiReal2dFalConfig } from './config/types.js'
+import type { Real2dFalConfig } from './real2d/protocol.js'
 
 const cwd = process.cwd()
 
@@ -69,11 +71,26 @@ function buildLiveUiReal2dEnvJson(cfg: Awaited<ReturnType<typeof loadConfig>>): 
   if (!r) return undefined
   return JSON.stringify({
     enabled: r.enabled !== false,
+    backend: r.backend ?? 'local',
     baseUrl: r.baseUrl ?? 'http://127.0.0.1:8921',
     fps: r.fps ?? 25,
     frameFormat: r.frameFormat ?? 'jpeg',
     fallbackRenderer: r.fallbackRenderer ?? 'sprite',
     mouthDriver: r.mouthDriver ?? 'rms',
+    fal: r.fal
+      ? {
+          keyEnv: r.fal.keyEnv ?? 'FAL_KEY',
+          mode: r.fal.mode ?? 'live-portrait',
+          model: r.fal.model ?? 'fal-ai/live-portrait',
+          imageModel: r.fal.imageModel ?? 'fal-ai/live-portrait/image',
+          lipsyncModel: r.fal.lipsyncModel ?? 'creatify/lipsync',
+          drivingVideoUrl: r.fal.drivingVideoUrl,
+          imageUrl: r.fal.imageUrl,
+          audioUrl: r.fal.audioUrl,
+          pollIntervalMs: r.fal.pollIntervalMs ?? 1000,
+          requestTimeoutMs: r.fal.requestTimeoutMs ?? 300000,
+        }
+      : undefined,
   })
 }
 
@@ -166,14 +183,62 @@ async function configureLiveUiEngines(
       timeoutMs: real2d?.timeoutMs,
     })
     liveUi.setReal2dClient(client, {
+      backend: real2d?.backend ?? 'local',
       sourceImage: real2d?.sourceImage ? resolve(cwd, real2d.sourceImage) : undefined,
       fps: real2d?.fps,
       frameFormat: real2d?.frameFormat,
+      fal: buildReal2dFalStartConfig(real2d?.fal),
     })
     console.error(`[liveui] real2d 已配置 (baseUrl: ${client.baseUrl})`)
   } else {
     liveUi.setReal2dClient(null)
   }
+}
+
+function buildReal2dFalStartConfig(fal?: LiveUiReal2dFalConfig): Real2dFalConfig | undefined {
+  if (!fal) return undefined
+  return {
+    apiKey: fal.apiKey,
+    keyEnv: fal.keyEnv ?? 'FAL_KEY',
+    mode: fal.mode ?? 'live-portrait',
+    model: fal.model ?? 'fal-ai/live-portrait',
+    imageModel: fal.imageModel ?? 'fal-ai/live-portrait/image',
+    lipsyncModel: fal.lipsyncModel ?? 'creatify/lipsync',
+    drivingVideoUrl: fal.drivingVideoUrl,
+    imageUrl: fal.imageUrl,
+    audioUrl: fal.audioUrl,
+    pollIntervalMs: fal.pollIntervalMs ?? 1000,
+    requestTimeoutMs: fal.requestTimeoutMs ?? 300000,
+    options: normalizeFalOptions(fal.options),
+  }
+}
+
+function normalizeFalOptions(options?: LiveUiReal2dFalConfig['options']): Record<string, number | boolean> | undefined {
+  if (!options) return undefined
+  const out: Record<string, number | boolean> = {}
+  const map: Record<string, string> = {
+    pupilX: 'pupil_x',
+    pupilY: 'pupil_y',
+    rotatePitch: 'rotate_pitch',
+    rotateYaw: 'rotate_yaw',
+    rotateRoll: 'rotate_roll',
+    flagLipZero: 'flag_lip_zero',
+    flagEyeRetargeting: 'flag_eye_retargeting',
+    flagLipRetargeting: 'flag_lip_retargeting',
+    flagStitching: 'flag_stitching',
+    flagRelative: 'flag_relative',
+    flagPasteback: 'flag_pasteback',
+    flagDoCrop: 'flag_do_crop',
+    flagDoRot: 'flag_do_rot',
+    vxRatio: 'vx_ratio',
+    vyRatio: 'vy_ratio',
+    batchSize: 'batch_size',
+    enableSafetyChecker: 'enable_safety_checker',
+  }
+  for (const [k, v] of Object.entries(options)) {
+    if (typeof v === 'number' || typeof v === 'boolean') out[map[k] ?? k] = v
+  }
+  return Object.keys(out).length ? out : undefined
 }
 
 function restartLiveUiElectron(

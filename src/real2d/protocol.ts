@@ -2,6 +2,23 @@ export type Real2dFrameFormat = 'jpeg' | 'webp' | 'png' | 'raw'
 
 export type Real2dMouthDriver = 'rms' | 'musetalk' | 'wav2lip'
 
+export type Real2dBackend = 'local' | 'fal'
+
+export type Real2dFalConfig = {
+  apiKey?: string
+  keyEnv?: string
+  mode?: 'live-portrait' | 'live-portrait-image' | 'lipsync-video'
+  model?: string
+  imageModel?: string
+  lipsyncModel?: string
+  drivingVideoUrl?: string
+  imageUrl?: string
+  audioUrl?: string
+  pollIntervalMs?: number
+  requestTimeoutMs?: number
+  options?: Record<string, number | boolean>
+}
+
 export type Real2dParamVector = {
   smile?: number
   eyeOpen?: number
@@ -24,9 +41,11 @@ export type Real2dHealth = {
 
 export type Real2dStartRequest = {
   sessionId: string
+  backend?: Real2dBackend
   sourceImage?: string
   fps?: number
   frameFormat?: Real2dFrameFormat
+  fal?: Real2dFalConfig
 }
 
 export type Real2dStartResponse = {
