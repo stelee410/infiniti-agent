@@ -387,6 +387,7 @@ export function initConfigPanel(opts: ConfigPanelOptions): {
         l.real2d.fal.options.resolution ??= '480p'
         l.real2d.fal.options.acceleration ??= 'regular'
         grid.append(
+          field('fal API Key', input(text(l.real2d.fal.apiKey), (v) => { l.real2d.fal.apiKey = v }, 'password')),
           field('fal key env', input(text(l.real2d.fal.keyEnv), (v) => { l.real2d.fal.keyEnv = v })),
           field('fal mode', select(text(l.real2d.fal.mode), [['ai-avatar', 'ai-avatar'], ['live-portrait', 'live-portrait'], ['live-portrait-image', 'live-portrait-image'], ['lipsync-video', 'lipsync-video']], (v) => { l.real2d.fal.mode = v })),
           field('fal model', input(text(l.real2d.fal.model), (v) => { l.real2d.fal.model = v })),
