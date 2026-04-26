@@ -78,6 +78,13 @@ const COMMAND_ITEMS: SlashItem[] = [
     insert: '/inbox ',
   },
   {
+    id: '/last_email',
+    kind: 'command',
+    label: '/last_email',
+    desc: '打开你的邮箱里最近一封信',
+    insert: '/last_email ',
+  },
+  {
     id: '/help',
     kind: 'command',
     label: '/help',

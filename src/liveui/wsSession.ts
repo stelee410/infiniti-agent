@@ -173,6 +173,10 @@ export class LiveUiSession {
     this.broadcast({ type: 'INBOX_UPDATE', data: { unread } } as LiveUiMessage)
   }
 
+  openInbox(items: LiveUiInboxItem[]): void {
+    this.broadcast({ type: 'INBOX_OPEN', data: { items } } as LiveUiMessage)
+  }
+
   sendInboxSaveResult(ok: boolean, message: string): void {
     this.broadcast({ type: 'INBOX_SAVE_RESULT', data: { ok, message } } as LiveUiMessage)
   }

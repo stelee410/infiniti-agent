@@ -40,7 +40,7 @@ import type { LiveUiInteractionKind, LiveUiSession } from '../liveui/wsSession.j
 import type { LiveUiFileAttachment, LiveUiStatusVariant, LiveUiVisionAttachment } from '../liveui/protocol.js'
 import { enqueueSnapPhotoJob } from '../snap/asyncSnap.js'
 import { enqueueSeedanceVideoJob, seedanceReferenceImagesFromLiveInputs } from '../video/asyncVideo.js'
-import { listInboxMessages, markInboxMessageRead } from '../inbox/store.js'
+import { listInboxMessages, markInboxMessageRead, type InboxMessage } from '../inbox/store.js'
 import {
   collectNewTtsSegments,
   splitTtsSegments,
@@ -76,6 +76,16 @@ type Props = {
 const STREAM_DEBOUNCE_MS = 80
 const SLASH_MENU_MAX_ROWS = 10
 const LLM_PROVIDERS = new Set(['anthropic', 'openai', 'gemini', 'minimax', 'openrouter'])
+
+function inboxMessageToLiveUiItem(m: InboxMessage) {
+  return {
+    id: m.id,
+    createdAt: m.createdAt,
+    subject: m.subject,
+    body: m.body,
+    attachments: m.attachments,
+  }
+}
 
 async function polishSnapQueuedReply(config: InfinitiConfig, prompt: string, jobId: string): Promise<string> {
   const fallback =
@@ -482,9 +492,29 @@ export function ChatApp({
         setInput('')
         return
       }
+      if (raw === '/last_email') {
+        const inbox = await listInboxMessages(cwd, { limit: 1 })
+        const last = inbox[0]
+        if (!last) {
+          setNotice('你的邮箱为空')
+          setTimeout(() => setNotice(null), 5000)
+        } else if (liveUi) {
+          liveUi.openInbox([inboxMessageToLiveUiItem(last)])
+          setNotice(`已打开上一封信：${last.subject}`)
+          setTimeout(() => setNotice(null), 5000)
+        } else {
+          const attachments = last.attachments.length
+            ? `\n附件：${last.attachments.map((a) => a.path).join('\n')}`
+            : ''
+          setNotice(`${last.createdAt} ${last.subject}\n\n${last.body}${attachments}`)
+          setTimeout(() => setNotice(null), 15000)
+        }
+        setInput('')
+        return
+      }
       if (raw === '/help') {
         setError(
-          '输入 / 可补全：斜杠命令与全部工具（↑↓ Tab）。命令: /exit /clear /reload /config /memory /inbox /undo /compact /permission /speak /snap /video — /config 仅 Live 模式打开配置面板；/speak 后接正文仅 TTS 朗读、不写会话；/snap 后接提示词异步生成合照/写实照片；/video 后接提示词异步生成 Seedance 视频，完成后写入你的邮箱。改文件/bash/HTTP 默认需确认（Y 允许 · A 本次会话始终允许该工具 · N 拒绝）；启动时加 --dangerously-skip-permissions 可跳过所有确认。/permission 查看当前状态。/compact 压缩较早历史。卡死排查：INFINITI_AGENT_DEBUG=1。',
+          '输入 / 可补全：斜杠命令与全部工具（↑↓ Tab）。命令: /exit /clear /reload /config /memory /inbox /last_email /undo /compact /permission /speak /snap /video — /config 仅 Live 模式打开配置面板；/last_email 打开最近一封邮箱消息；/speak 后接正文仅 TTS 朗读、不写会话；/snap 后接提示词异步生成合照/写实照片；/video 后接提示词异步生成 Seedance 视频，完成后写入你的邮箱。改文件/bash/HTTP 默认需确认（Y 允许 · A 本次会话始终允许该工具 · N 拒绝）；启动时加 --dangerously-skip-permissions 可跳过所有确认。/permission 查看当前状态。/compact 压缩较早历史。卡死排查：INFINITI_AGENT_DEBUG=1。',
         )
         setInput('')
         return
@@ -839,15 +869,7 @@ export function ChatApp({
   const refreshLiveInbox = useCallback(async () => {
     if (!liveUi) return
     const unread = await listInboxMessages(cwd, { unreadOnly: true, limit: 5 })
-    liveUi.sendInboxUpdate(
-      unread.map((m) => ({
-        id: m.id,
-        createdAt: m.createdAt,
-        subject: m.subject,
-        body: m.body,
-        attachments: m.attachments,
-      })),
-    )
+    liveUi.sendInboxUpdate(unread.map(inboxMessageToLiveUiItem))
   }, [cwd, liveUi])
 
   useEffect(() => {

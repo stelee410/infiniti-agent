@@ -151,6 +151,11 @@ type InboxUpdateMsg = {
   data: { unread?: unknown }
 }
 
+type InboxOpenMsg = {
+  type: 'INBOX_OPEN'
+  data: { items?: unknown }
+}
+
 type InboxSaveResultMsg = {
   type: 'INBOX_SAVE_RESULT'
   data: { ok?: unknown; message?: unknown }
@@ -182,6 +187,7 @@ type Msg =
   | ConfigStatusMsg
   | VisionCaptureResultMsg
   | InboxUpdateMsg
+  | InboxOpenMsg
   | InboxSaveResultMsg
 
 const FACE_RADIUS = 110
@@ -1102,12 +1108,12 @@ async function bootstrap(): Promise<void> {
     }, 1500)
   }
 
-  const setInboxOpen = (open: boolean): void => {
+  const setInboxOpen = (open: boolean, preferOpenItems = false): void => {
     if (!inboxRoot || !inboxToggle) return
     if (open && unreadInboxItems.length === 0 && openInboxItems.length === 0) return
     inboxPanelOpen = open
     if (open) {
-      openInboxItems = unreadInboxItems.length > 0 ? [...unreadInboxItems] : [...openInboxItems]
+      openInboxItems = !preferOpenItems && unreadInboxItems.length > 0 ? [...unreadInboxItems] : [...openInboxItems]
     } else {
       openInboxItems = []
       if (inboxMarkTimer) {
@@ -2069,6 +2075,12 @@ async function bootstrap(): Promise<void> {
         ? raw.map((it) => parseInboxItem(it as InboxItem)).filter((it): it is RenderInboxItem => it != null)
         : []
       renderInbox()
+    } else if (msg.type === 'INBOX_OPEN') {
+      const raw = msg.data?.items
+      openInboxItems = Array.isArray(raw)
+        ? raw.map((it) => parseInboxItem(it as InboxItem)).filter((it): it is RenderInboxItem => it != null)
+        : []
+      setInboxOpen(openInboxItems.length > 0, true)
     } else if (msg.type === 'INBOX_SAVE_RESULT') {
       const text = typeof msg.data?.message === 'string' ? msg.data.message : ''
       if (msg.data?.ok) {
