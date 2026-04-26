@@ -231,6 +231,15 @@
         aspect-ratio: 16 / 9;
         min-height: 180px;
       }
+      .liveui-inbox-media-hint {
+        color: rgba(255, 255, 255, 0.54);
+        font: 11px/1.35 system-ui, -apple-system, 'Segoe UI', sans-serif;
+        overflow-wrap: anywhere;
+      }
+      .liveui-inbox-media-wrap--error .liveui-inbox-media-hint::before {
+        content: '预览加载失败，可另存或用系统播放器打开：';
+        color: #fca5a5;
+      }
       .liveui-inbox-actions {
         display: flex;
         justify-content: flex-end;

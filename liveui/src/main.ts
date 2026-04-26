@@ -60,6 +60,8 @@ declare global {
       selectAttachments?: () => Promise<string[]>
       /** Electron：打开系统另存为对话框 */
       savePath?: (opts: { defaultPath?: string }) => Promise<string | null>
+      /** Electron：读取本地附件为 data URL，用于视频预览避开 file:// metadata/range 卡顿 */
+      readLocalFileDataUrl?: (opts: { path: string; mimeType?: string }) => Promise<string>
     }
     ImageCapture?: new (track: MediaStreamTrack) => {
       grabFrame: () => Promise<ImageBitmap>
@@ -959,6 +961,33 @@ async function bootstrap(): Promise<void> {
     return /\.(mp4|webm|mov|m4v)$/i.test(attachment.path)
   }
 
+  const videoMimeType = (attachment: RenderInboxAttachment): string => {
+    const mt = attachment.mimeType?.toLowerCase() ?? ''
+    if (mt.startsWith('video/')) return mt
+    if (/\.webm$/i.test(attachment.path)) return 'video/webm'
+    if (/\.(mov|m4v)$/i.test(attachment.path)) return 'video/quicktime'
+    return 'video/mp4'
+  }
+
+  const hydrateInboxVideo = async (video: HTMLVideoElement, attachment: RenderInboxAttachment): Promise<void> => {
+    const fallbackUrl = filePathToUrl(attachment.path)
+    const reader = window.infinitiLiveUi?.readLocalFileDataUrl
+    if (!reader) {
+      video.src = fallbackUrl
+      video.load()
+      return
+    }
+    try {
+      const dataUrl = await reader({ path: attachment.path, mimeType: videoMimeType(attachment) })
+      video.src = dataUrl
+      video.load()
+    } catch (e) {
+      console.warn(`[liveui] local video data-url failed, fallback to file URL: ${(e as Error).message}`)
+      video.src = fallbackUrl
+      video.load()
+    }
+  }
+
   const appendInboxSaveAction = (wrap: HTMLElement, attachment: RenderInboxAttachment): void => {
     const actions = document.createElement('div')
     actions.className = 'liveui-inbox-actions'
@@ -1033,9 +1062,20 @@ async function bootstrap(): Promise<void> {
           video.controls = true
           video.preload = 'metadata'
           video.playsInline = true
-          video.src = filePathToUrl(attachment.path)
           video.title = attachment.label ?? filenameFromPath(attachment.path)
+          video.addEventListener('loadedmetadata', () => {
+            console.debug(`[liveui] inbox video metadata loaded: ${attachment.path}`)
+          }, { once: true })
+          video.addEventListener('error', () => {
+            console.warn(`[liveui] inbox video load error: ${attachment.path}`)
+            wrap.classList.add('liveui-inbox-media-wrap--error')
+          }, { once: true })
           wrap.appendChild(video)
+          const hint = document.createElement('div')
+          hint.className = 'liveui-inbox-media-hint'
+          hint.textContent = filenameFromPath(attachment.path)
+          wrap.appendChild(hint)
+          void hydrateInboxVideo(video, attachment)
           appendInboxSaveAction(wrap, attachment)
           mail.appendChild(wrap)
         }

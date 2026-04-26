@@ -71,4 +71,9 @@ contextBridge.exposeInMainWorld('infinitiLiveUi', {
     const defaultPath = opts && typeof opts.defaultPath === 'string' ? opts.defaultPath : undefined
     return ipcRenderer.invoke('liveui-save-path', { defaultPath })
   },
+  readLocalFileDataUrl: (opts) => {
+    const filePath = opts && typeof opts.path === 'string' ? opts.path : ''
+    const mimeType = opts && typeof opts.mimeType === 'string' ? opts.mimeType : undefined
+    return ipcRenderer.invoke('liveui-read-local-file-data-url', { path: filePath, mimeType })
+  },
 })

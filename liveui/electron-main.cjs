@@ -255,6 +255,30 @@ function createWindow() {
     return result.filePath
   })
 
+  ipcMain.handle('liveui-read-local-file-data-url', async (_e, payload) => {
+    const filePath =
+      payload && typeof payload.path === 'string' && payload.path.trim()
+        ? payload.path.trim()
+        : ''
+    if (!filePath || !path.isAbsolute(filePath)) {
+      throw new Error('invalid local file path')
+    }
+    const stat = await fs.promises.stat(filePath)
+    if (!stat.isFile()) {
+      throw new Error('not a regular file')
+    }
+    const maxBytes = 200 * 1024 * 1024
+    if (stat.size > maxBytes) {
+      throw new Error(`file too large for inline preview: ${stat.size} bytes`)
+    }
+    const mimeType =
+      payload && typeof payload.mimeType === 'string' && payload.mimeType.trim()
+        ? payload.mimeType.trim()
+        : 'application/octet-stream'
+    const buf = await fs.promises.readFile(filePath)
+    return `data:${mimeType};base64,${buf.toString('base64')}`
+  })
+
   win.webContents.on('console-message', (_event, level, message, line, sourceId) => {
     const levelName = ['verbose', 'info', 'warning', 'error'][level] ?? String(level)
     const where = sourceId ? ` (${sourceId}:${line})` : ''
