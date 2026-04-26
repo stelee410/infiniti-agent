@@ -552,10 +552,12 @@
       #liveui-composer {
         flex: 1;
         min-width: 0;
-        display: flex;
-        flex-direction: row;
-        align-items: stretch;
-        gap: 2px;
+        display: grid;
+        grid-template-columns: 36px minmax(0, 1fr);
+        grid-template-rows: auto auto;
+        align-items: start;
+        column-gap: 2px;
+        row-gap: 4px;
         padding: 4px 6px 4px 8px;
         border-radius: 12px;
         background: #1e2128;
@@ -582,10 +584,12 @@
         border-radius: 8px;
         background: transparent;
         color: rgba(255, 255, 255, 0.45);
-        cursor: default;
+        cursor: pointer;
         opacity: 0.65;
         overflow: hidden;
         position: relative;
+        grid-column: 1;
+        grid-row: 1;
       }
       .liveui-attach-btn svg {
         width: 18px;
@@ -611,6 +615,63 @@
       }
       #liveui-attachment-thumb[hidden] {
         display: none;
+      }
+      #liveui-attachment-list {
+        grid-column: 1 / -1;
+        grid-row: 2;
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 2px 4px 0 2px;
+        overflow-x: auto;
+        scrollbar-width: none;
+      }
+      #liveui-attachment-list[hidden] {
+        display: none;
+      }
+      #liveui-attachment-list::-webkit-scrollbar {
+        display: none;
+      }
+      .liveui-attachment-chip {
+        flex: 0 0 auto;
+        max-width: 118px;
+        height: 28px;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 3px 6px;
+        border-radius: 7px;
+        background: rgba(255, 255, 255, 0.08);
+        color: rgba(255, 255, 255, 0.86);
+        font-size: 11px;
+        line-height: 1;
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+      }
+      .liveui-attachment-chip img {
+        width: 22px;
+        height: 22px;
+        object-fit: cover;
+        border-radius: 5px;
+      }
+      .liveui-attachment-chip-name {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .liveui-attachment-chip-remove {
+        width: 16px;
+        height: 16px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+        border: 0;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.12);
+        color: rgba(255, 255, 255, 0.82);
+        cursor: pointer;
       }
       #liveui-photo-preview {
         position: fixed;
@@ -695,8 +756,72 @@
           border-radius 0.72s cubic-bezier(0.2, 0.9, 0.2, 1),
           opacity 0.72s ease;
       }
+      #liveui-camera-countdown {
+        position: fixed;
+        z-index: 245;
+        left: 50%;
+        top: 34%;
+        transform: translate(-50%, -50%);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 14px;
+        min-width: 130px;
+        min-height: 130px;
+        padding: 18px;
+        box-sizing: border-box;
+        border-radius: 22px;
+        background: rgba(12, 14, 22, 0.48);
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        box-shadow: 0 20px 54px rgba(0, 0, 0, 0.45);
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+        color: #fff;
+        pointer-events: none;
+        user-select: none;
+      }
+      #liveui-camera-countdown[hidden] {
+        display: none !important;
+      }
+      #liveui-camera-countdown-icon {
+        width: 54px;
+        height: 54px;
+        color: #fbbf24;
+        filter: drop-shadow(0 8px 18px rgba(0, 0, 0, 0.42));
+      }
+      #liveui-camera-countdown-icon[hidden] {
+        display: none !important;
+      }
+      #liveui-camera-countdown-number {
+        min-width: 1.2em;
+        text-align: center;
+        font: 800 64px/0.9 system-ui, -apple-system, 'Segoe UI', sans-serif;
+        color: #ffffff;
+        text-shadow:
+          0 2px 6px rgba(0, 0, 0, 0.65),
+          0 0 20px rgba(251, 191, 36, 0.48);
+      }
+      #liveui-camera-flash {
+        position: fixed;
+        z-index: 260;
+        inset: 0;
+        background: #fff;
+        opacity: 0;
+        pointer-events: none;
+      }
+      #liveui-camera-flash.liveui-camera-flash--on {
+        animation: liveui-camera-flash 460ms ease-out;
+      }
+      @keyframes liveui-camera-flash {
+        0% { opacity: 0; }
+        12% { opacity: 0.92; }
+        100% { opacity: 0; }
+      }
       #liveui-user-line {
-        flex: 1;
+        grid-column: 2;
+        grid-row: 1;
+        width: 100%;
         min-width: 0;
         box-sizing: border-box;
         margin: 0;
@@ -1010,6 +1135,13 @@
     <div id="speech-bubble" aria-hidden="true">
       <div id="speech-bubble-text" class="liveui-md-root"></div>
     </div>
+    <div id="liveui-camera-countdown" hidden aria-hidden="true">
+      <svg id="liveui-camera-countdown-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <path fill="currentColor" d="M9.25 4 7.6 6H4.75A2.75 2.75 0 0 0 2 8.75v8.5A2.75 2.75 0 0 0 4.75 20h14.5A2.75 2.75 0 0 0 22 17.25v-8.5A2.75 2.75 0 0 0 19.25 6H16.4l-1.65-2h-5.5zM12 9a4 4 0 1 1 0 8 4 4 0 0 1 0-8zm0 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm6.5-2.2a.8.8 0 1 1 0 1.6.8.8 0 0 1 0-1.6z"/>
+      </svg>
+      <div id="liveui-camera-countdown-number">3</div>
+    </div>
+    <div id="liveui-camera-flash" aria-hidden="true"></div>
     <div id="liveui-inbox" aria-hidden="true">
       <button type="button" id="liveui-inbox-toggle" title="你的邮箱" aria-label="你的邮箱">
         <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -1144,6 +1276,7 @@
               </svg>
               <img id="liveui-attachment-thumb" alt="" hidden />
             </button>
+            <div id="liveui-attachment-list" hidden></div>
             <textarea
               id="liveui-user-line"
               rows="1"

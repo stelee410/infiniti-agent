@@ -7,7 +7,7 @@ import { BUILTIN_TOOLS } from '../tools/definitions.js'
 import type { BuiltinToolName } from '../tools/definitions.js'
 import { runBuiltinTool } from '../tools/runner.js'
 import type { AgentToolSpec } from '../mcp/manager.js'
-import type { PersistedMessage } from './persisted.js'
+import type { PersistedMessage, UserFileAttachment } from './persisted.js'
 import type { McpManager } from '../mcp/manager.js'
 import type { EditHistory } from '../session/editHistory.js'
 import {
@@ -41,6 +41,44 @@ function visionLocationText(m: Extract<PersistedMessage, { role: 'user' }>): str
     )
   }
   return parts.join('\n').trim()
+}
+
+function attachmentContextText(m: Extract<PersistedMessage, { role: 'user' }>): string {
+  const attachments = m.attachments ?? []
+  if (!attachments.length) return m.vision ? visionLocationText(m) : m.content
+  const parts = [m.vision ? visionLocationText(m) : m.content, '', `[附件] 用户随本条消息上传了 ${attachments.length} 个附件：`]
+  attachments.forEach((a, idx) => {
+    const sizeKb = Math.max(1, Math.round(a.size / 1024))
+    parts.push(`${idx + 1}. ${a.name} (${a.mediaType}, ${sizeKb} KB, ${a.kind})`)
+    if (a.text?.trim()) {
+      parts.push(`内容预览：\n${a.text.slice(0, 20_000)}`)
+    }
+  })
+  return parts.join('\n').trim()
+}
+
+function imageAttachments(m: Extract<PersistedMessage, { role: 'user' }>): UserFileAttachment[] {
+  return (m.attachments ?? []).filter((a) => a.kind === 'image' && a.mediaType.startsWith('image/'))
+}
+
+function documentAttachments(m: Extract<PersistedMessage, { role: 'user' }>): UserFileAttachment[] {
+  return (m.attachments ?? []).filter((a) => a.kind === 'document')
+}
+
+function latestUserVision(messages: PersistedMessage[]): Extract<PersistedMessage, { role: 'user' }>['vision'] | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]!
+    if (m.role === 'user' && m.vision) return m.vision
+    const firstImage = m.role === 'user' ? imageAttachments(m)[0] : undefined
+    if (firstImage && (firstImage.mediaType === 'image/jpeg' || firstImage.mediaType === 'image/png' || firstImage.mediaType === 'image/webp')) {
+      return {
+        imageBase64: firstImage.base64,
+        mediaType: firstImage.mediaType,
+        capturedAt: firstImage.capturedAt,
+      }
+    }
+  }
+  return undefined
 }
 
 function withDeadline<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
@@ -139,6 +177,8 @@ export async function runToolLoop(opts: RunLoopOptions): Promise<{
     if (builtin.has(name)) {
       return runBuiltinTool(name as BuiltinToolName, argsJson, {
         sessionCwd: opts.cwd,
+        config: opts.config,
+        snapVision: latestUserVision(opts.messages),
         editHistory: opts.editHistory,
       })
     }
@@ -173,20 +213,47 @@ function toAnthropicMessages(
   while (i < messages.length) {
     const m = messages[i]!
     if (m.role === 'user') {
-      if (m.vision) {
-        out.push({
-          role: 'user',
-          content: [
-            { type: 'text', text: visionLocationText(m) },
-            {
+      if (m.vision || m.attachments?.length) {
+        const content: Anthropic.Messages.ContentBlockParam[] = [
+          { type: 'text', text: attachmentContextText(m) },
+        ]
+        if (m.vision) {
+          content.push({
+            type: 'image',
+            source: {
+              type: 'base64',
+              media_type: m.vision.mediaType,
+              data: m.vision.imageBase64,
+            },
+          })
+        }
+        for (const img of imageAttachments(m)) {
+          if (img.mediaType === 'image/jpeg' || img.mediaType === 'image/png' || img.mediaType === 'image/webp' || img.mediaType === 'image/gif') {
+            content.push({
               type: 'image',
               source: {
                 type: 'base64',
-                media_type: m.vision.mediaType,
-                data: m.vision.imageBase64,
+                media_type: img.mediaType as 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif',
+                data: img.base64,
               },
-            },
-          ],
+            } as Anthropic.Messages.ContentBlockParam)
+          }
+        }
+        for (const doc of documentAttachments(m)) {
+          if (doc.mediaType === 'application/pdf') {
+            content.push({
+              type: 'document',
+              source: {
+                type: 'base64',
+                media_type: 'application/pdf',
+                data: doc.base64,
+              },
+            } as unknown as Anthropic.Messages.ContentBlockParam)
+          }
+        }
+        out.push({
+          role: 'user',
+          content,
         })
       } else {
         out.push({ role: 'user', content: m.content })
@@ -477,19 +544,37 @@ function toOpenAIMessages(
   const out: OpenAI.Chat.ChatCompletionMessageParam[] = []
   for (const m of messages) {
     if (m.role === 'user') {
-      if (m.vision) {
+      if (m.vision || m.attachments?.length) {
+        const content: unknown[] = [{ type: 'text', text: attachmentContextText(m) }]
+        if (m.vision) {
+          content.push({
+            type: 'image_url',
+            image_url: {
+              url: `data:${m.vision.mediaType};base64,${m.vision.imageBase64}`,
+            },
+          })
+        }
+        for (const img of imageAttachments(m)) {
+          content.push({
+            type: 'image_url',
+            image_url: {
+              url: `data:${img.mediaType};base64,${img.base64}`,
+            },
+          })
+        }
+        for (const doc of documentAttachments(m)) {
+          content.push({
+            type: 'file',
+            file: {
+              filename: doc.name,
+              file_data: `data:${doc.mediaType};base64,${doc.base64}`,
+            },
+          })
+        }
         out.push({
           role: 'user',
-          content: [
-            { type: 'text', text: visionLocationText(m) },
-            {
-              type: 'image_url',
-              image_url: {
-                url: `data:${m.vision.mediaType};base64,${m.vision.imageBase64}`,
-              },
-            },
-          ],
-        })
+          content: content as OpenAI.Chat.ChatCompletionContentPart[],
+        } as OpenAI.Chat.ChatCompletionMessageParam)
       } else {
         out.push({ role: 'user', content: m.content })
       }
@@ -677,12 +762,28 @@ function toGeminiContents(messages: PersistedMessage[]): GeminiContent[] {
   while (i < messages.length) {
     const m = messages[i]!
     if (m.role === 'user') {
-      const parts: GeminiPart[] = [{ text: m.vision ? visionLocationText(m) : m.content }]
+      const parts: GeminiPart[] = [{ text: m.vision || m.attachments?.length ? attachmentContextText(m) : m.content }]
       if (m.vision) {
         parts.push({
           inlineData: {
             mimeType: m.vision.mediaType,
             data: m.vision.imageBase64,
+          },
+        })
+      }
+      for (const img of imageAttachments(m)) {
+        parts.push({
+          inlineData: {
+            mimeType: img.mediaType,
+            data: img.base64,
+          },
+        })
+      }
+      for (const doc of documentAttachments(m)) {
+        parts.push({
+          inlineData: {
+            mimeType: doc.mediaType,
+            data: doc.base64,
           },
         })
       }

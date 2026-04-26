@@ -9,6 +9,7 @@ import type {
   LiveUiMessage,
   LiveUiSlashCompletionItem,
   LiveUiStatusVariant,
+  LiveUiFileAttachment,
   LiveUiVisionAttachment,
 } from './protocol.js'
 import { parseSpeakCommandLine } from './speakCommandLine.js'
@@ -55,6 +56,7 @@ export class LiveUiSession {
   private asrEngine: AsrEngine | null = null
   private lastVisionCapture: { requestId: string; vision: LiveUiVisionAttachment } | undefined
   private pendingVisionAttachment: LiveUiVisionAttachment | undefined
+  private pendingFileAttachments: LiveUiFileAttachment[] = []
 
   constructor(port: number) {
     this.port = port
@@ -123,9 +125,16 @@ export class LiveUiSession {
     return vision
   }
 
+  consumePendingFileAttachments(): LiveUiFileAttachment[] {
+    const attachments = this.pendingFileAttachments
+    this.pendingFileAttachments = []
+    return attachments
+  }
+
   clearVisionAttachment(): void {
     this.pendingVisionAttachment = undefined
     this.lastVisionCapture = undefined
+    this.pendingFileAttachments = []
     this.broadcast({ type: 'VISION_ATTACHMENT_CLEAR', data: {} } as LiveUiMessage)
   }
 
@@ -243,7 +252,8 @@ export class LiveUiSession {
           const parsed = JSON.parse(raw) as { type?: unknown; data?: unknown }
           const t = parsed?.type
           if (t === 'USER_INPUT' && parsed.data && typeof parsed.data === 'object') {
-            const line = (parsed.data as { line?: unknown }).line
+            const d = parsed.data as { line?: unknown; attachments?: unknown }
+            const line = d.line
             if (typeof line !== 'string' || !line.trim()) return
             const trimmed = line.trimEnd()
             const speakText = parseSpeakCommandLine(trimmed)
@@ -253,6 +263,10 @@ export class LiveUiSession {
                 this.enqueueTts(speakText)
               }
               return
+            }
+            const attachments = parseFileAttachments(d.attachments)
+            if (attachments.length) {
+              this.pendingFileAttachments = attachments
             }
             this.emitUserLine(trimmed)
             return
@@ -283,6 +297,11 @@ export class LiveUiSession {
           }
           if (t === 'VISION_ATTACHMENT_CLEAR') {
             this.pendingVisionAttachment = undefined
+            this.pendingFileAttachments = []
+            return
+          }
+          if (t === 'ATTACHMENT_CLEAR') {
+            this.pendingFileAttachments = []
             return
           }
           if (t === 'USER_COMPOSER' && parsed.data && typeof parsed.data === 'object') {
@@ -590,4 +609,66 @@ function parseVisionAttachment(raw: unknown): LiveUiVisionAttachment | undefined
     capturedAt: v.capturedAt,
     ...(parseVisionLocation(v.location) ? { location: parseVisionLocation(v.location) } : {}),
   }
+}
+
+const MAX_ATTACHMENTS = 12
+const MAX_ATTACHMENT_BYTES = 12 * 1024 * 1024
+const ALLOWED_ATTACHMENT_TYPES = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/gif',
+  'application/pdf',
+  'text/markdown',
+  'text/csv',
+  'text/plain',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+])
+
+function parseFileAttachments(raw: unknown): LiveUiFileAttachment[] {
+  if (!Array.isArray(raw)) return []
+  const out: LiveUiFileAttachment[] = []
+  let imageCount = 0
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue
+    const a = item as {
+      id?: unknown
+      name?: unknown
+      mediaType?: unknown
+      base64?: unknown
+      size?: unknown
+      kind?: unknown
+      capturedAt?: unknown
+      text?: unknown
+    }
+    if (
+      typeof a.id !== 'string' ||
+      typeof a.name !== 'string' ||
+      typeof a.mediaType !== 'string' ||
+      typeof a.base64 !== 'string' ||
+      typeof a.size !== 'number' ||
+      !Number.isFinite(a.size) ||
+      typeof a.capturedAt !== 'string'
+    ) {
+      continue
+    }
+    const kind = a.kind === 'image' ? 'image' : a.kind === 'document' ? 'document' : undefined
+    if (!kind || !ALLOWED_ATTACHMENT_TYPES.has(a.mediaType) || a.size > MAX_ATTACHMENT_BYTES) continue
+    if (kind === 'image') {
+      imageCount++
+      if (imageCount > 9) continue
+    }
+    out.push({
+      id: a.id,
+      name: a.name,
+      mediaType: a.mediaType,
+      base64: a.base64,
+      size: a.size,
+      kind,
+      capturedAt: a.capturedAt,
+      ...(typeof a.text === 'string' && a.text.trim() ? { text: a.text.slice(0, 80_000) } : {}),
+    })
+    if (out.length >= MAX_ATTACHMENTS) break
+  }
+  return out
 }

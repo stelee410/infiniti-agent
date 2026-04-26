@@ -121,6 +121,17 @@ export type LiveUiVisionAttachment = {
   }
 }
 
+export type LiveUiFileAttachment = {
+  id: string
+  name: string
+  mediaType: string
+  base64: string
+  size: number
+  kind: 'image' | 'document'
+  capturedAt: string
+  text?: string
+}
+
 export type LiveUiVisionCaptureResultMessage = {
   type: 'VISION_CAPTURE_RESULT'
   data: {
@@ -133,6 +144,11 @@ export type LiveUiVisionCaptureResultMessage = {
 
 export type LiveUiVisionAttachmentClearMessage = {
   type: 'VISION_ATTACHMENT_CLEAR'
+  data?: Record<string, never>
+}
+
+export type LiveUiAttachmentClearMessage = {
+  type: 'ATTACHMENT_CLEAR'
   data?: Record<string, never>
 }
 
@@ -181,6 +197,7 @@ export type LiveUiMessage =
   | LiveUiConfigStatusMessage
   | LiveUiVisionCaptureResultMessage
   | LiveUiVisionAttachmentClearMessage
+  | LiveUiAttachmentClearMessage
   | LiveUiInboxUpdateMessage
   | LiveUiInboxSaveResultMessage
 
@@ -236,7 +253,7 @@ export function isLiveUiMessage(x: unknown): x is LiveUiMessage {
     }
     return true
   }
-  if (o.type === 'AUDIO_RESET' || o.type === 'INTERRUPT' || o.type === 'VISION_ATTACHMENT_CLEAR') return true
+  if (o.type === 'AUDIO_RESET' || o.type === 'INTERRUPT' || o.type === 'VISION_ATTACHMENT_CLEAR' || o.type === 'ATTACHMENT_CLEAR') return true
   if (o.type === 'INBOX_UPDATE') {
     const d = (x as { data?: unknown }).data
     if (!d || typeof d !== 'object') return false
