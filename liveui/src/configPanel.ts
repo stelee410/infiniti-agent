@@ -323,16 +323,20 @@ export function initConfigPanel(opts: ConfigPanelOptions): {
   const renderLiveUi = (root: HTMLElement): void => {
     cfg.liveUi ??= {}
     const l = cfg.liveUi
-    const mode = l.spriteExpressions?.dir ? 'sprite' : 'live2d'
+    const mode = l.renderer || (l.spriteExpressions?.dir ? 'sprite' : 'live2d')
     const section = el('section', { class: 'config-section config-section--active' })
     const grid = el('div', { class: 'config-grid' })
     grid.append(
       field('TTS 自动', select(l.ttsAutoEnabled === false ? 'false' : 'true', [['true', '开启'], ['false', '关闭']], (v) => { l.ttsAutoEnabled = v === 'true' })),
       field('ASR 自动', select(l.asrAutoEnabled ? 'true' : 'false', [['false', '关闭'], ['true', '开启']], (v) => { l.asrAutoEnabled = v === 'true' })),
       field('ASR 模式', select(text(l.asrMode || 'manual'), [['manual', '手动识别'], ['auto', '自动识别']], (v) => { l.asrMode = v })),
-      field('角色渲染方式', select(mode, [['live2d', 'Live2D model3'], ['sprite', 'spriteExpressions']], (v) => {
+      field('角色渲染方式', select(mode, [['live2d', 'Live2D model3'], ['sprite', 'spriteExpressions'], ['real2d', 'real2d service']], (v) => {
+        l.renderer = v
         if (v === 'sprite') l.spriteExpressions ??= {}
-        else delete l.spriteExpressions
+        if (v === 'real2d') {
+          l.real2d ??= {}
+          l.real2d.enabled = true
+        }
         rerender()
       })),
       field('voiceMicSpeechRmsThreshold', input(num(l.voiceMicSpeechRmsThreshold, '0.0195'), (v) => { l.voiceMicSpeechRmsThreshold = Number(v) }, 'number')),
@@ -341,6 +345,21 @@ export function initConfigPanel(opts: ConfigPanelOptions): {
       l.spriteExpressions ??= {}
       grid.append(pathField('spriteExpressions 目录', text(l.spriteExpressions.dir), 'directory', (v) => { l.spriteExpressions.dir = v }))
       grid.append(pathField('expressions.json（可选）', text(l.spriteExpressions.manifest), 'file', (v) => { l.spriteExpressions.manifest = v }))
+    } else if (mode === 'real2d') {
+      l.real2d ??= {}
+      l.real2d.baseUrl ??= 'http://127.0.0.1:8921'
+      l.real2d.fps ??= 25
+      l.real2d.frameFormat ??= 'jpeg'
+      l.real2d.fallbackRenderer ??= 'sprite'
+      l.real2d.mouthDriver ??= 'rms'
+      grid.append(
+        field('real2d baseUrl', input(text(l.real2d.baseUrl), (v) => { l.real2d.baseUrl = v })),
+        pathField('sourceImage', text(l.real2d.sourceImage), 'file', (v) => { l.real2d.sourceImage = v }),
+        pathField('emotionMap（可选）', text(l.real2d.emotionMap), 'file', (v) => { l.real2d.emotionMap = v }),
+        field('FPS', input(num(l.real2d.fps, '25'), (v) => { l.real2d.fps = Number(v) }, 'number')),
+        field('frameFormat', select(text(l.real2d.frameFormat || 'jpeg'), [['jpeg', 'jpeg'], ['webp', 'webp'], ['png', 'png']], (v) => { l.real2d.frameFormat = v })),
+        field('fallback', select(text(l.real2d.fallbackRenderer || 'sprite'), [['sprite', 'sprite'], ['live2d', 'live2d']], (v) => { l.real2d.fallbackRenderer = v })),
+      )
     } else {
       grid.append(pathField('Live2D model3.json', text(l.live2dModel3Json), 'file', (v) => { l.live2dModel3Json = v }))
       grid.append(pathField('model_dict.json（可选）', text(l.live2dModelDict), 'file', (v) => { l.live2dModelDict = v }))

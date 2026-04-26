@@ -37,6 +37,15 @@ declare global {
   interface Window {
     infinitiLiveUi?: {
       port: string
+      renderer?: string
+      real2d?: {
+        enabled?: boolean
+        baseUrl?: string
+        fps?: number
+        frameFormat?: string
+        fallbackRenderer?: string
+        mouthDriver?: string
+      } | null
       model3FileUrl: string
       /** 含尾斜杠的 `file:` URL，指向含 `exp_01.png`…的目录（与 CLI `spriteExpressions.dir` 一致） */
       spriteExpressionDirFileUrl?: string
@@ -105,6 +114,11 @@ type AudioResetMsg = { type: 'AUDIO_RESET' }
 type TtsStatusMsg = { type: 'TTS_STATUS'; data: { available: boolean; enabled?: unknown } }
 type AsrStatusMsg = { type: 'ASR_STATUS'; data: { available: boolean } }
 type AsrResultMsg = { type: 'ASR_RESULT'; data: { text: string } }
+type Real2dStatusMsg = { type: 'REAL2D_STATUS'; data: { ready?: unknown; backend?: unknown; fps?: unknown; latencyMs?: unknown; message?: unknown } }
+type Real2dFrameMsg = {
+  type: 'REAL2D_FRAME'
+  data: { sessionId?: unknown; timestampMs?: unknown; format?: unknown; frameBase64?: unknown }
+}
 
 type SlashCompletionMsg = {
   type: 'SLASH_COMPLETION'
@@ -177,6 +191,8 @@ type Msg =
   | TtsStatusMsg
   | AsrStatusMsg
   | AsrResultMsg
+  | Real2dStatusMsg
+  | Real2dFrameMsg
   | SlashCompletionMsg
   | ConfigOpenMsg
   | ConfigStatusMsg
@@ -317,12 +333,15 @@ async function bootstrap(): Promise<void> {
   mouth.position.set(face.x, face.y + 38)
 
   let liveModel: InstanceType<typeof Live2DModel> | null = null
+  let real2dFrameSprite: PIXI.Sprite | null = null
   /** PNG 表情精灵（`spriteExpressions.dir`）；与 Live2D 二选一，由预加载环境变量决定 */
   let expressionSprite: PIXI.Sprite | null = null
   /** `file:` 基址，含尾斜杠，用于 `new URL('exp_XX.png', base)` */
   let spriteExpressionDirFileUrl = ''
   let spriteNaturalW = 1024
   let spriteNaturalH = 1024
+  let real2dNaturalW = 1024
+  let real2dNaturalH = 1024
   /** 模型在 scale=1 时的本地包围尺寸，用于缩放计算（勿用 liveModel.width：会含当前 scale，Resize 时会越算越大） */
   let liveModelNaturalW = 400
   let liveModelNaturalH = 600
@@ -369,7 +388,28 @@ async function bootstrap(): Promise<void> {
       return Math.max(0.4, Math.min(1.5, z))
     })()
 
-    if (liveModel) {
+    if (real2dFrameSprite) {
+      const uw = real2dNaturalW
+      const uh = real2dNaturalH
+      const scaleVerticalBudget = Math.max(
+        100,
+        Math.round(H * FIGURE_LAYOUT.modelScaleViewportHeightFraction),
+      )
+      const sBase = Math.min(
+        (W * FIGURE_LAYOUT.modelWidthScreenFraction) / uw,
+        (scaleVerticalBudget * FIGURE_LAYOUT.modelHeightScaleFraction) / uh,
+      )
+      const s = sBase * figureZoom
+      real2dFrameSprite.scale.set(s, s)
+      real2dFrameSprite.position.set(W / 2, H / 2)
+      const b = real2dFrameSprite.getBounds()
+      real2dFrameSprite.position.y += targetFootY - b.bottom
+      real2dFrameSprite.position.y += footNudgeMax
+      const b2 = real2dFrameSprite.getBounds()
+      if (b2.bottom > soleCeiling) {
+        real2dFrameSprite.position.y -= b2.bottom - soleCeiling
+      }
+    } else if (liveModel) {
       const uw = liveModelNaturalW
       const uh = liveModelNaturalH
       const scaleVerticalBudget = Math.max(
@@ -431,7 +471,7 @@ async function bootstrap(): Promise<void> {
       requestAnimationFrame(() => {
         const c = window.infinitiLiveUi?.compactWindowHeight
         if (typeof c !== 'function') return
-        const fig = expressionSprite ?? liveModel
+        const fig = real2dFrameSprite ?? expressionSprite ?? liveModel
         if (!fig) return
         layoutFigureInStage()
         const b = fig.getBounds()
@@ -797,6 +837,39 @@ async function bootstrap(): Promise<void> {
     } else {
       applyPlaceholderExpression(em)
     }
+  }
+
+  const applyReal2dFrame = (format: unknown, frameBase64: unknown): void => {
+    if (typeof frameBase64 !== 'string' || !frameBase64) return
+    const fmt = format === 'png' ? 'png' : format === 'webp' ? 'webp' : 'jpeg'
+    const url = `data:image/${fmt};base64,${frameBase64}`
+    void loadSpritePngTexture(url)
+      .then((tex) => {
+        if (!real2dFrameSprite) {
+          real2dFrameSprite = new PIXI.Sprite(tex)
+          real2dFrameSprite.anchor.set(0.5, 0.5)
+          app.stage.removeChild(face)
+          app.stage.removeChild(mouth)
+          if (liveModel) {
+            app.stage.removeChild(liveModel)
+            liveModel = null
+          }
+          if (expressionSprite) {
+            app.stage.removeChild(expressionSprite)
+            expressionSprite = null
+          }
+          app.stage.addChild(real2dFrameSprite)
+          wireHover(real2dFrameSprite)
+        } else {
+          const prev = real2dFrameSprite.texture
+          real2dFrameSprite.texture = tex
+          if (prev && prev !== tex) prev.destroy(true)
+        }
+        real2dNaturalW = Math.max(tex.width, 1)
+        real2dNaturalH = Math.max(tex.height, 1)
+        layoutFigureInStage()
+      })
+      .catch((e) => console.warn('[liveui] real2d frame 加载失败', e))
   }
 
   const delay = (ms: number): Promise<void> => new Promise((resolve) => window.setTimeout(resolve, ms))
@@ -2025,6 +2098,15 @@ async function bootstrap(): Promise<void> {
         }
         touchConvActivity()
       }
+    } else if (msg.type === 'REAL2D_STATUS') {
+      const ready = msg.data?.ready === true
+      if (ready) {
+        console.debug('[liveui] real2d ready', msg.data)
+      } else if (typeof msg.data?.message === 'string' && msg.data.message) {
+        console.warn('[liveui] real2d fallback:', msg.data.message)
+      }
+    } else if (msg.type === 'REAL2D_FRAME') {
+      applyReal2dFrame(msg.data?.format, msg.data?.frameBase64)
     } else if (msg.type === 'SLASH_COMPLETION') {
       const open = !!msg.data?.open
       const raw = msg.data?.items

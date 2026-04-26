@@ -2,8 +2,16 @@
 const { contextBridge, ipcRenderer } = require('electron')
 
 const port = process.env.INFINITI_LIVEUI_PORT || '8080'
+const renderer = process.env.INFINITI_LIVEUI_RENDERER || ''
 const model3FileUrl = process.env.INFINITI_LIVEUI_MODEL3_FILE_URL || ''
 const spriteExpressionDirFileUrl = process.env.INFINITI_LIVEUI_SPRITE_EXPRESSION_DIR || ''
+let real2d = null
+try {
+  const raw = process.env.INFINITI_LIVEUI_REAL2D
+  if (raw) real2d = JSON.parse(raw)
+} catch {
+  real2d = null
+}
 
 /** `infiniti-agent live --zoom <n>` 注入；未传或非法则保持 1（不缩放） */
 let figureZoom = 1
@@ -39,8 +47,10 @@ try {
 
 contextBridge.exposeInMainWorld('infinitiLiveUi', {
   port,
+  renderer,
   model3FileUrl,
   spriteExpressionDirFileUrl,
+  real2d,
   voiceMic,
   figureZoom,
   /** 动态切换窗口透明区域的鼠标穿透 */

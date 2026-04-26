@@ -110,6 +110,27 @@ export type LiveUiConfigStatusMessage = {
   }
 }
 
+export type LiveUiReal2dStatusMessage = {
+  type: 'REAL2D_STATUS'
+  data: {
+    ready: boolean
+    fps?: number
+    latencyMs?: number
+    backend?: string
+    message?: string
+  }
+}
+
+export type LiveUiReal2dFrameMessage = {
+  type: 'REAL2D_FRAME'
+  data: {
+    sessionId: string
+    timestampMs: number
+    format: 'jpeg' | 'webp' | 'png' | 'raw'
+    frameBase64: string
+  }
+}
+
 export type LiveUiVisionAttachment = {
   imageBase64: string
   mediaType: 'image/jpeg' | 'image/png' | 'image/webp'
@@ -195,6 +216,8 @@ export type LiveUiMessage =
   | LiveUiSlashCompletionMessage
   | LiveUiConfigOpenMessage
   | LiveUiConfigStatusMessage
+  | LiveUiReal2dStatusMessage
+  | LiveUiReal2dFrameMessage
   | LiveUiVisionCaptureResultMessage
   | LiveUiVisionAttachmentClearMessage
   | LiveUiAttachmentClearMessage
@@ -252,6 +275,23 @@ export function isLiveUiMessage(x: unknown): x is LiveUiMessage {
       if (typeof c !== 'number' || (c !== 1 && c !== 2)) return false
     }
     return true
+  }
+  if (o.type === 'REAL2D_STATUS') {
+    const d = (x as { data?: unknown }).data
+    if (!d || typeof d !== 'object') return false
+    const dd = d as { ready?: unknown }
+    return typeof dd.ready === 'boolean'
+  }
+  if (o.type === 'REAL2D_FRAME') {
+    const d = (x as { data?: unknown }).data
+    if (!d || typeof d !== 'object') return false
+    const dd = d as { sessionId?: unknown; timestampMs?: unknown; format?: unknown; frameBase64?: unknown }
+    return (
+      typeof dd.sessionId === 'string' &&
+      typeof dd.timestampMs === 'number' &&
+      (dd.format === 'jpeg' || dd.format === 'webp' || dd.format === 'png' || dd.format === 'raw') &&
+      typeof dd.frameBase64 === 'string'
+    )
   }
   if (o.type === 'AUDIO_RESET' || o.type === 'INTERRUPT' || o.type === 'VISION_ATTACHMENT_CLEAR' || o.type === 'ATTACHMENT_CLEAR') return true
   if (o.type === 'INBOX_UPDATE') {

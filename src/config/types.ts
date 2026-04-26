@@ -74,6 +74,21 @@ export type LiveUiSpriteExpressionsConfig = {
   manifest?: string
 }
 
+export type LiveUiRenderer = 'live2d' | 'sprite' | 'real2d'
+
+export type LiveUiReal2dConfig = {
+  enabled?: boolean
+  baseUrl?: string
+  sourceImage?: string
+  emotionMap?: string
+  fps?: number
+  frameFormat?: 'jpeg' | 'webp' | 'png' | 'raw'
+  fallbackRenderer?: 'live2d' | 'sprite'
+  autoStartService?: boolean
+  mouthDriver?: 'rms' | 'musetalk' | 'wav2lip'
+  timeoutMs?: number
+}
+
 /**
  * `generate_avatar` 等使用的 OpenRouter 兼容图像 API（Nano Banana / Gemini Flash Image 等）。
  * `apiKey` 优先级：`avatarGen.apiKey` → 环境变量 `INFINITI_OPENROUTER_API_KEY` / `OPENROUTER_API_KEY` → 当前默认 LLM profile 的 `apiKey`。
@@ -107,6 +122,8 @@ export type SnapImageConfig = {
 }
 
 export type LiveUiConfig = {
+  /** 形象渲染后端：默认按 spriteExpressions / Live2D 配置自动选择；real2d 不可用时回退到 fallbackRenderer。 */
+  renderer?: LiveUiRenderer
   /** WebSocket 端口；`infiniti-agent live` 未传 `--port` 时使用 */
   port?: number
   /** LiveUI 启动后是否自动开启 TTS 播放；默认 true。 */
@@ -144,6 +161,8 @@ export type LiveUiConfig = {
 
   /** 静态 PNG 表情目录（Luna 等），与 `emotionParse` / LiveUI 内 `emotionToExpressionId` 映射一致 */
   spriteExpressions?: LiveUiSpriteExpressionsConfig
+  /** LivePortrait/FasterLivePortrait 类外部参数化渲染服务配置。 */
+  real2d?: LiveUiReal2dConfig
 }
 
 /**

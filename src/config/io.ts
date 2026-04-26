@@ -203,6 +203,9 @@ function parseLiveUiConfig(raw: unknown): LiveUiConfig | undefined {
   if (!raw || typeof raw !== 'object') return undefined
   const u = raw as Record<string, unknown>
   const out: LiveUiConfig = {}
+  if (u.renderer === 'live2d' || u.renderer === 'sprite' || u.renderer === 'real2d') {
+    out.renderer = u.renderer
+  }
   if (typeof u.port === 'number' && Number.isFinite(u.port)) {
     const p = Math.floor(u.port)
     if (p >= 1 && p <= 65535) out.port = p
@@ -247,6 +250,35 @@ function parseLiveUiConfig(raw: unknown): LiveUiConfig | undefined {
     if (dir || manifest) {
       out.spriteExpressions = { ...(dir ? { dir } : {}), ...(manifest ? { manifest } : {}) }
     }
+  }
+  const real2d = parseLiveUiReal2dConfig(u.real2d)
+  if (real2d) out.real2d = real2d
+  return Object.keys(out).length ? out : undefined
+}
+
+function parseLiveUiReal2dConfig(raw: unknown): LiveUiConfig['real2d'] | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const u = raw as Record<string, unknown>
+  const out: NonNullable<LiveUiConfig['real2d']> = {}
+  if (typeof u.enabled === 'boolean') out.enabled = u.enabled
+  if (typeof u.baseUrl === 'string' && u.baseUrl.trim()) out.baseUrl = u.baseUrl.trim()
+  if (typeof u.sourceImage === 'string' && u.sourceImage.trim()) out.sourceImage = u.sourceImage.trim()
+  if (typeof u.emotionMap === 'string' && u.emotionMap.trim()) out.emotionMap = u.emotionMap.trim()
+  if (typeof u.fps === 'number' && Number.isFinite(u.fps)) {
+    const fps = Math.round(u.fps)
+    if (fps >= 1 && fps <= 60) out.fps = fps
+  }
+  if (u.frameFormat === 'jpeg' || u.frameFormat === 'webp' || u.frameFormat === 'png' || u.frameFormat === 'raw') {
+    out.frameFormat = u.frameFormat
+  }
+  if (u.fallbackRenderer === 'live2d' || u.fallbackRenderer === 'sprite') out.fallbackRenderer = u.fallbackRenderer
+  if (typeof u.autoStartService === 'boolean') out.autoStartService = u.autoStartService
+  if (u.mouthDriver === 'rms' || u.mouthDriver === 'musetalk' || u.mouthDriver === 'wav2lip') {
+    out.mouthDriver = u.mouthDriver
+  }
+  if (typeof u.timeoutMs === 'number' && Number.isFinite(u.timeoutMs)) {
+    const ms = Math.round(u.timeoutMs)
+    if (ms >= 500 && ms <= 60000) out.timeoutMs = ms
   }
   return Object.keys(out).length ? out : undefined
 }

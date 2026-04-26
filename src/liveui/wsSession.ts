@@ -18,6 +18,26 @@ import type { TtsEngine } from '../tts/engine.js'
 import { markdownToTtsPlainText } from '../tts/markdownToTtsPlainText.js'
 import type { AsrEngine } from '../asr/whisperAsr.js'
 import { captureVisionSnapshotResult } from './visionCapture.js'
+import { Real2dClient } from '../real2d/client.js'
+import type { Real2dParamVector } from '../real2d/protocol.js'
+
+type Real2dBridgeOptions = {
+  sourceImage?: string
+  fps?: number
+  frameFormat?: 'jpeg' | 'webp' | 'png' | 'raw'
+}
+
+const DEFAULT_REAL2D_EMOTIONS: Record<string, Real2dParamVector> = {
+  neutral: { smile: 0, eyeOpen: 1, brow: 0, pitch: 0, yaw: 0, roll: 0 },
+  happy: { smile: 0.8, eyeOpen: 0.92, brow: 0.2, pitch: 5, yaw: 0, roll: 0 },
+  sad: { smile: -0.4, eyeOpen: 0.7, brow: -0.3, pitch: -10, yaw: 0, roll: 0 },
+  angry: { smile: -0.2, eyeOpen: 0.86, brow: -0.7, pitch: 0, yaw: 0, roll: 0 },
+  thinking: { smile: 0.05, eyeOpen: 0.82, brow: 0.25, pitch: -4, yaw: -5, roll: 0 },
+  surprised: { smile: 0.1, eyeOpen: 1.18, brow: 0.8, mouthOpen: 0.35, pitch: 3, yaw: 0, roll: 0 },
+  blush: { smile: 0.45, eyeOpen: 0.78, brow: 0.2, pitch: -3, yaw: 0, roll: 0 },
+  smirk: { smile: 0.35, eyeOpen: 0.9, brow: 0.1, pitch: 2, yaw: 4, roll: -2 },
+  frown: { smile: -0.35, eyeOpen: 0.85, brow: -0.35, pitch: -5, yaw: 0, roll: 0 },
+}
 
 export type LiveUiConnectionListener = (connected: boolean) => void
 export type LiveUiUserLineListener = (line: string) => void
@@ -57,6 +77,12 @@ export class LiveUiSession {
   private lastVisionCapture: { requestId: string; vision: LiveUiVisionAttachment } | undefined
   private pendingVisionAttachment: LiveUiVisionAttachment | undefined
   private pendingFileAttachments: LiveUiFileAttachment[] = []
+  private real2dClient: Real2dClient | null = null
+  private real2dSessionId = `live-${Date.now().toString(36)}`
+  private real2dParams: Real2dParamVector = { ...DEFAULT_REAL2D_EMOTIONS.neutral }
+  private real2dEmotion = 'neutral'
+  private lastReal2dMouthAt = 0
+  private lastReal2dMouth = 0
 
   constructor(port: number) {
     this.port = port
@@ -80,6 +106,58 @@ export class LiveUiSession {
   setAsrEngine(engine: AsrEngine | null): void {
     this.asrEngine = engine
     this.broadcastAsrStatus()
+  }
+
+  setReal2dClient(client: Real2dClient | null, opts: Real2dBridgeOptions = {}): void {
+    const old = this.real2dClient
+    if (old && old !== client) {
+      void old.stopSession(this.real2dSessionId).catch(() => {})
+    }
+    this.real2dClient = client
+    this.real2dParams = { ...DEFAULT_REAL2D_EMOTIONS.neutral }
+    this.real2dEmotion = 'neutral'
+    this.lastReal2dMouthAt = 0
+    this.lastReal2dMouth = 0
+    if (!client) {
+      this.broadcast({
+        type: 'REAL2D_STATUS',
+        data: { ready: false, message: 'real2d disabled' },
+      } as LiveUiMessage)
+      return
+    }
+    void this.startReal2d(client, opts)
+  }
+
+  private async startReal2d(client: Real2dClient, opts: Real2dBridgeOptions): Promise<void> {
+    try {
+      const health = await client.health()
+      if (!health.ok && health.ready === false) {
+        throw new Error(health.message ?? 'real2d service is not ready')
+      }
+      const started = await client.startSession({
+        sessionId: this.real2dSessionId,
+        sourceImage: opts.sourceImage,
+        fps: opts.fps,
+        frameFormat: opts.frameFormat,
+      })
+      this.broadcast({
+        type: 'REAL2D_STATUS',
+        data: {
+          ready: started.ready,
+          backend: started.backend ?? health.backend,
+          fps: health.fps,
+          latencyMs: health.latencyMs,
+        },
+      } as LiveUiMessage)
+      console.error(`[liveui] real2d 服务已连接: ${client.baseUrl}`)
+      await this.sendReal2dParams(200)
+    } catch (e) {
+      console.warn(`[liveui] real2d 服务不可用，保持 fallback 渲染: ${(e as Error).message}`)
+      this.broadcast({
+        type: 'REAL2D_STATUS',
+        data: { ready: false, message: (e as Error).message },
+      } as LiveUiMessage)
+    }
   }
 
   private broadcastAsrStatus(): void {
@@ -390,10 +468,12 @@ export class LiveUiSession {
   sendMouth(value01: number): void {
     const v = Math.max(0, Math.min(1, value01))
     this.broadcast({ type: 'SYNC_PARAM', data: { id: 'ParamMouthOpenY', value: v } })
+    this.updateReal2dMouth(v)
   }
 
   sendAction(data: LiveUiActionMessage['data']): void {
     this.broadcast({ type: 'ACTION', data })
+    this.updateReal2dAction(data)
   }
 
   /** 将模型原始流发给渲染进程（含 [Happy] 等标签），由前端解析表情与气泡正文。 */
@@ -413,6 +493,7 @@ export class LiveUiSession {
     this.ttsSequence = 0
     this.ttsPending = Promise.resolve()
     this.broadcast({ type: 'AUDIO_RESET' })
+    this.updateReal2dMouth(0, true)
   }
 
   /**
@@ -453,6 +534,15 @@ export class LiveUiSession {
               payload.channels = out.channels
             }
             this.broadcast({ type: 'AUDIO_CHUNK', data: payload })
+            this.sendReal2dAudio({
+              type: 'AUDIO_CHUNK',
+              sessionId: this.real2dSessionId,
+              audioBase64: payload.audioBase64,
+              format: payload.format,
+              sampleRate: payload.sampleRate,
+              sequence: payload.sequence,
+              channels: payload.channels ?? 1,
+            })
           })
           console.error(`[liveui] TTS 完成: ${chunks} chunks, ${bytes} bytes`)
           return
@@ -470,6 +560,15 @@ export class LiveUiSession {
             sampleRate: out.sampleRate,
             sequence: seq,
           },
+        })
+        this.sendReal2dAudio({
+          type: 'AUDIO_CHUNK',
+          sessionId: this.real2dSessionId,
+          audioBase64: out.data.toString('base64'),
+          format: out.format,
+          sampleRate: out.sampleRate,
+          sequence: seq,
+          channels: 1,
         })
       } catch (e) {
         console.warn(`[liveui] TTS 合成失败: ${(e as Error).message}`)
@@ -544,6 +643,71 @@ export class LiveUiSession {
     }
   }
 
+  private updateReal2dAction(data: LiveUiActionMessage['data']): void {
+    if (data.expression) {
+      const em = data.expression.toLowerCase().trim()
+      this.real2dEmotion = em
+      this.real2dParams = {
+        ...this.real2dParams,
+        ...(DEFAULT_REAL2D_EMOTIONS[em] ?? DEFAULT_REAL2D_EMOTIONS.neutral),
+      }
+      void this.sendReal2dParams(200)
+    }
+    if (data.motion === 'nod') {
+      this.real2dParams = { ...this.real2dParams, pitch: 8 }
+      void this.sendReal2dParams(180)
+      setTimeout(() => {
+        this.real2dParams = { ...this.real2dParams, pitch: DEFAULT_REAL2D_EMOTIONS[this.real2dEmotion]?.pitch ?? 0 }
+        void this.sendReal2dParams(180)
+      }, 220)
+    }
+  }
+
+  private updateReal2dMouth(value01: number, force = false): void {
+    if (!this.real2dClient) return
+    const now = Date.now()
+    if (!force && now - this.lastReal2dMouthAt < 45 && Math.abs(value01 - this.lastReal2dMouth) < 0.04) return
+    this.lastReal2dMouthAt = now
+    this.lastReal2dMouth = value01
+    this.real2dParams = { ...this.real2dParams, mouthOpen: value01 }
+    void this.sendReal2dParams(60)
+  }
+
+  private async sendReal2dParams(transitionMs: number): Promise<void> {
+    if (!this.real2dClient) return
+    try {
+      const frame = await this.real2dClient.updateParams({
+        type: 'PARAM_UPDATE',
+        sessionId: this.real2dSessionId,
+        timestampMs: Date.now(),
+        emotion: this.real2dEmotion,
+        params: this.real2dParams,
+        transitionMs,
+      })
+      if (frame?.type === 'REAL2D_FRAME' && frame.frameBase64) {
+        this.broadcast({
+          type: 'REAL2D_FRAME',
+          data: {
+            sessionId: frame.sessionId,
+            timestampMs: frame.timestampMs,
+            format: frame.format,
+            frameBase64: frame.frameBase64,
+          },
+        } as LiveUiMessage)
+      }
+    } catch (e) {
+      this.broadcast({
+        type: 'REAL2D_STATUS',
+        data: { ready: false, message: (e as Error).message },
+      } as LiveUiMessage)
+    }
+  }
+
+  private sendReal2dAudio(chunk: Parameters<Real2dClient['sendAudio']>[0]): void {
+    if (!this.real2dClient) return
+    void this.real2dClient.sendAudio(chunk).catch(() => {})
+  }
+
   async dispose(): Promise<void> {
     this.stopMouthPump()
     for (const c of this.clients) {
@@ -563,6 +727,10 @@ export class LiveUiSession {
     if (this.electronChild && !this.electronChild.killed) {
       this.electronChild.kill('SIGTERM')
       this.electronChild = null
+    }
+    if (this.real2dClient) {
+      await this.real2dClient.stopSession(this.real2dSessionId).catch(() => {})
+      this.real2dClient = null
     }
   }
 }

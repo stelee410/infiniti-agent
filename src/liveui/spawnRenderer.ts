@@ -23,6 +23,7 @@ export function resolveElectronCliJs(): string | null {
 }
 
 export type LiveUiElectronSpawnOptions = {
+  renderer?: 'live2d' | 'sprite' | 'real2d'
   model3FileUrl?: string
   /** 含尾斜杠的 `file:` URL，指向含 `exp_01.png`…的目录 */
   spriteExpressionDirFileUrl?: string
@@ -33,6 +34,7 @@ export type LiveUiElectronSpawnOptions = {
    * 通过 `INFINITI_LIVEUI_FIGURE_ZOOM` 注入渲染进程，由 `figureLayoutConfig` 处乘到 widthFraction 上。
    */
   figureZoom?: number
+  real2dJson?: string
 }
 
 /**
@@ -60,6 +62,7 @@ export function spawnLiveElectron(port: number, opts?: LiveUiElectronSpawnOption
     env: {
       ...process.env,
       INFINITI_LIVEUI_PORT: String(port),
+      ...(opts?.renderer ? { INFINITI_LIVEUI_RENDERER: opts.renderer } : {}),
       ...(opts?.model3FileUrl ? { INFINITI_LIVEUI_MODEL3_FILE_URL: opts.model3FileUrl } : {}),
       ...(opts?.spriteExpressionDirFileUrl
         ? { INFINITI_LIVEUI_SPRITE_EXPRESSION_DIR: opts.spriteExpressionDirFileUrl }
@@ -68,6 +71,7 @@ export function spawnLiveElectron(port: number, opts?: LiveUiElectronSpawnOption
       ...(typeof opts?.figureZoom === 'number' && Number.isFinite(opts.figureZoom)
         ? { INFINITI_LIVEUI_FIGURE_ZOOM: String(opts.figureZoom) }
         : {}),
+      ...(opts?.real2dJson ? { INFINITI_LIVEUI_REAL2D: opts.real2dJson } : {}),
     },
     detached: false,
     stdio: ['ignore', 'pipe', 'pipe'],
