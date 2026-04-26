@@ -907,6 +907,7 @@ async function bootstrap(): Promise<void> {
   let unreadInboxItems: RenderInboxItem[] = []
   let openInboxItems: RenderInboxItem[] = []
   let inboxPanelOpen = false
+  let inboxRenderSignature = ''
   let inboxMarkTimer: number | undefined
   const inboxIconSvg = '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2Zm0 4.2-8 5-8-5V6l8 5 8-5v2.2Z"/></svg>'
   const closeIconSvg = '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M18.3 5.71 12 12l6.3 6.29-1.41 1.41L10.59 13.41 4.29 19.7 2.88 18.29 9.17 12 2.88 5.71 4.29 4.3l6.3 6.29 6.3-6.29 1.41 1.41z"/></svg>'
@@ -965,6 +966,22 @@ async function bootstrap(): Promise<void> {
     return /\.(mp4|webm|mov|m4v)$/i.test(attachment.path)
   }
 
+  const inboxItemsSignature = (items: RenderInboxItem[]): string => {
+    return items
+      .map((item) => {
+        const attachments = item.attachments
+          .map((attachment) => [
+            attachment.kind,
+            attachment.path,
+            attachment.mimeType ?? '',
+            attachment.label ?? '',
+          ].join('\u001f'))
+          .join('\u001e')
+        return [item.id, item.createdAt, item.subject, item.body, attachments].join('\u001d')
+      })
+      .join('\u001c')
+  }
+
   const hydrateInboxVideo = async (video: HTMLVideoElement, attachment: RenderInboxAttachment): Promise<void> => {
     video.src = filePathToMediaUrl(attachment.path)
     video.load()
@@ -1002,6 +1019,13 @@ async function bootstrap(): Promise<void> {
     inboxRoot.classList.toggle('liveui-inbox--visible', visible)
     inboxRoot.classList.toggle('liveui-inbox--open', inboxPanelOpen)
     inboxRoot.setAttribute('aria-hidden', visible ? 'false' : 'true')
+    const nextSignature = [
+      visible ? 'visible' : 'hidden',
+      inboxPanelOpen ? 'open' : 'closed',
+      inboxItemsSignature(items),
+    ].join('\u001b')
+    if (nextSignature === inboxRenderSignature) return
+    inboxRenderSignature = nextSignature
     inboxPanel.replaceChildren()
     if (!visible || items.length === 0) {
       return
