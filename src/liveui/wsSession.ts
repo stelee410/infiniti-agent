@@ -5,6 +5,7 @@ import type {
   LiveUiActionMessage,
   LiveUiAssistantStreamMessage,
   LiveUiAudioChunkMessage,
+  LiveUiInboxItem,
   LiveUiMessage,
   LiveUiSlashCompletionItem,
   LiveUiStatusVariant,
@@ -23,6 +24,8 @@ export type LiveUiUserLineListener = (line: string) => void
 export type LiveUiUserComposerListener = (text: string) => void
 export type LiveUiInterruptListener = () => void
 export type LiveUiConfigSaveListener = (config: unknown) => void
+export type LiveUiInboxMarkReadListener = (ids: string[]) => void
+export type LiveUiInboxSaveAsListener = (sourcePath: string, destinationPath: string, requestId?: string) => void
 
 /** 渲染端点击 Live2D 头部 / 身体等，由 Node 转成一条合成用户消息请求模型回应 */
 export type LiveUiInteractionKind = 'head_pat' | 'body_poke'
@@ -39,6 +42,8 @@ export class LiveUiSession {
   private userComposerListeners = new Set<LiveUiUserComposerListener>()
   private interruptListeners = new Set<LiveUiInterruptListener>()
   private configSaveListeners = new Set<LiveUiConfigSaveListener>()
+  private inboxMarkReadListeners = new Set<LiveUiInboxMarkReadListener>()
+  private inboxSaveAsListeners = new Set<LiveUiInboxSaveAsListener>()
   private interactionListeners = new Set<LiveUiInteractionListener>()
   private mouthTimer: ReturnType<typeof setInterval> | undefined
   private electronChild: ChildProcess | null = null
@@ -151,6 +156,14 @@ export class LiveUiSession {
     this.broadcast({ type: 'CONFIG_STATUS', data: { ok, message } } as LiveUiMessage)
   }
 
+  sendInboxUpdate(unread: LiveUiInboxItem[]): void {
+    this.broadcast({ type: 'INBOX_UPDATE', data: { unread } } as LiveUiMessage)
+  }
+
+  sendInboxSaveResult(ok: boolean, message: string): void {
+    this.broadcast({ type: 'INBOX_SAVE_RESULT', data: { ok, message } } as LiveUiMessage)
+  }
+
   onInterrupt(fn: LiveUiInterruptListener): () => void {
     this.interruptListeners.add(fn)
     return () => { this.interruptListeners.delete(fn) }
@@ -169,6 +182,28 @@ export class LiveUiSession {
 
   private emitConfigSave(config: unknown): void {
     for (const f of this.configSaveListeners) f(config)
+  }
+
+  onInboxMarkRead(fn: LiveUiInboxMarkReadListener): () => void {
+    this.inboxMarkReadListeners.add(fn)
+    return () => {
+      this.inboxMarkReadListeners.delete(fn)
+    }
+  }
+
+  private emitInboxMarkRead(ids: string[]): void {
+    for (const f of this.inboxMarkReadListeners) f(ids)
+  }
+
+  onInboxSaveAs(fn: LiveUiInboxSaveAsListener): () => void {
+    this.inboxSaveAsListeners.add(fn)
+    return () => {
+      this.inboxSaveAsListeners.delete(fn)
+    }
+  }
+
+  private emitInboxSaveAs(sourcePath: string, destinationPath: string, requestId?: string): void {
+    for (const f of this.inboxSaveAsListeners) f(sourcePath, destinationPath, requestId)
   }
 
   onInteraction(fn: LiveUiInteractionListener): () => void {
@@ -271,6 +306,27 @@ export class LiveUiSession {
             this.emitConfigSave((parsed.data as { config?: unknown }).config)
             return
           }
+          if (t === 'INBOX_MARK_READ' && parsed.data && typeof parsed.data === 'object') {
+            const ids = (parsed.data as { ids?: unknown }).ids
+            if (Array.isArray(ids)) {
+              const clean = ids
+                .filter((x): x is string => typeof x === 'string' && !!x.trim())
+                .map((x) => x.trim())
+              if (clean.length > 0) this.emitInboxMarkRead(clean)
+            }
+            return
+          }
+          if (t === 'INBOX_SAVE_AS' && parsed.data && typeof parsed.data === 'object') {
+            const d = parsed.data as { sourcePath?: unknown; destinationPath?: unknown; requestId?: unknown }
+            if (typeof d.sourcePath === 'string' && typeof d.destinationPath === 'string') {
+              this.emitInboxSaveAs(
+                d.sourcePath,
+                d.destinationPath,
+                typeof d.requestId === 'string' ? d.requestId : undefined,
+              )
+            }
+            return
+          }
           if (t === 'MIC_AUDIO' && parsed.data && typeof parsed.data === 'object') {
             const d = parsed.data as { audioBase64?: string; format?: string }
             if (typeof d.audioBase64 === 'string' && this.asrEngine) {
@@ -322,8 +378,8 @@ export class LiveUiSession {
   }
 
   /** 将模型原始流发给渲染进程（含 [Happy] 等标签），由前端解析表情与气泡正文。 */
-  sendAssistantStream(fullRaw: string, reset = false): void {
-    const data: LiveUiAssistantStreamMessage['data'] = { fullRaw, reset }
+  sendAssistantStream(fullRaw: string, reset = false, done = false): void {
+    const data: LiveUiAssistantStreamMessage['data'] = { fullRaw, reset, done }
     this.broadcast({ type: 'ASSISTANT_STREAM', data })
   }
 

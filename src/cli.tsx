@@ -41,6 +41,8 @@ import { runAddLlm, runSelectLlm } from './cli/llmCli.js'
 import { runLinkyunSync } from './cli/linkyunSync.js'
 import { runGenerateAvatar } from './cli/generateAvatar.js'
 import { runSetLiveAgent } from './cli/setLiveAgent.js'
+import { runSnapPhotoJob } from './snap/asyncSnap.js'
+import { disableUiLogFile, enableUiLogFile, withUiLogFile } from './utils/uiLogFile.js'
 
 const cwd = process.cwd()
 
@@ -54,6 +56,14 @@ function parseAddLlmProviderFlag(s?: string): 'openai' | 'anthropic' | 'gemini' 
 function applyThinkingOverride(cfg: Awaited<ReturnType<typeof loadConfig>>, disable: boolean): Awaited<ReturnType<typeof loadConfig>> {
   if (!disable) return cfg
   return { ...cfg, thinking: { ...cfg.thinking, mode: 'disabled' as const } }
+}
+
+function isUiModeInvocation(argv: string[]): boolean {
+  if (argv.includes('--cli')) return false
+  const globalFlags = new Set(['--debug', '--dangerously-skip-permissions', '--disable-thinking'])
+  const rest = argv.filter((a) => !globalFlags.has(a))
+  const command = rest[0]
+  return !command || command === 'chat' || command === 'live'
 }
 
 async function configureLiveUiEngines(
@@ -238,6 +248,9 @@ async function runChatTui(
 }
 
 async function main(): Promise<void> {
+  const uiLogEnabledAtStartup = isUiModeInvocation(process.argv.slice(2))
+  if (uiLogEnabledAtStartup) enableUiLogFile(cwd)
+  try {
   if (process.argv.includes('--debug')) {
     const idx = process.argv.indexOf('--debug')
     process.argv.splice(idx, 1)
@@ -258,6 +271,21 @@ async function main(): Promise<void> {
     process.argv.splice(idx, 1)
   }
   const argv = process.argv.slice(2)
+
+  if (argv[0] === 'snap-worker') {
+    const jobPath = argv[1]
+    if (!jobPath) {
+      console.error('用法: infiniti-agent snap-worker <job.json>')
+      process.exit(2)
+    }
+    try {
+      await runSnapPhotoJob(jobPath)
+    } catch (e) {
+      console.error((e as Error).message)
+      process.exit(2)
+    }
+    return
+  }
 
   // 兼容旧写法 --cli
   const cliIdx = argv.indexOf('--cli')
@@ -412,7 +440,7 @@ async function main(): Promise<void> {
     .command('chat')
     .description('进入对话界面（无参数时默认）')
     .action(async () => {
-      await runChatTui({ skipPermissions, disableThinking })
+      await withUiLogFile(cwd, () => runChatTui({ skipPermissions, disableThinking }))
     })
 
   program
@@ -425,6 +453,7 @@ async function main(): Promise<void> {
       '人物显示缩放（0.4 ~ 1.5；0.9 = 90%、0.8 = 80%；不影响控制条/输入框）',
     )
     .action(async (cmdOpts: { port?: string; zoom?: string; auto?: boolean }) => {
+      await withUiLogFile(cwd, async () => {
       if (!configExistsSync(cwd)) {
         console.error('尚未配置。请先运行: infiniti-agent init 或 infiniti-agent migrate')
         process.exit(2)
@@ -496,6 +525,7 @@ async function main(): Promise<void> {
             figureZoom,
           })
         },
+      })
       })
     })
 
@@ -674,9 +704,15 @@ async function main(): Promise<void> {
     })
 
   await program.parseAsync(process.argv)
+  } finally {
+    if (uiLogEnabledAtStartup) disableUiLogFile()
+  }
 }
 
 main().catch((e) => {
+  const uiMode = isUiModeInvocation(process.argv.slice(2))
+  if (uiMode) enableUiLogFile(cwd)
   console.error(e)
+  if (uiMode) disableUiLogFile()
   process.exit(1)
 })

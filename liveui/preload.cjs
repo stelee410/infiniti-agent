@@ -63,4 +63,8 @@ contextBridge.exposeInMainWorld('infinitiLiveUi', {
     const defaultPath = opts && typeof opts.defaultPath === 'string' ? opts.defaultPath : undefined
     return ipcRenderer.invoke('liveui-select-path', { kind, defaultPath })
   },
+  savePath: (opts) => {
+    const defaultPath = opts && typeof opts.defaultPath === 'string' ? opts.defaultPath : undefined
+    return ipcRenderer.invoke('liveui-save-path', { defaultPath })
+  },
 })

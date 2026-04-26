@@ -71,6 +71,13 @@ const COMMAND_ITEMS: SlashItem[] = [
     insert: '/memory ',
   },
   {
+    id: '/inbox',
+    kind: 'command',
+    label: '/inbox',
+    desc: '查看你的邮箱里最近未读邮件；加 --all 查看最近全部',
+    insert: '/inbox ',
+  },
+  {
     id: '/help',
     kind: 'command',
     label: '/help',

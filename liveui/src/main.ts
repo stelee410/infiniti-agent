@@ -54,6 +54,8 @@ declare global {
       setWindowPosition?: (x: number, y: number) => void
       /** Electron：选择本地文件或目录 */
       selectPath?: (opts: { kind: 'file' | 'directory'; defaultPath?: string }) => Promise<string | null>
+      /** Electron：打开系统另存为对话框 */
+      savePath?: (opts: { defaultPath?: string }) => Promise<string | null>
     }
     ImageCapture?: new (track: MediaStreamTrack) => {
       grabFrame: () => Promise<ImageBitmap>
@@ -75,7 +77,7 @@ type ActionMsg = {
 
 type AssistantStreamMsg = {
   type: 'ASSISTANT_STREAM'
-  data: { fullRaw: string; reset?: boolean }
+  data: { fullRaw: string; reset?: boolean; done?: boolean }
 }
 
 type StatusPillMsg = {
@@ -125,6 +127,31 @@ type VisionCaptureResultMsg = {
   }
 }
 
+type InboxAttachment = {
+  kind?: unknown
+  path?: unknown
+  mimeType?: unknown
+  label?: unknown
+}
+
+type InboxItem = {
+  id?: unknown
+  createdAt?: unknown
+  subject?: unknown
+  body?: unknown
+  attachments?: unknown
+}
+
+type InboxUpdateMsg = {
+  type: 'INBOX_UPDATE'
+  data: { unread?: unknown }
+}
+
+type InboxSaveResultMsg = {
+  type: 'INBOX_SAVE_RESULT'
+  data: { ok?: unknown; message?: unknown }
+}
+
 type Msg =
   | SyncParam
   | ActionMsg
@@ -139,6 +166,8 @@ type Msg =
   | ConfigOpenMsg
   | ConfigStatusMsg
   | VisionCaptureResultMsg
+  | InboxUpdateMsg
+  | InboxSaveResultMsg
 
 const FACE_RADIUS = 110
 
@@ -241,6 +270,9 @@ async function bootstrap(): Promise<void> {
   ) as HTMLElement | null
   const statusPill = document.getElementById('liveui-status-pill')
   const userLineInput = document.getElementById('liveui-user-line') as HTMLTextAreaElement | null
+  const inboxRoot = document.getElementById('liveui-inbox')
+  const inboxToggle = document.getElementById('liveui-inbox-toggle') as HTMLButtonElement | null
+  const inboxPanel = document.getElementById('liveui-inbox-panel')
   if (!canvas) return
 
   window.PIXI = PIXI
@@ -452,6 +484,17 @@ async function bootstrap(): Promise<void> {
   let bubbleAutoDismissTimer: ReturnType<typeof setTimeout> | undefined
   let bubbleIsStreaming = false
 
+  const positionInboxAtComposer = (): void => {
+    if (!inboxRoot) return
+    const composer = document.getElementById('liveui-composer')
+    if (!composer) return
+    const rect = composer.getBoundingClientRect()
+    const left = Math.max(8, Math.min(window.innerWidth - 56, rect.left + 2))
+    const top = Math.max(8, Math.min(window.innerHeight - 56, rect.top + 2))
+    inboxRoot.style.left = `${left}px`
+    inboxRoot.style.top = `${top}px`
+  }
+
   /** 将气泡定位到控制条上方、叠在人物躯干区域。 */
   const positionBubbleOverFigure = (): void => {
     if (!speechBubble) return
@@ -460,6 +503,7 @@ async function bootstrap(): Promise<void> {
     const barRect = controlBar.getBoundingClientRect()
     const gap = 12
     speechBubble.style.bottom = `${window.innerHeight - barRect.top + gap}px`
+    positionInboxAtComposer()
   }
 
   /**
@@ -789,6 +833,164 @@ async function bootstrap(): Promise<void> {
   const slashMenuEl = document.getElementById('liveui-slash-menu')
   const slashHintEl = document.getElementById('liveui-slash-menu-hint')
   const slashListEl = document.getElementById('liveui-slash-menu-list')
+  type RenderInboxAttachment = { kind: 'image' | 'file'; path: string; mimeType?: string; label?: string }
+  type RenderInboxItem = {
+    id: string
+    createdAt: string
+    subject: string
+    body: string
+    attachments: RenderInboxAttachment[]
+  }
+  let unreadInboxItems: RenderInboxItem[] = []
+  let openInboxItems: RenderInboxItem[] = []
+  let inboxPanelOpen = false
+  let inboxMarkTimer: number | undefined
+  const inboxIconSvg = '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2Zm0 4.2-8 5-8-5V6l8 5 8-5v2.2Z"/></svg>'
+  const closeIconSvg = '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M18.3 5.71 12 12l6.3 6.29-1.41 1.41L10.59 13.41 4.29 19.7 2.88 18.29 9.17 12 2.88 5.71 4.29 4.3l6.3 6.29 6.3-6.29 1.41 1.41z"/></svg>'
+
+  const filePathToUrl = (p: string): string => {
+    if (/^file:/i.test(p) || /^https?:/i.test(p) || /^data:/i.test(p)) return p
+    return `file://${p.split('/').map((part) => encodeURIComponent(part)).join('/')}`
+  }
+
+  const parseInboxAttachment = (raw: InboxAttachment): RenderInboxAttachment | null => {
+    if (!raw || typeof raw !== 'object') return null
+    if (raw.kind !== 'image' && raw.kind !== 'file') return null
+    if (typeof raw.path !== 'string' || !raw.path.trim()) return null
+    const out: RenderInboxAttachment = { kind: raw.kind, path: raw.path }
+    if (typeof raw.mimeType === 'string') out.mimeType = raw.mimeType
+    if (typeof raw.label === 'string') out.label = raw.label
+    return out
+  }
+
+  const parseInboxItem = (raw: InboxItem): RenderInboxItem | null => {
+    if (!raw || typeof raw !== 'object') return null
+    if (
+      typeof raw.id !== 'string' ||
+      typeof raw.createdAt !== 'string' ||
+      typeof raw.subject !== 'string' ||
+      typeof raw.body !== 'string' ||
+      !Array.isArray(raw.attachments)
+    ) {
+      return null
+    }
+    return {
+      id: raw.id,
+      createdAt: raw.createdAt,
+      subject: raw.subject,
+      body: raw.body,
+      attachments: raw.attachments
+        .map((a) => parseInboxAttachment(a as InboxAttachment))
+        .filter((a): a is RenderInboxAttachment => a != null),
+    }
+  }
+
+  const renderInbox = (): void => {
+    if (!inboxRoot || !inboxPanel) return
+    if (!inboxPanelOpen) positionInboxAtComposer()
+    const items = inboxPanelOpen ? openInboxItems : unreadInboxItems
+    const visible = inboxPanelOpen || unreadInboxItems.length > 0
+    inboxRoot.classList.toggle('liveui-inbox--visible', visible)
+    inboxRoot.classList.toggle('liveui-inbox--open', inboxPanelOpen)
+    inboxRoot.setAttribute('aria-hidden', visible ? 'false' : 'true')
+    inboxPanel.replaceChildren()
+    if (!visible || items.length === 0) {
+      return
+    }
+    for (const item of items) {
+      const mail = document.createElement('section')
+      mail.className = 'liveui-inbox-mail'
+
+      const subject = document.createElement('div')
+      subject.className = 'liveui-inbox-subject'
+      subject.textContent = item.subject
+      mail.appendChild(subject)
+
+      const time = document.createElement('div')
+      time.className = 'liveui-inbox-time'
+      time.textContent = new Date(item.createdAt).toLocaleString()
+      mail.appendChild(time)
+
+      const body = document.createElement('div')
+      body.className = 'liveui-inbox-body'
+      body.textContent = item.body
+      mail.appendChild(body)
+
+      for (const attachment of item.attachments) {
+        if (attachment.kind === 'image') {
+          const wrap = document.createElement('div')
+          wrap.className = 'liveui-inbox-image-wrap'
+          const img = document.createElement('img')
+          img.className = 'liveui-inbox-image'
+          img.alt = attachment.label ?? 'generated image'
+          img.src = filePathToUrl(attachment.path)
+          wrap.appendChild(img)
+          const actions = document.createElement('div')
+          actions.className = 'liveui-inbox-actions'
+          const saveBtn = document.createElement('button')
+          saveBtn.type = 'button'
+          saveBtn.className = 'liveui-inbox-action'
+          saveBtn.title = '另存为'
+          saveBtn.setAttribute('aria-label', '另存为')
+          saveBtn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M5 20h14v-2H5v2ZM19 9h-4V3H9v6H5l7 7 7-7Z"/></svg>'
+          saveBtn.addEventListener('click', async (ev) => {
+            ev.stopPropagation()
+            const defaultPath = attachment.path.split(/[\\/]/).pop() || 'snap-image.png'
+            const dest = await window.infinitiLiveUi?.savePath?.({ defaultPath })
+            if (dest && socket.readyState === WebSocket.OPEN) {
+              socket.send(JSON.stringify({
+                type: 'INBOX_SAVE_AS',
+                data: { sourcePath: attachment.path, destinationPath: dest },
+              }))
+            }
+          })
+          actions.appendChild(saveBtn)
+          wrap.appendChild(actions)
+          mail.appendChild(wrap)
+        }
+      }
+
+      inboxPanel.appendChild(mail)
+    }
+  }
+
+  const markVisibleInboxReadSoon = (): void => {
+    if (inboxMarkTimer) window.clearTimeout(inboxMarkTimer)
+    const ids = unreadInboxItems.map((m) => m.id)
+    if (ids.length === 0) return
+    inboxMarkTimer = window.setTimeout(() => {
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: 'INBOX_MARK_READ', data: { ids } }))
+      }
+    }, 1500)
+  }
+
+  const setInboxOpen = (open: boolean): void => {
+    if (!inboxRoot || !inboxToggle) return
+    if (open && unreadInboxItems.length === 0 && openInboxItems.length === 0) return
+    inboxPanelOpen = open
+    if (open) {
+      openInboxItems = unreadInboxItems.length > 0 ? [...unreadInboxItems] : [...openInboxItems]
+    } else {
+      openInboxItems = []
+      if (inboxMarkTimer) {
+        window.clearTimeout(inboxMarkTimer)
+        inboxMarkTimer = undefined
+      }
+    }
+    document.body.classList.toggle('liveui-inbox-open', open)
+    inboxToggle.innerHTML = open ? closeIconSvg : inboxIconSvg
+    inboxToggle.title = open ? '关闭你的邮箱' : '你的邮箱'
+    inboxToggle.setAttribute('aria-label', open ? '关闭你的邮箱' : '你的邮箱')
+    window.infinitiLiveUi?.setConfigPanelOpen?.(open)
+    window.infinitiLiveUi?.setIgnoreMouseEvents?.(!open, { forward: true })
+    renderInbox()
+    if (open) markVisibleInboxReadSoon()
+  }
+
+  inboxToggle?.addEventListener('click', () => {
+    setInboxOpen(!inboxPanelOpen)
+  })
 
   const loadInputHistory = (): string[] => {
     try {
@@ -1660,6 +1862,19 @@ async function bootstrap(): Promise<void> {
           redrawPlaceholderMouth()
         }
       }
+    } else if (msg.type === 'INBOX_UPDATE') {
+      const raw = msg.data?.unread
+      unreadInboxItems = Array.isArray(raw)
+        ? raw.map((it) => parseInboxItem(it as InboxItem)).filter((it): it is RenderInboxItem => it != null)
+        : []
+      renderInbox()
+    } else if (msg.type === 'INBOX_SAVE_RESULT') {
+      const text = typeof msg.data?.message === 'string' ? msg.data.message : ''
+      if (msg.data?.ok) {
+        console.debug('[liveui] inbox save:', text)
+      } else {
+        console.warn('[liveui] inbox save failed:', text)
+      }
     } else if (msg.type === 'TTS_STATUS') {
       ttsAvailable = !!msg.data?.available
       if (typeof msg.data?.enabled === 'boolean') ttsEnabled = msg.data.enabled
@@ -1754,6 +1969,10 @@ async function bootstrap(): Promise<void> {
         if (a.expression) applyLive2dExpression(a.expression)
       }
       setBubbleFromDisplayText(stripLiveUiKnownEmotionTagsEverywhere(displayText, streamManifestForStrip))
+      if (msg.data?.done && bubbleTarget.trim()) {
+        bubbleIsStreaming = false
+        scheduleBubbleDismiss()
+      }
       touchConvActivity()
     } else if (msg.type === 'STATUS_PILL' && statusPill) {
       const label = typeof msg.data?.label === 'string' ? msg.data.label : '就绪'
@@ -2491,13 +2710,14 @@ async function bootstrap(): Promise<void> {
     let windowIgnoring = true
 
     const isOverInteractive = (ex: number, ey: number): boolean => {
-      if (configPanelOpen) return true
+      if (configPanelOpen || inboxPanelOpen) return true
       const dom = document.elementFromPoint(ex, ey)
       if (
         dom &&
         (dom.closest('#liveui-control-bar') ||
           dom.closest('#liveui-config-panel') ||
-          dom.closest('#liveui-photo-preview'))
+          dom.closest('#liveui-photo-preview') ||
+          dom.closest('#liveui-inbox'))
       ) {
         return true
       }

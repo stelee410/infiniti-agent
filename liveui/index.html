@@ -37,7 +37,12 @@
         pointer-events: auto;
       }
       body.liveui-config-open #liveui-bottom-dock,
-      body.liveui-config-open #speech-bubble {
+      body.liveui-config-open #speech-bubble,
+      body.liveui-config-open #liveui-inbox {
+        display: none !important;
+      }
+      body.liveui-inbox-open #liveui-bottom-dock,
+      body.liveui-inbox-open #speech-bubble {
         display: none !important;
       }
       /* 气泡：脱离底部 dock，半透明叠在人物身上 */
@@ -84,6 +89,169 @@
         display: none;
         width: 0;
         height: 0;
+      }
+      #liveui-inbox {
+        position: fixed;
+        z-index: 210;
+        top: max(12px, env(safe-area-inset-top, 0px));
+        left: 14px;
+        display: none;
+        align-items: flex-start;
+        gap: 10px;
+        pointer-events: auto;
+        -webkit-app-region: no-drag;
+        app-region: no-drag;
+      }
+      #liveui-inbox.liveui-inbox--visible {
+        display: flex;
+      }
+      #liveui-inbox-toggle {
+        box-sizing: border-box;
+        width: 42px;
+        height: 42px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        margin: 0;
+        padding: 0;
+        border: 1px solid rgba(251, 191, 36, 0.55);
+        border-radius: 10px;
+        background: rgba(31, 41, 55, 0.92);
+        color: #fef3c7;
+        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.38);
+        cursor: pointer;
+        transform: translate(-42%, -38%);
+        -webkit-app-region: no-drag;
+        app-region: no-drag;
+      }
+      #liveui-inbox-toggle:hover {
+        background: rgba(55, 65, 81, 0.96);
+        border-color: rgba(253, 230, 138, 0.78);
+      }
+      #liveui-inbox-toggle svg {
+        width: 22px;
+        height: 22px;
+        display: block;
+        pointer-events: none;
+      }
+      #liveui-inbox-panel {
+        box-sizing: border-box;
+        width: min(82vw, 360px);
+        max-height: min(72vh, 580px);
+        display: none;
+        flex-direction: column;
+        gap: 10px;
+        padding: 12px;
+        border-radius: 14px;
+        background: rgba(20, 22, 28, 0.96);
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        box-shadow: 0 18px 46px rgba(0, 0, 0, 0.48);
+        color: rgba(255, 255, 255, 0.94);
+        overflow-y: auto;
+        -webkit-app-region: no-drag;
+        app-region: no-drag;
+        cursor: default;
+      }
+      #liveui-inbox.liveui-inbox--open #liveui-inbox-panel {
+        display: flex;
+      }
+      body.liveui-inbox-open #liveui-inbox {
+        inset: 0;
+        left: 0 !important;
+        top: 0 !important;
+        width: 100vw;
+        height: 100vh;
+        padding: 18px;
+        box-sizing: border-box;
+        align-items: stretch;
+        justify-content: stretch;
+        background: rgba(10, 12, 18, 0.72);
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+      }
+      body.liveui-inbox-open #liveui-inbox-toggle {
+        position: fixed;
+        top: 18px;
+        right: 18px;
+        left: auto;
+        z-index: 2;
+        transform: none;
+        background: #7f1d1d;
+        border-color: rgba(252, 165, 165, 0.55);
+        color: #fff7f7;
+      }
+      body.liveui-inbox-open #liveui-inbox-panel {
+        display: flex;
+        width: 100%;
+        max-width: none;
+        max-height: none;
+        padding: 18px;
+        border-radius: 18px;
+      }
+      body.liveui-inbox-open .liveui-inbox-image {
+        max-height: min(62vh, 620px);
+      }
+      .liveui-inbox-mail {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .liveui-inbox-subject {
+        font: 650 14px/1.35 system-ui, -apple-system, 'Segoe UI', sans-serif;
+        color: #fff7ed;
+        word-break: break-word;
+      }
+      .liveui-inbox-time {
+        font: 11px/1.25 system-ui, -apple-system, 'Segoe UI', sans-serif;
+        color: rgba(255, 255, 255, 0.54);
+      }
+      .liveui-inbox-body {
+        white-space: pre-wrap;
+        word-break: break-word;
+        font: 13px/1.55 system-ui, -apple-system, 'Segoe UI', sans-serif;
+        color: rgba(255, 255, 255, 0.9);
+      }
+      .liveui-inbox-image-wrap {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .liveui-inbox-image {
+        display: block;
+        width: 100%;
+        max-height: 320px;
+        object-fit: contain;
+        border-radius: 10px;
+        background: #0f1117;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+      }
+      .liveui-inbox-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+      .liveui-inbox-action {
+        box-sizing: border-box;
+        width: 34px;
+        height: 34px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid rgba(148, 163, 184, 0.38);
+        border-radius: 9px;
+        background: #1f2937;
+        color: #f8fafc;
+        cursor: pointer;
+      }
+      .liveui-inbox-action:hover {
+        background: #334155;
+        border-color: rgba(226, 232, 240, 0.62);
+      }
+      .liveui-inbox-action svg {
+        width: 18px;
+        height: 18px;
+        display: block;
+        pointer-events: none;
       }
       .liveui-md-root :where(p, ul, ol, pre, h1, h2, h3, h4, h5, h6, blockquote, table, hr) {
         margin: 0.45em 0;
@@ -841,6 +1009,14 @@
     </div>
     <div id="speech-bubble" aria-hidden="true">
       <div id="speech-bubble-text" class="liveui-md-root"></div>
+    </div>
+    <div id="liveui-inbox" aria-hidden="true">
+      <button type="button" id="liveui-inbox-toggle" title="你的邮箱" aria-label="你的邮箱">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path fill="currentColor" d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2Zm0 4.2-8 5-8-5V6l8 5 8-5v2.2Z"/>
+        </svg>
+      </button>
+      <div id="liveui-inbox-panel" role="dialog" aria-label="你的邮箱"></div>
     </div>
     <div id="liveui-bottom-dock">
       <div

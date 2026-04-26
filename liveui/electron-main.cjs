@@ -209,6 +209,19 @@ function createWindow() {
     return result.filePaths[0] || null
   })
 
+  ipcMain.handle('liveui-save-path', async (_e, payload) => {
+    const defaultPath =
+      payload && typeof payload.defaultPath === 'string' && payload.defaultPath.trim()
+        ? payload.defaultPath.trim()
+        : undefined
+    const result = await dialog.showSaveDialog(win, {
+      title: '另存图片',
+      ...(defaultPath ? { defaultPath } : {}),
+    })
+    if (result.canceled || !result.filePath) return null
+    return result.filePath
+  })
+
   win.webContents.on('console-message', (_event, level, message, line, sourceId) => {
     const levelName = ['verbose', 'info', 'warning', 'error'][level] ?? String(level)
     const where = sourceId ? ` (${sourceId}:${line})` : ''

@@ -2,12 +2,12 @@ import OpenAI, { toFile } from 'openai'
 import { existsSync } from 'node:fs'
 import { appendFile, mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { extname, join, resolve } from 'node:path'
-import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import type { InfinitiConfig, SnapImageConfig } from '../config/types.js'
 import { resolveLlmProfile } from '../config/types.js'
 import type { LiveUiVisionAttachment } from '../liveui/protocol.js'
 import { openRouterGenerateImageBuffer, type OpenRouterRefImage } from '../avatar/openRouterImageGen.js'
+import { localInboxDir } from '../paths.js'
 
 type RefImage = {
   role: 'user' | 'agent'
@@ -252,8 +252,9 @@ export async function generateSnapPhoto(
   }
 
   const ext = imageExt(image)
-  const path = join(tmpdir(), `infiniti-agent-snap-${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID().slice(0, 8)}.${ext}`)
-  await mkdir(tmpdir(), { recursive: true })
+  const outDir = join(localInboxDir(cwd), 'assets')
+  const path = join(outDir, `infiniti-agent-snap-${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID().slice(0, 8)}.${ext}`)
+  await mkdir(outDir, { recursive: true })
   await writeFile(path, image)
   await appendSnapLog(cwd, `ok path=${path} bytes=${image.length}`)
   return {
