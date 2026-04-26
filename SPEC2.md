@@ -7,7 +7,7 @@
 建议二期不要直接替换现有 LiveUI，而是新增一个可选的 `real2d` 渲染链路：
 
 - 保留现有 Live2D/PNG 作为稳定 fallback。
-- 新增 Python 渲染服务，负责 LivePortrait/FasterLivePortrait 推理、关键点融合和视频帧输出。
+- 在父目录新增独立 Python service repo，负责 LivePortrait/FasterLivePortrait 推理、关键点融合和视频帧输出。
 - Node/Electron 侧只负责 LLM 标签解析、TTS 音频流、状态调度和前端播放，不把 CUDA/TensorRT 逻辑塞进主包。
 - 第一阶段优先跑通“单图 + 手动参数 + 本地预览”，第二阶段再接语音口型，第三阶段再做实时流与 TensorRT 优化。
 
@@ -61,9 +61,29 @@ flowchart LR
 推荐模块划分：
 
 - Node 主进程：继续负责 LLM、TTS、ASR、会话、配置、WebSocket。
-- `src/real2d/*`：新增 Real2D 配置、协议类型、服务启动/健康检查、消息桥接。
-- Python 服务：独立进程，加载 LivePortrait/FasterLivePortrait 权重，维护 source image cache，执行关键点融合和帧渲染。
+- `infiniti-real2d-service`：父目录独立 repo，加载 LivePortrait/FasterLivePortrait 权重，维护 source image cache，执行关键点融合和帧渲染。
+- `infiniti-agent/src/real2d/*`：只保留 Real2D client、协议类型、健康检查、消息桥接，不放 Python/CUDA/TensorRT 推理代码。
 - Electron 前端：新增一种 avatar renderer mode，支持接收视频帧或 MJPEG/WebRTC 流，渲染到 Canvas/Video。
+
+## 4.1 仓库拆分策略
+
+第二期开始，项目应明确区分“Agent 编排层”和“重模型服务层”：
+
+```text
+/Users/stelee/Dev/infiniti-agent/
+├── infiniti-agent/          # Node/Electron 主仓：CLI、TUI、LiveUI、会话、ASR、服务 client
+├── infiniti-llm-service/    # Ollama/vLLM 启动、健康检查、OpenAI-compatible profile
+├── infiniti-tts-service/    # VoxCPM/MOSS-TTS-Nano 等本地 TTS 服务
+└── infiniti-real2d-service/ # LivePortrait/FasterLivePortrait/MuseTalk/Wav2Lip 渲染服务
+```
+
+拆分原则：
+
+- 依赖 Python/CUDA/TensorRT/PyTorch 的能力放独立 service repo。
+- 需要下载大模型权重的能力放独立 service repo。
+- 需要长驻进程、健康检查、单独性能优化的能力放独立 service repo。
+- 与 LiveUI 麦克风、VAD、打断强耦合且当前为 Node 依赖的 ASR，暂时保留在 `infiniti-agent` 主仓。
+- 主仓只保存 service client、配置类型、协议类型和 fallback 编排。
 
 ## 5. 核心设计
 
@@ -444,15 +464,21 @@ LivePortrait 权重、PyTorch、TensorRT 不适合塞进 npm 包。
 
 建议优先新增或修改：
 
+在 `infiniti-real2d-service`：
+
+- `scripts/setup-real2d-venv.sh`：安装 Python 环境。
+- `scripts/start-real2d-renderer.sh`：启动渲染服务。
+- `real2d_service/app.py`：FastAPI/WebSocket 服务入口。
+- `real2d_service/protocol.py`：服务侧协议类型。
+- `tools/real2d-smoke-test.py`：离线参数验证。
+
+在 `infiniti-agent`：
+
 - `src/config/types.ts`：增加 `liveUi.renderer` 和 `liveUi.real2d` 配置类型。
 - `src/config/io.ts`：解析 real2d 配置。
 - `src/real2d/client.ts`：Node 到 Python 服务客户端。
 - `src/real2d/protocol.ts`：协议类型定义。
 - `src/liveui/wsSession.ts`：桥接 real2d status/frame/param。
 - `liveui/src/main.ts`：新增 `real2d` renderer mode。
-- `scripts/setup-real2d-venv.sh`：安装 Python 环境。
-- `scripts/start-real2d-renderer.sh`：启动渲染服务。
-- `tools/real2d-smoke-test.py`：离线参数验证。
 
 这一批落点完成后，再决定是否引入 MuseTalk/Wav2Lip-Light。
-

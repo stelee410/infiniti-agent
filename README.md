@@ -23,56 +23,60 @@ infiniti-agent
 
 ## 本地全栈：大模型与 TTS
 
-要完整跑通 **对话（LLM）+ 语音（TTS）**，需各开一个终端：先起本机大模型服务，再起 TTS 服务，最后在项目里配置好 `~/.infiniti-agent/config.json` 或项目下 `.infiniti-agent/config.json`（`infiniti-agent migrate` 后）。以下命令均假设你在 **本仓库包根**（与 `package.json`、`scripts/` 同目录，即 `…/infiniti-agent/infiniti-agent`）执行。
+要完整跑通 **对话（LLM）+ 语音（TTS）**，先在兄弟 service 仓库启动本地模型服务，然后在 `~/.infiniti-agent/config.json` 或项目下 `.infiniti-agent/config.json`（`infiniti-agent migrate` 后）里配置 service URL。
+
+本仓库现在定位为 **Agent 编排层**：CLI / TUI / LiveUI / 会话 / LLM 调度 / TTS client / ASR。重模型服务建议放在兄弟仓库独立运行：
+
+- `../infiniti-llm-service`：Ollama / vLLM 启动、健康检查、延迟测试。
+- `../infiniti-tts-service`：VoxCPM2 / MOSS-TTS-Nano ONNX 安装、模型下载、HTTP 服务。
+
+主仓只需要知道这些服务的 URL。配置片段见 `docs/services.fragment.json`；仓库内旧 TTS 脚本会暂时保留用于兼容，新的开发和部署优先使用独立 service 仓库。
 
 ### 大模型（LLM）
 
-本项目的 LLM 走 **OpenAI 兼容** HTTP API（`provider: "openai"`）。本机需自行启动任意兼容服务，**无**随仓库分发的 `start-llm` 脚本，常用方式如下（选一即可）。
+本项目的 LLM 走 **OpenAI 兼容** HTTP API（`provider: "openai"`）。本机服务由 `../infiniti-llm-service` 启动；主仓只配置 `baseUrl`、`model`、`apiKey`。
 
-**Ollama（常见）**
+常用 service URL：
 
-```bash
-# 终端 1：保持运行
-ollama serve
+- Ollama：`http://127.0.0.1:11434/v1`
+- vLLM：`http://127.0.0.1:8000/v1`
+- LM Studio 等：使用工具界面提供的 OpenAI-compatible `baseUrl`
 
-# 终端 2：拉模型（示例）
-ollama pull qwen2.5:7b
+示例：
+
+```json
+{
+  "llm": {
+    "provider": "openai",
+    "baseUrl": "http://127.0.0.1:11434/v1",
+    "model": "qwen2.5:7b",
+    "apiKey": "ollama",
+    "disableTools": true
+  }
+}
 ```
-
-在 `config.json` 的 `llm` / `llm.profiles` 中设置例如：`"baseUrl": "http://127.0.0.1:11434/v1"`，`"model": "qwen2.5:7b"`，`"apiKey": "ollama"`（或任意非空占位）。若该模型**不支持**工具/函数调用，在对应 profile 加 `"disableTools": true`（与 `src/config/types.ts` 说明一致）。
-
-**vLLM（GPU 推理）**
-
-```bash
-vllm serve <模型名或本地路径> --host 0.0.0.0 --port 8000
-```
-
-`baseUrl` 填 `http://127.0.0.1:8000/v1`，`model` 与 vLLM 所加载的模型名一致。
-
-**LM Studio 等** 在本地打开「OpenAI 兼容服务」后，将界面提供的 `baseUrl` 与模型名写入配置即可。
 
 ### TTS
 
-仓库内提供 VoxCPM2 与 MOSS-TTS-Nano（ONNX）两套 **启动脚本**（路径相对包根 `scripts/`）。
+TTS 服务由 `../infiniti-tts-service` 独立启动；主仓只配置 `provider` 和 `baseUrl`，以及声音参数。
 
-**VoxCPM2（推荐）**
+常用 service URL：
 
-```bash
-./scripts/setup-voxcpm-venv.sh
-./scripts/start-voxcpm-tts-serve.sh --port 8810
+- VoxCPM2：`http://127.0.0.1:8810`
+- MOSS-TTS-Nano ONNX：`http://127.0.0.1:18083`
+
+示例：
+
+```json
+{
+  "tts": {
+    "provider": "voxcpm",
+    "baseUrl": "http://127.0.0.1:8810",
+    "controlInstruction": "年轻女性，温柔自然",
+    "amplitudeNormalize": "rms"
+  }
+}
 ```
-
-环境变量、镜像与 `config.tts` 中 `voxcpm` / `baseUrl` 等说明见下节「TTS（`config.tts`）」及 `src/config/types.ts`。
-
-**MOSS-TTS-Nano（ONNX，可选）**
-
-```bash
-./scripts/setup-moss-tts-onnx-venv.sh
-./scripts/download-moss-onnx-models.sh
-./scripts/start-moss-tts-onnx.sh
-```
-
-默认监听 `http://127.0.0.1:18083`；配置里 `provider` 为 `moss_tts_nano` 时与此对应。
 
 ## 命令一览
 
@@ -122,7 +126,7 @@ npm run setup:liveui -- ~/your-project
 
 将 Open-LLM-VTuber 的 `live2d-models` 文件夹拷到项目根下的 `live2d-models/`，与 `model_dict.json` 中的 `url` 一致即可校验通过。
 
-**TTS（`config.tts`）**（`setup` / 启动脚本的**完整命令**见上文「### TTS」；以下为环境变量与配置字段补充）：除 MiniMax、MOSS-TTS-Nano 外，可选用 **[VoxCPM2](https://github.com/OpenBMB/VoxCPM)**。推荐流程：`./scripts/setup-voxcpm-venv.sh`（创建 `third_party/voxcpm-venv`、安装依赖后**默认**拉取 `openbmb/VoxCPM2` 到 `./models/VoxCPM2`；仅装环境不下载可设 `VOXCPM_SKIP_MODEL_DOWNLOAD=1`）→ `./scripts/start-voxcpm-tts-serve.sh --port 8810`。若曾跳过下载，可单独执行 `./scripts/download-voxcpm-model.sh`。未设 `HF_TOKEN` 时仍可下载，但速率较低；国内可在执行 setup / 下载脚本前设 `HF_ENDPOINT=https://hf-mirror.com`。配置中设置 `"provider": "voxcpm"` 与 `"baseUrl": "http://127.0.0.1:8810"`；可选 `referenceAudioPath`、`controlInstruction`、`amplitudeNormalize`（`rms` / `peak` / `none`，默认 `rms`，减轻句与句电平差）等见 `src/config/types.ts` 的 `VoxcpmTtsConfig`。
+**TTS（`config.tts`）**：本仓库只作为 TTS client 调用外部 service。VoxCPM2、MOSS-TTS-Nano ONNX 的安装、模型下载和启动见 `../infiniti-tts-service`；这里仅配置 `"provider"` 与 `"baseUrl"`。VoxCPM2 可选 `referenceAudioPath`、`controlInstruction`、`amplitudeNormalize`（`rms` / `peak` / `none`，默认 `rms`）等字段，详见 `src/config/types.ts` 的 `VoxcpmTtsConfig`。
 
 **常用选项：**
 
