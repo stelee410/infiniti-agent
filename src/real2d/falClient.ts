@@ -11,6 +11,7 @@ export type FalAvatarRenderRequest = {
   channels: number
   text?: string
   fal: Real2dFalConfig
+  onLog?: (message: string) => void
 }
 
 export type FalAvatarRenderResult = {
@@ -33,6 +34,7 @@ export async function renderFalAiAvatar(req: FalAvatarRenderRequest): Promise<Fa
   const key = resolveFalKey(req.fal)
   const model = req.fal.model ?? 'fal-ai/ai-avatar'
   const input = await buildAiAvatarInput(req)
+  req.onLog?.(`submit ${model}`)
   const submitted = await falRequest<FalSubmitResponse>(`https://queue.fal.run/${model}`, key, {
     method: 'POST',
     body: JSON.stringify(input),
@@ -41,16 +43,23 @@ export async function renderFalAiAvatar(req: FalAvatarRenderRequest): Promise<Fa
   const statusUrl = submitted.status_url ?? `https://queue.fal.run/${model}/requests/${requestId}/status`
   const responseUrl = submitted.response_url ?? `https://queue.fal.run/${model}/requests/${requestId}`
   if (!requestId) throw new Error('fal submit response missing request_id')
+  req.onLog?.(`request ${requestId} submitted`)
 
   const timeoutMs = req.fal.requestTimeoutMs ?? 300000
   const pollMs = req.fal.pollIntervalMs ?? 1000
   const deadline = Date.now() + timeoutMs
+  let lastStatus = ''
   while (Date.now() < deadline) {
     const status = await falRequest<FalStatusResponse>(`${statusUrl}${statusUrl.includes('?') ? '&' : '?'}logs=1`, key)
+    if (status.status && status.status !== lastStatus) {
+      lastStatus = status.status
+      req.onLog?.(`request ${requestId} status ${status.status}`)
+    }
     if (status.status === 'COMPLETED') {
       const result = await falRequest<unknown>(responseUrl, key)
       const videoUrl = extractFalVideoUrl(result)
       if (!videoUrl) throw new Error('fal result missing video.url')
+      req.onLog?.(`request ${requestId} complete`)
       return { videoUrl, requestId }
     }
     if (status.status && status.status !== 'IN_QUEUE' && status.status !== 'IN_PROGRESS') {
@@ -143,8 +152,11 @@ async function falRequest<T>(url: string, key: string, init: RequestInit = {}): 
 
 function extractFalVideoUrl(result: unknown): string | undefined {
   const data = result && typeof result === 'object' ? result as Record<string, unknown> : {}
-  const video = data.video && typeof data.video === 'object' ? data.video as Record<string, unknown> : undefined
-  return typeof video?.url === 'string' ? video.url : undefined
+  const directVideo = data.video && typeof data.video === 'object' ? data.video as Record<string, unknown> : undefined
+  if (typeof directVideo?.url === 'string') return directVideo.url
+  const nested = data.data && typeof data.data === 'object' ? data.data as Record<string, unknown> : undefined
+  const nestedVideo = nested?.video && typeof nested.video === 'object' ? nested.video as Record<string, unknown> : undefined
+  return typeof nestedVideo?.url === 'string' ? nestedVideo.url : undefined
 }
 
 function delay(ms: number): Promise<void> {

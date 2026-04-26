@@ -145,6 +145,14 @@ export class LiveUiSession {
     this.real2dBackend = 'fal'
     this.real2dSourceImage = opts.sourceImage
     this.real2dFal = opts.fal
+    if (!this.real2dFal) {
+      console.warn('[liveui] real2d fal 未配置：请在 LiveUI 配置面板填写 fal API Key / model')
+    } else if (!this.real2dFal.apiKey && !process.env[this.real2dFal.keyEnv ?? 'FAL_KEY']) {
+      console.warn(`[liveui] real2d fal API Key 缺失：请填写 real2d.fal.apiKey 或环境变量 ${this.real2dFal.keyEnv ?? 'FAL_KEY'}`)
+    }
+    if (!this.real2dSourceImage && !this.real2dFal?.imageUrl) {
+      console.warn('[liveui] real2d fal sourceImage 缺失：请在配置面板选择本地图片，或填写 fal.imageUrl')
+    }
     this.broadcast({
       type: 'REAL2D_STATUS',
       data: { ready: !!this.real2dFal, backend: 'fal-ai/ai-avatar', message: this.real2dFal ? undefined : 'fal config missing' },
@@ -753,6 +761,9 @@ export class LiveUiSession {
     channels: number,
   ): void {
     if (this.real2dBackend !== 'fal' || !this.real2dFal) return
+    console.error(
+      `[liveui] fal ai-avatar 开始: audio=${audio.length} bytes, format=${audioFormat}, source=${this.real2dSourceImage ? 'local-file' : this.real2dFal.imageUrl ? 'image-url' : 'missing'}`,
+    )
     const generation = this.ttsGeneration
     this.broadcast({
       type: 'REAL2D_STATUS',
@@ -766,8 +777,10 @@ export class LiveUiSession {
       channels,
       text,
       fal: this.real2dFal,
+      onLog: (message) => console.error(`[liveui] fal ${message}`),
     }).then((result) => {
       if (generation !== this.ttsGeneration) return
+      console.error(`[liveui] fal ai-avatar 完成: request=${result.requestId}`)
       this.broadcast({
         type: 'REAL2D_VIDEO',
         data: { sessionId: this.real2dSessionId, url: result.videoUrl, requestId: result.requestId },
@@ -777,6 +790,7 @@ export class LiveUiSession {
         data: { ready: true, backend: this.real2dFal?.model ?? 'fal-ai/ai-avatar', message: 'fal render complete' },
       } as LiveUiMessage)
     }).catch((e) => {
+      console.warn(`[liveui] fal ai-avatar 失败: ${(e as Error).message}`)
       this.broadcast({
         type: 'REAL2D_STATUS',
         data: { ready: false, backend: this.real2dFal?.model ?? 'fal-ai/ai-avatar', message: (e as Error).message },
