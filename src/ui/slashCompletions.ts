@@ -85,6 +85,13 @@ const COMMAND_ITEMS: SlashItem[] = [
     insert: '/speak ',
   },
   {
+    id: '/snap',
+    kind: 'command',
+    label: '/snap',
+    desc: '用已确认照片和 agent 参考图生成合照；无照片时按提示词生成写实照片',
+    insert: '/snap ',
+  },
+  {
     id: '/undo',
     kind: 'command',
     label: '/undo',

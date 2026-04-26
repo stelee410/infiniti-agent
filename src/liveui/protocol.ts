@@ -119,6 +119,21 @@ export type LiveUiVisionAttachment = {
   }
 }
 
+export type LiveUiVisionCaptureResultMessage = {
+  type: 'VISION_CAPTURE_RESULT'
+  data: {
+    requestId: string
+    ok: boolean
+    vision?: LiveUiVisionAttachment
+    error?: string
+  }
+}
+
+export type LiveUiVisionAttachmentClearMessage = {
+  type: 'VISION_ATTACHMENT_CLEAR'
+  data?: Record<string, never>
+}
+
 export type LiveUiMessage =
   | LiveUiSyncParamMessage
   | LiveUiActionMessage
@@ -132,6 +147,8 @@ export type LiveUiMessage =
   | LiveUiSlashCompletionMessage
   | LiveUiConfigOpenMessage
   | LiveUiConfigStatusMessage
+  | LiveUiVisionCaptureResultMessage
+  | LiveUiVisionAttachmentClearMessage
 
 export function isLiveUiMessage(x: unknown): x is LiveUiMessage {
   if (!x || typeof x !== 'object') return false
@@ -184,7 +201,7 @@ export function isLiveUiMessage(x: unknown): x is LiveUiMessage {
     }
     return true
   }
-  if (o.type === 'AUDIO_RESET' || o.type === 'INTERRUPT') return true
+  if (o.type === 'AUDIO_RESET' || o.type === 'INTERRUPT' || o.type === 'VISION_ATTACHMENT_CLEAR') return true
   if (o.type === 'TTS_STATUS' || o.type === 'ASR_STATUS') {
     const d = (x as { data?: unknown }).data
     if (!d || typeof d !== 'object') return false
@@ -223,6 +240,12 @@ export function isLiveUiMessage(x: unknown): x is LiveUiMessage {
     if (!d || typeof d !== 'object') return false
     const dd = d as { ok?: unknown; message?: unknown }
     return typeof dd.ok === 'boolean' && typeof dd.message === 'string'
+  }
+  if (o.type === 'VISION_CAPTURE_RESULT') {
+    const d = (x as { data?: unknown }).data
+    if (!d || typeof d !== 'object') return false
+    const dd = d as { requestId?: unknown; ok?: unknown }
+    return typeof dd.requestId === 'string' && typeof dd.ok === 'boolean'
   }
   return false
 }

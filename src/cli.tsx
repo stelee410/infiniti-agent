@@ -35,6 +35,7 @@ import { createSherpaOnnxAsr } from './asr/sherpaOnnxAsr.js'
 import { spawnLiveElectron } from './liveui/spawnRenderer.js'
 import { buildLiveUiVoiceMicEnvJson, VOICE_MIC_DEFAULT_SPEECH_RMS_THRESHOLD } from './liveui/voiceMicEnv.js'
 import { runTestAsr, parseTestAsrRms, parseTestAsrInt } from './cli/testAsr.js'
+import { runTestCamera, parseTestCameraInt } from './cli/testCamera.js'
 import { resolveLive2dModelForUi, resolveSpriteExpressionDirForUi } from './liveui/resolveModelPath.js'
 import { runAddLlm, runSelectLlm } from './cli/llmCli.js'
 import { runLinkyunSync } from './cli/linkyunSync.js'
@@ -496,6 +497,23 @@ async function main(): Promise<void> {
           })
         },
       })
+    })
+
+  program
+    .command('test_camera')
+    .alias('test-camera')
+    .description('摄像头拍照测试：通过 CLI 后端直接拍一张 JPEG 到 /tmp，并输出完整日志路径。')
+    .option('--output <path>', '图片输出路径（默认 /tmp/infiniti-agent-camera-<time>.jpg）')
+    .option('--log <path>', '日志输出路径（默认 /tmp/infiniti-agent-camera-<time>.log）')
+    .option('--timeout-ms <n>', '测试总超时（毫秒）', '20000')
+    .action(async (cmdOpts: { output?: string; log?: string; timeoutMs?: string }) => {
+      const timeoutMs = parseTestCameraInt(cmdOpts.timeoutMs, 20000, '--timeout-ms')
+      const code = await runTestCamera({
+        output: cmdOpts.output,
+        log: cmdOpts.log,
+        timeoutMs,
+      })
+      process.exit(code)
     })
 
   program

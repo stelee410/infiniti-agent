@@ -36,6 +36,7 @@ import {
 import { parseSpeakCommandLine } from '../liveui/speakCommandLine.js'
 import type { LiveUiInteractionKind, LiveUiSession } from '../liveui/wsSession.js'
 import type { LiveUiStatusVariant, LiveUiVisionAttachment } from '../liveui/protocol.js'
+import { generateSnapPhoto } from '../snap/generateSnap.js'
 import {
   collectNewTtsSegments,
   splitTtsSegments,
@@ -413,9 +414,48 @@ export function ChatApp({
       }
       if (raw === '/help') {
         setError(
-          '输入 / 可补全：斜杠命令与全部工具（↑↓ Tab）。命令: /exit /clear /reload /config /memory /undo /compact /permission /speak — /config 仅 Live 模式打开配置面板；/speak 后接正文仅 TTS 朗读、不写会话（Live 下测音色）。改文件/bash/HTTP 默认需确认（Y 允许 · A 本次会话始终允许该工具 · N 拒绝）；启动时加 --dangerously-skip-permissions 可跳过所有确认。/permission 查看当前状态。/compact 压缩较早历史。卡死排查：INFINITI_AGENT_DEBUG=1。',
+          '输入 / 可补全：斜杠命令与全部工具（↑↓ Tab）。命令: /exit /clear /reload /config /memory /undo /compact /permission /speak /snap — /config 仅 Live 模式打开配置面板；/speak 后接正文仅 TTS 朗读、不写会话；/snap 后接提示词生成合照/写实照片。改文件/bash/HTTP 默认需确认（Y 允许 · A 本次会话始终允许该工具 · N 拒绝）；启动时加 --dangerously-skip-permissions 可跳过所有确认。/permission 查看当前状态。/compact 压缩较早历史。卡死排查：INFINITI_AGENT_DEBUG=1。',
         )
         setInput('')
+        return
+      }
+      if (raw === '/snap' || raw.startsWith('/snap ')) {
+        const prompt = raw.startsWith('/snap ') ? raw.slice('/snap '.length).trim() : ''
+        if (!prompt) {
+          setError('/snap 后请输入提示词，例如：/snap 在咖啡馆自拍，暖色灯光')
+          setInput('')
+          return
+        }
+        if (busyRef.current) return
+        setBusy(true)
+        setError(null)
+        setNotice('正在生成合照照片…')
+        setInput('')
+        const snapVision = vision ?? liveUi?.consumePendingVisionAttachment()
+        if (snapVision) liveUi?.clearVisionAttachment()
+        try {
+          const result = await generateSnapPhoto(cwd, config, prompt, snapVision)
+          const content =
+            `已生成照片：${result.path}\n` +
+            `provider=${result.provider}, model=${result.model}, bytes=${result.bytes}` +
+            `${result.usedUserPhoto ? '，已使用用户照片' : '，未使用用户照片'}` +
+            `${result.usedAgentReference ? '，已使用 agent 参考图' : '，未找到 agent 参考图'}`
+          const next: PersistedMessage[] = [
+            ...messages,
+            { role: 'user', content: raw },
+            { role: 'assistant', content },
+          ]
+          setMessages(next)
+          await saveSession(cwd, next)
+          setNotice(content)
+          setTimeout(() => setNotice(null), 12000)
+          liveUi?.sendAssistantStream(content, true)
+        } catch (e: unknown) {
+          setError(formatChatError(e))
+          setNotice(null)
+        } finally {
+          setBusy(false)
+        }
         return
       }
       if (raw === '/compact' || raw.startsWith('/compact ')) {
@@ -534,12 +574,14 @@ export function ChatApp({
         }
       }
 
+      const turnVision = vision ?? liveUi?.consumePendingVisionAttachment()
+
       const nextMsgs: PersistedMessage[] = [
         ...baseMessages,
         {
           role: 'user',
-          content: vision ? `${userLine}\n\n[已附带视觉快照]` : userLine,
-          ...(vision ? { vision } : {}),
+          content: turnVision ? `${userLine}\n\n[已附带视觉快照]` : userLine,
+          ...(turnVision ? { vision: turnVision } : {}),
         },
       ]
       setMessages(nextMsgs)
@@ -652,8 +694,8 @@ export function ChatApp({
 
   useEffect(() => {
     if (!liveUi) return
-    return liveUi.onUserLine((line, vision) => {
-      void handleSubmit(line, vision)
+    return liveUi.onUserLine((line) => {
+      void handleSubmit(line)
     })
   }, [liveUi, handleSubmit])
 

@@ -15,9 +15,10 @@ import { StreamMouthEstimator } from './streamMouth.js'
 import type { TtsEngine } from '../tts/engine.js'
 import { markdownToTtsPlainText } from '../tts/markdownToTtsPlainText.js'
 import type { AsrEngine } from '../asr/whisperAsr.js'
+import { captureVisionSnapshotResult } from './visionCapture.js'
 
 export type LiveUiConnectionListener = (connected: boolean) => void
-export type LiveUiUserLineListener = (line: string, vision?: LiveUiVisionAttachment) => void
+export type LiveUiUserLineListener = (line: string) => void
 /** 渲染端输入框草稿（含未发送的 `/` 前缀），用于与 TUI 同步斜杠补全。 */
 export type LiveUiUserComposerListener = (text: string) => void
 export type LiveUiInterruptListener = () => void
@@ -47,6 +48,8 @@ export class LiveUiSession {
   private ttsPending: Promise<void> = Promise.resolve()
   private ttsGeneration = 0
   private asrEngine: AsrEngine | null = null
+  private lastVisionCapture: { requestId: string; vision: LiveUiVisionAttachment } | undefined
+  private pendingVisionAttachment: LiveUiVisionAttachment | undefined
 
   constructor(port: number) {
     this.port = port
@@ -103,10 +106,22 @@ export class LiveUiSession {
     }
   }
 
-  private emitUserLine(line: string, vision?: LiveUiVisionAttachment): void {
+  private emitUserLine(line: string): void {
     for (const f of this.userLineListeners) {
-      f(line, vision)
+      f(line)
     }
+  }
+
+  consumePendingVisionAttachment(): LiveUiVisionAttachment | undefined {
+    const vision = this.pendingVisionAttachment
+    this.pendingVisionAttachment = undefined
+    return vision
+  }
+
+  clearVisionAttachment(): void {
+    this.pendingVisionAttachment = undefined
+    this.lastVisionCapture = undefined
+    this.broadcast({ type: 'VISION_ATTACHMENT_CLEAR', data: {} } as LiveUiMessage)
   }
 
   /** 渲染端输入框内容变化（含空串，用于清空 TUI 草稿状态）。 */
@@ -195,7 +210,6 @@ export class LiveUiSession {
           if (t === 'USER_INPUT' && parsed.data && typeof parsed.data === 'object') {
             const line = (parsed.data as { line?: unknown }).line
             if (typeof line !== 'string' || !line.trim()) return
-            const vision = parseVisionAttachment((parsed.data as { vision?: unknown }).vision)
             const trimmed = line.trimEnd()
             const speakText = parseSpeakCommandLine(trimmed)
             if (speakText !== undefined) {
@@ -205,7 +219,35 @@ export class LiveUiSession {
               }
               return
             }
-            this.emitUserLine(trimmed, vision)
+            this.emitUserLine(trimmed)
+            return
+          }
+          if (t === 'VISION_CAPTURE_REQUEST' && parsed.data && typeof parsed.data === 'object') {
+            void this.handleVisionCaptureRequest(ws, parsed.data)
+            return
+          }
+          if (t === 'VISION_CAPTURE_CONFIRM' && parsed.data && typeof parsed.data === 'object') {
+            const requestId = (parsed.data as { requestId?: unknown }).requestId
+            const localVision = parseVisionAttachment((parsed.data as { vision?: unknown }).vision)
+            if (typeof requestId === 'string' && localVision) {
+              this.pendingVisionAttachment = localVision
+              this.lastVisionCapture = { requestId, vision: localVision }
+              console.error(`[liveui] local vision attachment confirmed: ${requestId}`)
+            } else if (typeof requestId === 'string' && this.lastVisionCapture?.requestId === requestId) {
+              this.pendingVisionAttachment = this.lastVisionCapture.vision
+              console.error(`[liveui] vision attachment confirmed: ${requestId}`)
+            }
+            return
+          }
+          if (t === 'VISION_CAPTURE_CANCEL' && parsed.data && typeof parsed.data === 'object') {
+            const requestId = (parsed.data as { requestId?: unknown }).requestId
+            if (typeof requestId === 'string' && this.lastVisionCapture?.requestId === requestId) {
+              this.lastVisionCapture = undefined
+            }
+            return
+          }
+          if (t === 'VISION_ATTACHMENT_CLEAR') {
+            this.pendingVisionAttachment = undefined
             return
           }
           if (t === 'USER_COMPOSER' && parsed.data && typeof parsed.data === 'object') {
@@ -363,6 +405,37 @@ export class LiveUiSession {
     })
   }
 
+  private async handleVisionCaptureRequest(ws: WebSocket, data: unknown): Promise<void> {
+    const requestId =
+      data && typeof data === 'object' && typeof (data as { requestId?: unknown }).requestId === 'string'
+        ? (data as { requestId: string }).requestId
+        : ''
+    if (!requestId) return
+    const location =
+      data && typeof data === 'object'
+        ? parseVisionLocation((data as { location?: unknown }).location)
+        : undefined
+
+    console.error(`[liveui] vision capture requested: ${requestId}`)
+    const result = await captureVisionSnapshotResult({ location })
+    if (result.ok) {
+      this.lastVisionCapture = { requestId, vision: result.vision }
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+          type: 'VISION_CAPTURE_RESULT',
+          data: { requestId, ok: true, vision: result.vision },
+        } as LiveUiMessage))
+      }
+      return
+    }
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        type: 'VISION_CAPTURE_RESULT',
+        data: { requestId, ok: false, error: result.error },
+      } as LiveUiMessage))
+    }
+  }
+
   private async handleMicAudio(audioBase64: string, format: string, ws: WebSocket): Promise<void> {
     if (!this.asrEngine) return
     try {
@@ -419,6 +492,27 @@ export class LiveUiSession {
   }
 }
 
+function parseVisionLocation(raw: unknown): LiveUiVisionAttachment['location'] | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const loc = raw as { latitude?: unknown; longitude?: unknown; accuracy?: unknown }
+  if (
+    typeof loc.latitude !== 'number' ||
+    !Number.isFinite(loc.latitude) ||
+    typeof loc.longitude !== 'number' ||
+    !Number.isFinite(loc.longitude)
+  ) {
+    return undefined
+  }
+  const out: NonNullable<LiveUiVisionAttachment['location']> = {
+    latitude: loc.latitude,
+    longitude: loc.longitude,
+  }
+  if (typeof loc.accuracy === 'number' && Number.isFinite(loc.accuracy)) {
+    out.accuracy = loc.accuracy
+  }
+  return out
+}
+
 function parseVisionAttachment(raw: unknown): LiveUiVisionAttachment | undefined {
   if (!raw || typeof raw !== 'object') return undefined
   const v = raw as {
@@ -427,35 +521,17 @@ function parseVisionAttachment(raw: unknown): LiveUiVisionAttachment | undefined
     capturedAt?: unknown
     location?: unknown
   }
-  const mediaType = v.mediaType
   if (
     typeof v.imageBase64 !== 'string' ||
     typeof v.capturedAt !== 'string' ||
-    (mediaType !== 'image/jpeg' && mediaType !== 'image/png' && mediaType !== 'image/webp')
+    (v.mediaType !== 'image/jpeg' && v.mediaType !== 'image/png' && v.mediaType !== 'image/webp')
   ) {
     return undefined
   }
-  const out: LiveUiVisionAttachment = {
+  return {
     imageBase64: v.imageBase64,
-    mediaType,
+    mediaType: v.mediaType,
     capturedAt: v.capturedAt,
+    ...(parseVisionLocation(v.location) ? { location: parseVisionLocation(v.location) } : {}),
   }
-  if (v.location && typeof v.location === 'object') {
-    const loc = v.location as { latitude?: unknown; longitude?: unknown; accuracy?: unknown }
-    if (
-      typeof loc.latitude === 'number' &&
-      Number.isFinite(loc.latitude) &&
-      typeof loc.longitude === 'number' &&
-      Number.isFinite(loc.longitude)
-    ) {
-      out.location = {
-        latitude: loc.latitude,
-        longitude: loc.longitude,
-      }
-      if (typeof loc.accuracy === 'number' && Number.isFinite(loc.accuracy)) {
-        out.location.accuracy = loc.accuracy
-      }
-    }
-  }
-  return out
 }

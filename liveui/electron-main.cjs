@@ -1,6 +1,39 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 const { app, BrowserWindow, Menu, ipcMain, dialog } = require('electron')
+const fs = require('fs')
+const os = require('os')
 const path = require('path')
+const util = require('util')
+
+const liveUiLogFile =
+  process.env.INFINITI_LIVEUI_LOG_FILE ||
+  path.join(os.homedir(), '.infiniti-agent', 'logs', 'liveui-electron.log')
+
+function formatLogArg(arg) {
+  if (arg instanceof Error) return arg.stack || arg.message
+  if (typeof arg === 'string') return arg
+  return util.inspect(arg, { depth: 6, breakLength: 180, colors: false })
+}
+
+function appendLogLine(level, args) {
+  try {
+    fs.mkdirSync(path.dirname(liveUiLogFile), { recursive: true })
+    const msg = args.map(formatLogArg).join(' ')
+    fs.appendFileSync(liveUiLogFile, `${new Date().toISOString()} [${level}] ${msg}\n`, 'utf8')
+  } catch {
+    /* logging must never break LiveUI */
+  }
+}
+
+for (const level of ['debug', 'info', 'warn', 'error']) {
+  const original = console[level].bind(console)
+  console[level] = (...args) => {
+    original(...args)
+    appendLogLine(level, args)
+  }
+}
+
+console.error(`[liveui] log file: ${liveUiLogFile}`)
 
 // LiveUI TTS：Web Audio 在无用户手势时默认 suspended；放宽策略以便首包语音可播。
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required')
@@ -86,7 +119,14 @@ function createWindow() {
     win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
   }
 
+  win.webContents.session.setPermissionCheckHandler((_webContents, permission) => {
+    const ok = permission === 'media' || permission === 'geolocation'
+    console.error(`[liveui] permission-check ${permission}: ${ok ? 'allow' : 'deny'}`)
+    return ok
+  })
+
   win.webContents.session.setPermissionRequestHandler((_webContents, permission, callback) => {
+    console.error(`[liveui] permission-request ${permission}`)
     if (permission === 'media' || permission === 'geolocation') {
       callback(true)
       return
@@ -167,6 +207,12 @@ function createWindow() {
     })
     if (result.canceled || result.filePaths.length === 0) return null
     return result.filePaths[0] || null
+  })
+
+  win.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+    const levelName = ['verbose', 'info', 'warning', 'error'][level] ?? String(level)
+    const where = sourceId ? ` (${sourceId}:${line})` : ''
+    console.error(`[liveui:renderer:${levelName}] ${message}${where}`)
   })
 
   win.loadFile(indexHtml, { query: { port } }).catch((err) => {

@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { PACKAGE_ROOT } from '../packageRoot.js'
 
-function resolveElectronCliJs(): string | null {
+export function resolveElectronCliJs(): string | null {
   const direct = [
     join(PACKAGE_ROOT, 'node_modules', 'electron', 'cli.js'),
     join(PACKAGE_ROOT, 'liveui', 'node_modules', 'electron', 'cli.js'),
@@ -70,7 +70,13 @@ export function spawnLiveElectron(port: number, opts?: LiveUiElectronSpawnOption
         : {}),
     },
     detached: false,
-    stdio: 'ignore',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  child.stdout?.on('data', (d: Buffer) => {
+    process.stderr.write(`[liveui:electron] ${d.toString('utf8')}`)
+  })
+  child.stderr?.on('data', (d: Buffer) => {
+    process.stderr.write(`[liveui:electron] ${d.toString('utf8')}`)
   })
   child.on('error', (e) => {
     console.error(`[liveui] Electron 启动失败: ${(e as Error).message}`)

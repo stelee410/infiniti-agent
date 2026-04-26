@@ -55,6 +55,9 @@ declare global {
       /** Electron：选择本地文件或目录 */
       selectPath?: (opts: { kind: 'file' | 'directory'; defaultPath?: string }) => Promise<string | null>
     }
+    ImageCapture?: new (track: MediaStreamTrack) => {
+      grabFrame: () => Promise<ImageBitmap>
+    }
     /** pixi-live2d-display 依赖全局 PIXI.Ticker */
     PIXI: typeof PIXI
   }
@@ -112,6 +115,16 @@ type ConfigStatusMsg = {
   data: { ok?: unknown; message?: unknown }
 }
 
+type VisionCaptureResultMsg = {
+  type: 'VISION_CAPTURE_RESULT'
+  data: {
+    requestId?: unknown
+    ok?: unknown
+    vision?: unknown
+    error?: unknown
+  }
+}
+
 type Msg =
   | SyncParam
   | ActionMsg
@@ -125,6 +138,7 @@ type Msg =
   | SlashCompletionMsg
   | ConfigOpenMsg
   | ConfigStatusMsg
+  | VisionCaptureResultMsg
 
 const FACE_RADIUS = 110
 
@@ -923,12 +937,15 @@ async function bootstrap(): Promise<void> {
     socket.send(JSON.stringify({ type: 'LIVEUI_INTERACTION', data: { kind } }))
   }
 
-  let visionEnabled = false
-  let visionStream: MediaStream | null = null
-  let visionLocation: LiveUiVisionAttachment['location'] | undefined
-  const visionVideo = document.createElement('video')
-  visionVideo.muted = true
-  visionVideo.playsInline = true
+  let cameraCapturing = false
+  let cameraCaptureSeq = 0
+  let activeCameraRequestId = ''
+  let previewPhotoRequestId = ''
+  let previewPhotoVision: LiveUiVisionAttachment | null = null
+  let attachedPhotoRequestId = ''
+  let attachedPhotoVision: LiveUiVisionAttachment | null = null
+  let clearConfirmedPhotoUi: (notifyServer?: boolean) => void = () => {}
+  let cameraUiTimeout: number | undefined
 
   const getCurrentLocation = (timeoutMs = 1500): Promise<LiveUiVisionAttachment['location'] | undefined> => {
     if (!navigator.geolocation) return Promise.resolve(undefined)
@@ -958,41 +975,236 @@ async function bootstrap(): Promise<void> {
     })
   }
 
-  const captureVisionAttachment = async (): Promise<LiveUiVisionAttachment | undefined> => {
-    if (!visionEnabled || !visionStream || visionVideo.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
-      return undefined
+  const describeCameraError = (e: unknown): string => {
+    if (e === undefined) return 'thrown value is undefined'
+    if (e === null) return 'thrown value is null'
+    const maybe = e as { name?: unknown; message?: unknown; stack?: unknown }
+    const name = typeof maybe?.name === 'string' ? maybe.name : ''
+    const message = typeof maybe?.message === 'string' ? maybe.message : ''
+    const stack = typeof maybe?.stack === 'string' ? maybe.stack : ''
+    const friendly =
+      name === 'NotAllowedError' || name === 'SecurityError'
+        ? '摄像头权限被系统拒绝'
+        : name === 'NotFoundError' || name === 'DevicesNotFoundError'
+          ? '没有找到可用摄像头'
+          : name === 'NotReadableError' || name === 'TrackStartError'
+            ? '摄像头被其他应用占用'
+            : ''
+    const parts = [friendly, name, message, stack].filter(Boolean)
+    if (parts.length) return parts.join(' | ')
+    try {
+      const json = JSON.stringify(e)
+      if (json && json !== '{}') return `${Object.prototype.toString.call(e)} ${json}`
+    } catch {
+      /* ignore */
     }
-    const videoW = visionVideo.videoWidth || 640
-    const videoH = visionVideo.videoHeight || 480
-    if (videoW <= 0 || videoH <= 0) return undefined
+    return String(e)
+  }
+
+  const stopMediaStream = (stream: MediaStream): void => {
+    for (const track of stream.getTracks()) {
+      try {
+        console.debug(`[liveui] stop camera/mic track: kind=${track.kind}, label="${track.label}", state=${track.readyState}`)
+        track.stop()
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  const getCameraStreamWithTimeout = (timeoutMs = 8_000): Promise<MediaStream> => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      return Promise.reject(new Error('当前环境不支持摄像头'))
+    }
+    console.debug('[liveui] getUserMedia(camera) requesting one-shot stream')
+    return new Promise((resolve, reject) => {
+      let settled = false
+      const finish = (fn: () => void): void => {
+        if (settled) return
+        settled = true
+        window.clearTimeout(timer)
+        fn()
+      }
+      const timer = window.setTimeout(() => {
+        finish(() => reject(new Error(`摄像头请求超时（${timeoutMs}ms）`)))
+      }, timeoutMs)
+      navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: 'user',
+          width: { ideal: 640 },
+          height: { ideal: 480 },
+        },
+        audio: false,
+      }).then(
+        (stream) => {
+          if (settled) {
+            stopMediaStream(stream)
+            return
+          }
+          for (const track of stream.getVideoTracks()) {
+            console.debug(
+              `[liveui] camera stream track: label="${track.label}", state=${track.readyState}, muted=${track.muted}, settings=${JSON.stringify(track.getSettings())}`,
+            )
+          }
+          finish(() => resolve(stream))
+        },
+        (e) => finish(() => reject(e)),
+      )
+    })
+  }
+
+  const drawCameraSourceToVision = (
+    source: CanvasImageSource,
+    srcW: number,
+    srcH: number,
+    location: LiveUiVisionAttachment['location'] | undefined,
+  ): LiveUiVisionAttachment => {
     const maxSide = 640
-    const scale = Math.min(1, maxSide / Math.max(videoW, videoH))
-    const w = Math.max(1, Math.round(videoW * scale))
-    const h = Math.max(1, Math.round(videoH * scale))
+    const scale = Math.min(1, maxSide / Math.max(srcW, srcH))
+    const w = Math.max(1, Math.round(srcW * scale))
+    const h = Math.max(1, Math.round(srcH * scale))
     const canvasEl = document.createElement('canvas')
     canvasEl.width = w
     canvasEl.height = h
     const ctx = canvasEl.getContext('2d')
-    if (!ctx) return undefined
-    ctx.drawImage(visionVideo, 0, 0, w, h)
-    const dataUrl = canvasEl.toDataURL('image/jpeg', 0.72)
-    const imageBase64 = dataUrl.split(',')[1]
-    if (!imageBase64) return undefined
-    const freshLocation = await getCurrentLocation()
-    if (freshLocation) visionLocation = freshLocation
+    if (!ctx) throw new Error('无法创建图片画布')
+    ctx.drawImage(source, 0, 0, w, h)
+    const imageBase64 = canvasEl.toDataURL('image/jpeg', 0.72).split(',')[1]
+    if (!imageBase64) throw new Error('图片编码失败')
     return {
       imageBase64,
       mediaType: 'image/jpeg',
       capturedAt: new Date().toISOString(),
-      ...(visionLocation ? { location: visionLocation } : {}),
+      ...(location ? { location } : {}),
     }
   }
 
-  const sendUserCommand = async (line: string): Promise<void> => {
+  const captureVideoFallbackFrame = async (
+    stream: MediaStream,
+    location: LiveUiVisionAttachment['location'] | undefined,
+  ): Promise<LiveUiVisionAttachment> => {
+    const video = document.createElement('video')
+    video.muted = true
+    video.playsInline = true
+    video.autoplay = true
+    video.style.position = 'fixed'
+    video.style.left = '-9999px'
+    video.style.top = '0'
+    video.style.width = '1px'
+    video.style.height = '1px'
+    video.srcObject = stream
+    document.body.appendChild(video)
+    console.debug('[liveui] video fallback play start')
+    video.play().then(
+      () => console.debug('[liveui] video fallback play resolved'),
+      (e) => console.warn(`[liveui] video fallback play rejected: ${describeCameraError(e)}`),
+    )
+    await new Promise<void>((resolve, reject) => {
+      const startedAt = performance.now()
+      const tick = (): void => {
+        if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && video.videoWidth > 0 && video.videoHeight > 0) {
+          resolve()
+          return
+        }
+        if (performance.now() - startedAt > 3_000) {
+          reject(new Error('摄像头没有输出视频帧'))
+          return
+        }
+        requestAnimationFrame(tick)
+      }
+      requestAnimationFrame(tick)
+    })
+    try {
+      return drawCameraSourceToVision(video, video.videoWidth, video.videoHeight, location)
+    } finally {
+      video.pause()
+      video.srcObject = null
+      video.remove()
+    }
+  }
+
+  const grabImageCaptureFrame = async (track: MediaStreamTrack, timeoutMs = 2500): Promise<ImageBitmap> => {
+    if (!window.ImageCapture) throw new Error('ImageCapture unavailable')
+    return await Promise.race([
+      new window.ImageCapture(track).grabFrame(),
+      new Promise<never>((_, reject) => {
+        window.setTimeout(() => reject(new Error(`ImageCapture.grabFrame 超时（${timeoutMs}ms）`)), timeoutMs)
+      }),
+    ])
+  }
+
+  const captureLocalCameraPhoto = async (): Promise<LiveUiVisionAttachment> => {
+    console.debug('[liveui] local camera capture start')
+    const locationPromise = getCurrentLocation(1200)
+    const stream = await getCameraStreamWithTimeout()
+    try {
+      const location = await locationPromise
+      const track = stream.getVideoTracks()[0]
+      if (track && window.ImageCapture) {
+        try {
+          console.debug('[liveui] ImageCapture.grabFrame start')
+          const bitmap = await grabImageCaptureFrame(track)
+          try {
+            console.debug(`[liveui] ImageCapture.grabFrame ok: ${bitmap.width}x${bitmap.height}`)
+            return drawCameraSourceToVision(bitmap, bitmap.width, bitmap.height, location)
+          } finally {
+            bitmap.close()
+          }
+        } catch (e) {
+          console.warn(`[liveui] ImageCapture.grabFrame 失败，改用 video 首帧: ${describeCameraError(e)}`)
+        }
+      }
+      console.debug('[liveui] falling back to video element frame capture')
+      return await captureVideoFallbackFrame(stream, location)
+    } finally {
+      stopMediaStream(stream)
+    }
+  }
+
+  const parseVisionAttachment = (raw: unknown): LiveUiVisionAttachment | null => {
+    if (!raw || typeof raw !== 'object') return null
+    const v = raw as {
+      imageBase64?: unknown
+      mediaType?: unknown
+      capturedAt?: unknown
+      location?: unknown
+    }
+    if (
+      typeof v.imageBase64 !== 'string' ||
+      typeof v.capturedAt !== 'string' ||
+      (v.mediaType !== 'image/jpeg' && v.mediaType !== 'image/png' && v.mediaType !== 'image/webp')
+    ) {
+      return null
+    }
+    const out: LiveUiVisionAttachment = {
+      imageBase64: v.imageBase64,
+      mediaType: v.mediaType,
+      capturedAt: v.capturedAt,
+    }
+    if (v.location && typeof v.location === 'object') {
+      const loc = v.location as { latitude?: unknown; longitude?: unknown; accuracy?: unknown }
+      if (
+        typeof loc.latitude === 'number' &&
+        Number.isFinite(loc.latitude) &&
+        typeof loc.longitude === 'number' &&
+        Number.isFinite(loc.longitude)
+      ) {
+        out.location = { latitude: loc.latitude, longitude: loc.longitude }
+        if (typeof loc.accuracy === 'number' && Number.isFinite(loc.accuracy)) {
+          out.location.accuracy = loc.accuracy
+        }
+      }
+    }
+    return out
+  }
+
+  const sendUserCommand = (line: string): void => {
     touchConvActivity()
     if (socket.readyState !== WebSocket.OPEN) return
-    const vision = await captureVisionAttachment()
-    socket.send(JSON.stringify({ type: 'USER_INPUT', data: { line, ...(vision ? { vision } : {}) } }))
+    socket.send(JSON.stringify({ type: 'USER_INPUT', data: { line } }))
+    if (attachedPhotoVision && !line.trimStart().startsWith('/')) {
+      clearConfirmedPhotoUi(false)
+    }
   }
 
   const classifyHitNames = (hits: string[]): 'head' | 'body' | null => {
@@ -1506,6 +1718,20 @@ async function bootstrap(): Promise<void> {
       const ok = !!msg.data?.ok
       configPanel.setStatus(ok, typeof msg.data?.message === 'string' ? msg.data.message : '')
       if (ok) configPanel.close()
+    } else if (msg.type === 'VISION_CAPTURE_RESULT') {
+      const requestId = typeof msg.data?.requestId === 'string' ? msg.data.requestId : ''
+      if (!requestId || requestId !== activeCameraRequestId) return
+      finishCameraCaptureUi()
+      if (msg.data?.ok === true) {
+        const vision = parseVisionAttachment(msg.data.vision)
+        if (vision) {
+          showPhotoPreview(requestId, vision)
+          return
+        }
+      }
+      console.warn('[liveui] 拍照失败:', msg.data?.error)
+    } else if (msg.type === 'VISION_ATTACHMENT_CLEAR') {
+      clearConfirmedPhotoUi(false)
     } else if (msg.type === 'AUDIO_CHUNK') {
       if (ttsEnabled && msg.data) enqueueAudioChunk(msg.data)
     } else if (msg.type === 'AUDIO_RESET') {
@@ -2097,77 +2323,160 @@ async function bootstrap(): Promise<void> {
   updateMicBtn()
   updateSpeakerBtn()
 
-  // ── 视觉按钮：摄像头 + 位置开关，每次发送消息时附带一帧 ──
+  // ── 相机按钮：单张拍照预览，确认后作为下一条消息附件 ──
   const visionBtn = document.getElementById('liveui-btn-vision') as HTMLButtonElement | null
-  const visionIconOn = document.getElementById('liveui-vision-icon-on')
-  const visionIconOff = document.getElementById('liveui-vision-icon-off')
+  const attachBtn = document.getElementById('liveui-btn-attach') as HTMLButtonElement | null
+  const attachThumb = document.getElementById('liveui-attachment-thumb') as HTMLImageElement | null
+  const photoPreview = document.getElementById('liveui-photo-preview') as HTMLElement | null
+  const photoPreviewImg = document.getElementById('liveui-photo-preview-img') as HTMLImageElement | null
+  const photoCancelBtn = document.getElementById('liveui-photo-cancel') as HTMLButtonElement | null
+  const photoConfirmBtn = document.getElementById('liveui-photo-confirm') as HTMLButtonElement | null
 
-  const updateVisionBtn = (): void => {
+  const photoDataUrl = (vision: LiveUiVisionAttachment): string =>
+    `data:${vision.mediaType};base64,${vision.imageBase64}`
+
+  const updateCameraBtn = (): void => {
     if (!visionBtn) return
-    visionBtn.setAttribute('aria-pressed', String(visionEnabled))
-    visionBtn.title = visionEnabled
-      ? '视觉已开启：每次发送会附带一张摄像头照片和当前位置；点击关闭'
-      : '视觉已关闭：点击申请摄像头与位置权限'
-    if (visionIconOn) visionIconOn.style.display = visionEnabled ? '' : 'none'
-    if (visionIconOff) visionIconOff.style.display = visionEnabled ? 'none' : ''
+    visionBtn.disabled = cameraCapturing
+    visionBtn.setAttribute('aria-busy', String(cameraCapturing))
+    visionBtn.setAttribute('aria-pressed', 'false')
+    visionBtn.title = cameraCapturing ? '正在拍照…' : '拍照'
   }
 
-  const enterVisionMode = async (): Promise<void> => {
-    if (visionEnabled) return
-    if (!navigator.mediaDevices?.getUserMedia) {
-      console.warn('[liveui] 当前环境不支持摄像头')
+  const finishCameraCaptureUi = (): void => {
+    cameraCapturing = false
+    activeCameraRequestId = ''
+    if (cameraUiTimeout) {
+      window.clearTimeout(cameraUiTimeout)
+      cameraUiTimeout = undefined
+    }
+    updateCameraBtn()
+  }
+
+  const setAttachedPhoto = (requestId: string, vision: LiveUiVisionAttachment): void => {
+    attachedPhotoRequestId = requestId
+    attachedPhotoVision = vision
+    if (attachThumb) {
+      attachThumb.src = photoDataUrl(vision)
+      attachThumb.hidden = false
+    }
+    attachBtn?.classList.add('liveui-attach-btn--has-photo')
+    attachBtn?.setAttribute('title', '移除照片')
+  }
+
+  clearConfirmedPhotoUi = (notifyServer = true): void => {
+    attachedPhotoRequestId = ''
+    attachedPhotoVision = null
+    if (attachThumb) {
+      attachThumb.removeAttribute('src')
+      attachThumb.hidden = true
+    }
+    attachBtn?.classList.remove('liveui-attach-btn--has-photo')
+    attachBtn?.setAttribute('title', '附件')
+    if (notifyServer && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: 'VISION_ATTACHMENT_CLEAR', data: {} }))
+    }
+  }
+
+  const hidePhotoPreview = (notifyServer = true): void => {
+    const requestId = previewPhotoRequestId
+    previewPhotoRequestId = ''
+    previewPhotoVision = null
+    if (photoPreview) photoPreview.hidden = true
+    if (photoPreviewImg) photoPreviewImg.removeAttribute('src')
+    if (notifyServer && requestId && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: 'VISION_CAPTURE_CANCEL', data: { requestId } }))
+    }
+  }
+
+  const showPhotoPreview = (requestId: string, vision: LiveUiVisionAttachment): void => {
+    previewPhotoRequestId = requestId
+    previewPhotoVision = vision
+    if (photoPreviewImg) photoPreviewImg.src = photoDataUrl(vision)
+    if (photoPreview) photoPreview.hidden = false
+    window.infinitiLiveUi?.setIgnoreMouseEvents?.(false)
+  }
+
+  const animatePhotoIntoAttachment = (source: HTMLImageElement, done: () => void): void => {
+    if (!attachBtn) {
+      done()
       return
     }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: 'user',
-          width: { ideal: 640 },
-          height: { ideal: 480 },
-        },
-        audio: false,
-      })
-      visionStream = stream
-      visionVideo.srcObject = stream
-      await visionVideo.play()
-      visionLocation = await getCurrentLocation(4000)
-      visionEnabled = true
-      updateVisionBtn()
-      console.debug('[liveui] 视觉模式已开启')
-    } catch (e) {
-      visionEnabled = false
-      if (visionStream) {
-        visionStream.getTracks().forEach((t) => t.stop())
-        visionStream = null
-      }
-      console.warn('[liveui] 视觉模式开启失败:', e)
-      updateVisionBtn()
-    }
+    const from = source.getBoundingClientRect()
+    const to = attachBtn.getBoundingClientRect()
+    const clone = document.createElement('img')
+    clone.className = 'liveui-photo-fly'
+    clone.src = source.src
+    clone.style.left = `${from.left}px`
+    clone.style.top = `${from.top}px`
+    clone.style.width = `${from.width}px`
+    clone.style.height = `${from.height}px`
+    clone.style.borderRadius = '10px'
+    document.body.appendChild(clone)
+    window.requestAnimationFrame(() => {
+      clone.style.left = `${to.left + 3}px`
+      clone.style.top = `${to.top + 3}px`
+      clone.style.width = `${Math.max(1, to.width - 6)}px`
+      clone.style.height = `${Math.max(1, to.height - 6)}px`
+      clone.style.borderRadius = '6px'
+      clone.style.opacity = '0.96'
+    })
+    window.setTimeout(() => {
+      clone.remove()
+      done()
+    }, 760)
   }
 
-  const exitVisionMode = (): void => {
-    visionEnabled = false
-    if (visionStream) {
-      visionStream.getTracks().forEach((t) => t.stop())
-      visionStream = null
+  const confirmPhotoPreview = (): void => {
+    if (!previewPhotoVision || !previewPhotoRequestId) return
+    const requestId = previewPhotoRequestId
+    const vision = previewPhotoVision
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: 'VISION_CAPTURE_CONFIRM', data: { requestId, vision } }))
     }
-    visionVideo.pause()
-    visionVideo.srcObject = null
-    visionLocation = undefined
-    updateVisionBtn()
-    console.debug('[liveui] 视觉模式已关闭')
+    if (photoPreviewImg?.src) {
+      animatePhotoIntoAttachment(photoPreviewImg, () => setAttachedPhoto(requestId, vision))
+    } else {
+      setAttachedPhoto(requestId, vision)
+    }
+    hidePhotoPreview(false)
+  }
+
+  const requestCameraPhoto = async (): Promise<void> => {
+    if (cameraCapturing) return
+    hidePhotoPreview(true)
+    cameraCapturing = true
+    const requestId = `photo-${Date.now()}-${++cameraCaptureSeq}`
+    activeCameraRequestId = requestId
+    updateCameraBtn()
+    cameraUiTimeout = window.setTimeout(() => {
+      if (activeCameraRequestId !== requestId) return
+      console.warn('[liveui] 拍照请求超时，已恢复相机按钮')
+      finishCameraCaptureUi()
+    }, 30_000)
+    try {
+      if (socket.readyState !== WebSocket.OPEN) {
+        throw new Error('LiveUI WebSocket 未连接')
+      }
+      const location = await getCurrentLocation(1200)
+      socket.send(JSON.stringify({ type: 'VISION_CAPTURE_REQUEST', data: { requestId, location } }))
+    } catch (e) {
+      console.warn(`[liveui] 拍照失败: ${describeCameraError(e)}`)
+      if (activeCameraRequestId === requestId) finishCameraCaptureUi()
+    }
   }
 
   visionBtn?.addEventListener('click', () => {
     visionBtn.blur()
-    if (visionEnabled) {
-      exitVisionMode()
-    } else {
-      void enterVisionMode()
-    }
+    void requestCameraPhoto()
+  })
+  photoCancelBtn?.addEventListener('click', () => hidePhotoPreview(true))
+  photoConfirmBtn?.addEventListener('click', confirmPhotoPreview)
+  attachBtn?.addEventListener('click', () => {
+    if (attachedPhotoVision) clearConfirmedPhotoUi(true)
   })
 
-  updateVisionBtn()
+  updateCameraBtn()
 
   app.ticker.add(() => {
     if (!liveModel && !expressionSprite) {
@@ -2184,7 +2493,14 @@ async function bootstrap(): Promise<void> {
     const isOverInteractive = (ex: number, ey: number): boolean => {
       if (configPanelOpen) return true
       const dom = document.elementFromPoint(ex, ey)
-      if (dom && (dom.closest('#liveui-control-bar') || dom.closest('#liveui-config-panel'))) return true
+      if (
+        dom &&
+        (dom.closest('#liveui-control-bar') ||
+          dom.closest('#liveui-config-panel') ||
+          dom.closest('#liveui-photo-preview'))
+      ) {
+        return true
+      }
       if (liveModel) {
         const b = liveModel.getBounds()
         if (ex >= b.x && ex <= b.x + b.width && ey >= b.y && ey <= b.y + b.height) return true

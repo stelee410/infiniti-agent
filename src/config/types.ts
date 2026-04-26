@@ -88,6 +88,24 @@ export type AvatarGenConfig = {
   imageSize?: string
 }
 
+/** `/snap <提示词>` 合照 / 写实照片生成。 */
+export type SnapImageConfig = {
+  /** `nano-banana` 走 OpenRouter 图像模型；`gpt-image-2` 走 OpenAI Images API。 */
+  provider?: 'nano-banana' | 'gpt-image-2'
+  baseUrl?: string
+  apiKey?: string
+  /** nano-banana 默认 google/gemini-3-pro-image-preview；gpt-image-2 默认 gpt-image-2。 */
+  model?: string
+  /** OpenRouter image_config.aspect_ratio，如 16:9 / 4:3 / 1:1。 */
+  aspectRatio?: string
+  /** OpenRouter image_size 或 OpenAI size，如 auto / 1024x1024 / 1536x1024 / 1024x1536。 */
+  imageSize?: string
+  /** OpenAI quality，如 auto / high / medium / low。 */
+  quality?: 'auto' | 'high' | 'medium' | 'low'
+  /** 单次图像生成超时（毫秒），默认 120000。 */
+  timeoutMs?: number
+}
+
 export type LiveUiConfig = {
   /** WebSocket 端口；`infiniti-agent live` 未传 `--port` 时使用 */
   port?: number
@@ -173,6 +191,7 @@ export type InfinitiConfig = {
   tts?: TtsConfig
   asr?: AsrConfig
   avatarGen?: AvatarGenConfig
+  snap?: SnapImageConfig
 }
 
 /**

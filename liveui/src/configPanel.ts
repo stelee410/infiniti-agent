@@ -11,6 +11,7 @@ const tabs = [
   ['tts', 'TTS'],
   ['asr', 'ASR'],
   ['avatarGen', 'AvatarGen'],
+  ['snap', 'Snap'],
 ] as const
 
 const llmProviders = ['anthropic', 'openai', 'gemini', 'minimax', 'openrouter']
@@ -155,6 +156,15 @@ function ensureDefaultConfigNodes(cfg: JsonObj, cwd: string): void {
     model: 'google/gemini-3-pro-image-preview',
     aspectRatio: '2:3',
   }
+  cfg.snap ??= {
+    provider: 'nano-banana',
+    baseUrl: 'https://openrouter.ai/api/v1',
+    model: 'google/gemini-3-pro-image-preview',
+    aspectRatio: '4:3',
+    imageSize: '',
+    quality: 'auto',
+    timeoutMs: 120000,
+  }
 }
 
 function syncFlatLlm(cfg: JsonObj): void {
@@ -241,7 +251,8 @@ export function initConfigPanel(opts: ConfigPanelOptions): {
     else if (active === 'liveUi') renderLiveUi(content)
     else if (active === 'tts') renderTts(content)
     else if (active === 'asr') renderAsr(content)
-    else renderAvatarGen(content)
+    else if (active === 'avatarGen') renderAvatarGen(content)
+    else renderSnap(content)
   }
 
   const renderLlm = (root: HTMLElement): void => {
@@ -423,6 +434,41 @@ export function initConfigPanel(opts: ConfigPanelOptions): {
       field('Model', input(text(a.model), (v) => { a.model = v })),
       field('Aspect Ratio', input(text(a.aspectRatio), (v) => { a.aspectRatio = v })),
       field('Image Size', input(text(a.imageSize), (v) => { a.imageSize = v })),
+    )
+    section.append(grid)
+    root.append(section)
+  }
+
+  const renderSnap = (root: HTMLElement): void => {
+    cfg.snap ??= {}
+    const s = cfg.snap
+    const provider = text(s.provider || 'nano-banana')
+    const section = el('section', { class: 'config-section config-section--active' })
+    const grid = el('div', { class: 'config-grid' })
+    grid.append(
+      field('Provider', select(provider, [['nano-banana', 'nano-banana'], ['gpt-image-2', 'gpt-image-2']], (v) => {
+        const prevBase = text(s.baseUrl)
+        const prevModel = text(s.model)
+        s.provider = v
+        if (v === 'nano-banana') {
+          if (!prevBase || prevBase === 'https://api.openai.com/v1') s.baseUrl = 'https://openrouter.ai/api/v1'
+          if (!prevModel || prevModel === 'gpt-image-2') s.model = 'google/gemini-3-pro-image-preview'
+          s.aspectRatio ||= '4:3'
+        } else {
+          if (!prevBase || prevBase === 'https://openrouter.ai/api/v1') s.baseUrl = 'https://api.openai.com/v1'
+          if (!prevModel || prevModel === 'google/gemini-3-pro-image-preview') s.model = 'gpt-image-2'
+          s.imageSize ||= '1024x1024'
+          s.quality ||= 'auto'
+        }
+        rerender()
+      })),
+      field('Base URL', input(text(s.baseUrl), (v) => { s.baseUrl = v })),
+      field('API Key', input(text(s.apiKey), (v) => { s.apiKey = v }, 'password')),
+      field('Model', input(text(s.model), (v) => { s.model = v })),
+      field('Aspect Ratio', input(text(s.aspectRatio), (v) => { s.aspectRatio = v })),
+      field('Image Size', input(text(s.imageSize), (v) => { s.imageSize = v })),
+      field('Quality', select(text(s.quality || 'auto'), [['auto', 'auto'], ['high', 'high'], ['medium', 'medium'], ['low', 'low']], (v) => { s.quality = v })),
+      field('Timeout ms', input(num(s.timeoutMs, '120000'), (v) => { s.timeoutMs = Number(v) }, 'number')),
     )
     section.append(grid)
     root.append(section)

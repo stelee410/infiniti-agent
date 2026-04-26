@@ -11,6 +11,7 @@ import type {
   LiveUiConfig,
   LlmProfile,
   McpServerConfig,
+  SnapImageConfig,
   TtsConfig,
 } from './types.js'
 import { isLlmProvider } from './types.js'
@@ -130,6 +131,7 @@ export async function loadConfig(cwd?: string): Promise<InfinitiConfig> {
   const tts = parseTtsConfig(o.tts)
   const asr = parseAsrConfig(o.asr)
   const avatarGen = parseAvatarGenConfig(o.avatarGen)
+  const snap = parseSnapImageConfig(o.snap)
 
   const flatDisableTools = llm.disableTools
   const resolvedDisableTools =
@@ -161,6 +163,7 @@ export async function loadConfig(cwd?: string): Promise<InfinitiConfig> {
     ...(tts ? { tts } : {}),
     ...(asr ? { asr } : {}),
     ...(avatarGen ? { avatarGen } : {}),
+    ...(snap ? { snap } : {}),
   }
 }
 
@@ -174,6 +177,25 @@ function parseAvatarGenConfig(raw: unknown): AvatarGenConfig | undefined {
   if (typeof u.model === 'string' && u.model.trim()) out.model = u.model.trim()
   if (typeof u.aspectRatio === 'string' && u.aspectRatio.trim()) out.aspectRatio = u.aspectRatio.trim()
   if (typeof u.imageSize === 'string' && u.imageSize.trim()) out.imageSize = u.imageSize.trim()
+  return Object.keys(out).length ? out : undefined
+}
+
+function parseSnapImageConfig(raw: unknown): SnapImageConfig | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const u = raw as Record<string, unknown>
+  const out: SnapImageConfig = {}
+  if (u.provider === 'nano-banana' || u.provider === 'gpt-image-2') out.provider = u.provider
+  if (typeof u.baseUrl === 'string' && u.baseUrl.trim()) out.baseUrl = u.baseUrl.trim()
+  if (typeof u.apiKey === 'string' && u.apiKey.trim()) out.apiKey = u.apiKey.trim()
+  if (typeof u.model === 'string' && u.model.trim()) out.model = u.model.trim()
+  if (typeof u.aspectRatio === 'string' && u.aspectRatio.trim()) out.aspectRatio = u.aspectRatio.trim()
+  if (typeof u.imageSize === 'string' && u.imageSize.trim()) out.imageSize = u.imageSize.trim()
+  if (u.quality === 'auto' || u.quality === 'high' || u.quality === 'medium' || u.quality === 'low') {
+    out.quality = u.quality
+  }
+  if (typeof u.timeoutMs === 'number' && Number.isFinite(u.timeoutMs) && u.timeoutMs >= 5000) {
+    out.timeoutMs = Math.floor(u.timeoutMs)
+  }
   return Object.keys(out).length ? out : undefined
 }
 
@@ -411,6 +433,8 @@ export async function saveConfig(input: SaveConfigInput): Promise<void> {
     ...(existing?.liveUi ? { liveUi: existing.liveUi } : {}),
     ...(existing?.tts ? { tts: existing.tts } : {}),
     ...(existing?.asr ? { asr: existing.asr } : {}),
+    ...(existing?.avatarGen ? { avatarGen: existing.avatarGen } : {}),
+    ...(existing?.snap ? { snap: existing.snap } : {}),
   }
   const target = GLOBAL_CONFIG_PATH
   await mkdir(dirname(target), { recursive: true })
