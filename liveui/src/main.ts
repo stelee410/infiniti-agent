@@ -60,8 +60,6 @@ declare global {
       selectAttachments?: () => Promise<string[]>
       /** Electron：打开系统另存为对话框 */
       savePath?: (opts: { defaultPath?: string }) => Promise<string | null>
-      /** Electron：读取本地附件为 data URL，用于视频预览避开 file:// metadata/range 卡顿 */
-      readLocalFileDataUrl?: (opts: { path: string; mimeType?: string }) => Promise<string>
     }
     ImageCapture?: new (track: MediaStreamTrack) => {
       grabFrame: () => Promise<ImageBitmap>
@@ -918,6 +916,12 @@ async function bootstrap(): Promise<void> {
     return `file://${p.split('/').map((part) => encodeURIComponent(part)).join('/')}`
   }
 
+  const filePathToMediaUrl = (p: string): string => {
+    if (/^https?:/i.test(p) || /^data:/i.test(p)) return p
+    const port = window.infinitiLiveUi?.port || new URLSearchParams(window.location.search).get('port') || '8080'
+    return `http://127.0.0.1:${encodeURIComponent(port)}/media?path=${encodeURIComponent(p)}`
+  }
+
   const filenameFromPath = (p: string): string => {
     const parts = p.split(/[\\/]/)
     return parts[parts.length - 1] || 'attachment'
@@ -961,31 +965,9 @@ async function bootstrap(): Promise<void> {
     return /\.(mp4|webm|mov|m4v)$/i.test(attachment.path)
   }
 
-  const videoMimeType = (attachment: RenderInboxAttachment): string => {
-    const mt = attachment.mimeType?.toLowerCase() ?? ''
-    if (mt.startsWith('video/')) return mt
-    if (/\.webm$/i.test(attachment.path)) return 'video/webm'
-    if (/\.(mov|m4v)$/i.test(attachment.path)) return 'video/quicktime'
-    return 'video/mp4'
-  }
-
   const hydrateInboxVideo = async (video: HTMLVideoElement, attachment: RenderInboxAttachment): Promise<void> => {
-    const fallbackUrl = filePathToUrl(attachment.path)
-    const reader = window.infinitiLiveUi?.readLocalFileDataUrl
-    if (!reader) {
-      video.src = fallbackUrl
-      video.load()
-      return
-    }
-    try {
-      const dataUrl = await reader({ path: attachment.path, mimeType: videoMimeType(attachment) })
-      video.src = dataUrl
-      video.load()
-    } catch (e) {
-      console.warn(`[liveui] local video data-url failed, fallback to file URL: ${(e as Error).message}`)
-      video.src = fallbackUrl
-      video.load()
-    }
+    video.src = filePathToMediaUrl(attachment.path)
+    video.load()
   }
 
   const appendInboxSaveAction = (wrap: HTMLElement, attachment: RenderInboxAttachment): void => {
