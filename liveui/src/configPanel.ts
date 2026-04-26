@@ -347,10 +347,7 @@ export function initConfigPanel(opts: ConfigPanelOptions): {
       grid.append(pathField('expressions.json（可选）', text(l.spriteExpressions.manifest), 'file', (v) => { l.spriteExpressions.manifest = v }))
     } else if (mode === 'real2d') {
       l.real2d ??= {}
-      l.real2d.baseUrl ??= 'http://127.0.0.1:8921'
       l.real2d.backend ??= 'local'
-      l.real2d.fps ??= 25
-      l.real2d.frameFormat ??= 'jpeg'
       l.real2d.fallbackRenderer ??= 'sprite'
       l.real2d.mouthDriver ??= 'rms'
       grid.append(
@@ -366,14 +363,20 @@ export function initConfigPanel(opts: ConfigPanelOptions): {
           }
           rerender()
         })),
-        field('real2d baseUrl', input(text(l.real2d.baseUrl), (v) => { l.real2d.baseUrl = v })),
         pathField('sourceImage', text(l.real2d.sourceImage), 'file', (v) => { l.real2d.sourceImage = v }),
-        pathField('emotionMap（可选）', text(l.real2d.emotionMap), 'file', (v) => { l.real2d.emotionMap = v }),
-        field('FPS', input(num(l.real2d.fps, '25'), (v) => { l.real2d.fps = Number(v) }, 'number')),
-        field('frameFormat', select(text(l.real2d.frameFormat || 'jpeg'), [['jpeg', 'jpeg'], ['webp', 'webp'], ['png', 'png']], (v) => { l.real2d.frameFormat = v })),
         field('fallback', select(text(l.real2d.fallbackRenderer || 'sprite'), [['sprite', 'sprite'], ['live2d', 'live2d']], (v) => { l.real2d.fallbackRenderer = v })),
       )
-      if (l.real2d.backend === 'fal') {
+      if (l.real2d.backend === 'local') {
+        l.real2d.baseUrl ??= 'http://127.0.0.1:8921'
+        l.real2d.fps ??= 25
+        l.real2d.frameFormat ??= 'jpeg'
+        grid.append(
+          field('real2d baseUrl', input(text(l.real2d.baseUrl), (v) => { l.real2d.baseUrl = v })),
+          pathField('emotionMap（可选）', text(l.real2d.emotionMap), 'file', (v) => { l.real2d.emotionMap = v }),
+          field('FPS', input(num(l.real2d.fps, '25'), (v) => { l.real2d.fps = Number(v) }, 'number')),
+          field('frameFormat', select(text(l.real2d.frameFormat || 'jpeg'), [['jpeg', 'jpeg'], ['webp', 'webp'], ['png', 'png']], (v) => { l.real2d.frameFormat = v })),
+        )
+      } else if (l.real2d.backend === 'fal') {
         l.real2d.fal ??= {}
         l.real2d.fal.keyEnv ??= 'FAL_KEY'
         l.real2d.fal.mode ??= 'ai-avatar'
