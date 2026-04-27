@@ -7,6 +7,8 @@ import { executeSkillAction, type SkillAction } from '../skills/manager.js'
 import { executeKgAction, type KgAction } from '../memory/knowledgeGraph.js'
 import type { InfinitiConfig } from '../config/types.js'
 import { enqueueSnapPhotoJob } from '../snap/asyncSnap.js'
+import { enqueueSeedanceVideoJob } from '../video/asyncVideo.js'
+import type { SeedanceReferenceImage } from '../video/generateSeedanceVideo.js'
 import type { LiveUiVisionAttachment } from '../liveui/protocol.js'
 import type { BuiltinToolName } from './definitions.js'
 import type { EditHistory } from '../session/editHistory.js'
@@ -32,6 +34,7 @@ export type ToolRunContext = {
   sessionCwd: string
   config: InfinitiConfig
   snapVision?: LiveUiVisionAttachment
+  seedanceImages?: SeedanceReferenceImage[]
   editHistory?: EditHistory
 }
 
@@ -408,6 +411,20 @@ export async function runBuiltinTool(
       jobId: job.id,
       jobPath: job.jobPath,
       message: '图片生成任务已在后台开始；完成或失败后会写入你的邮箱。',
+    })
+  }
+
+  if (name === 'seedance_video') {
+    const prompt = String(args.prompt ?? '').trim()
+    if (!prompt) {
+      return JSON.stringify({ ok: false, error: 'prompt 不能为空' })
+    }
+    const job = await enqueueSeedanceVideoJob(ctx.sessionCwd, ctx.config, prompt, ctx.seedanceImages ?? [])
+    return JSON.stringify({
+      ok: true,
+      jobId: job.id,
+      jobPath: job.jobPath,
+      message: 'Seedance 视频生成任务已在后台开始；完成或失败后会写入你的邮箱。',
     })
   }
 

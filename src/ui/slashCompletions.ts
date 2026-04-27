@@ -78,6 +78,13 @@ const COMMAND_ITEMS: SlashItem[] = [
     insert: '/inbox ',
   },
   {
+    id: '/last_email',
+    kind: 'command',
+    label: '/last_email',
+    desc: '打开你的邮箱里最近一封信',
+    insert: '/last_email ',
+  },
+  {
     id: '/help',
     kind: 'command',
     label: '/help',
@@ -97,6 +104,20 @@ const COMMAND_ITEMS: SlashItem[] = [
     label: '/snap',
     desc: '用已确认照片和 agent 参考图生成合照；无照片时按提示词生成写实照片',
     insert: '/snap ',
+  },
+  {
+    id: '/video',
+    kind: 'command',
+    label: '/video',
+    desc: '用字节 Seedance 异步生成视频，完成后写入你的邮箱',
+    insert: '/video ',
+  },
+  {
+    id: '/seedance',
+    kind: 'command',
+    label: '/seedance',
+    desc: '同 /video',
+    insert: '/seedance ',
   },
   {
     id: '/undo',

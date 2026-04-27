@@ -8,6 +8,7 @@ import type { BuiltinToolName } from '../tools/definitions.js'
 import { runBuiltinTool } from '../tools/runner.js'
 import type { AgentToolSpec } from '../mcp/manager.js'
 import type { PersistedMessage, UserFileAttachment } from './persisted.js'
+import type { SeedanceReferenceImage } from '../video/generateSeedanceVideo.js'
 import type { McpManager } from '../mcp/manager.js'
 import type { EditHistory } from '../session/editHistory.js'
 import {
@@ -79,6 +80,32 @@ function latestUserVision(messages: PersistedMessage[]): Extract<PersistedMessag
     }
   }
   return undefined
+}
+
+function latestSeedanceReferenceImages(messages: PersistedMessage[]): SeedanceReferenceImage[] {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]!
+    if (m.role !== 'user') continue
+    const out: SeedanceReferenceImage[] = []
+    if (m.vision) {
+      out.push({
+        mediaType: m.vision.mediaType,
+        base64: m.vision.imageBase64,
+        label: 'camera snapshot',
+      })
+    }
+    for (const a of imageAttachments(m)) {
+      if (a.mediaType === 'image/jpeg' || a.mediaType === 'image/png' || a.mediaType === 'image/webp') {
+        out.push({
+          mediaType: a.mediaType,
+          base64: a.base64,
+          label: a.name,
+        })
+      }
+    }
+    return out.slice(0, 9)
+  }
+  return []
 }
 
 function withDeadline<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
@@ -179,6 +206,7 @@ export async function runToolLoop(opts: RunLoopOptions): Promise<{
         sessionCwd: opts.cwd,
         config: opts.config,
         snapVision: latestUserVision(opts.messages),
+        seedanceImages: latestSeedanceReferenceImages(opts.messages),
         editHistory: opts.editHistory,
       })
     }

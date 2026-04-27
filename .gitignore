@@ -28,5 +28,5 @@ AGENTS.md
 CLAUDE.md
 .claude/
 
-# 本地工具 / 实验用 Python venv（勿提交）
-tools/
+# 仓库根下的本地工具 / 实验用 Python venv（勿提交）；不要影响 src/tools 等发行代码
+/tools/

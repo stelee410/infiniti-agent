@@ -106,6 +106,35 @@ export type SnapImageConfig = {
   timeoutMs?: number
 }
 
+/** `/video <提示词>` 字节 Seedance / 火山方舟异步视频生成。 */
+export type SeedanceVideoConfig = {
+  /** 目前支持火山方舟 OpenAPI 路由。 */
+  provider?: 'volcengine'
+  /** 服务根 URL，如 https://ark.cn-beijing.volces.com；也可直接填到 /api/v3/contents/generations/tasks。 */
+  baseUrl?: string
+  apiKey?: string
+  /** 默认 doubao-seedance-2-0-260128。 */
+  model?: string
+  /** 生成比例，如 16:9 / 9:16 / 1:1 / 4:3 / 3:4 / 21:9 / adaptive。 */
+  ratio?: string
+  /** 视频时长，单位秒。 */
+  duration?: number
+  /** 分辨率，如 480p / 720p / 1080p。 */
+  resolution?: string
+  /** 是否生成音频，对应 generate_audio。 */
+  generateAudio?: boolean
+  /** 是否加水印，对应 watermark。 */
+  watermark?: boolean
+  /** 配置级参考素材 URL，调用时会追加到 content。 */
+  referenceImageUrls?: string[]
+  referenceVideoUrls?: string[]
+  referenceAudioUrls?: string[]
+  /** 轮询间隔（毫秒），默认 15000。 */
+  pollIntervalMs?: number
+  /** 整个异步任务最大等待时间（毫秒），默认 900000。 */
+  timeoutMs?: number
+}
+
 export type LiveUiConfig = {
   /** WebSocket 端口；`infiniti-agent live` 未传 `--port` 时使用 */
   port?: number
@@ -192,6 +221,7 @@ export type InfinitiConfig = {
   asr?: AsrConfig
   avatarGen?: AvatarGenConfig
   snap?: SnapImageConfig
+  seedance?: SeedanceVideoConfig
 }
 
 /**

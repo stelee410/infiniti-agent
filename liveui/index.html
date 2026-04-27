@@ -188,7 +188,8 @@
         padding: 18px;
         border-radius: 18px;
       }
-      body.liveui-inbox-open .liveui-inbox-image {
+      body.liveui-inbox-open .liveui-inbox-image,
+      body.liveui-inbox-open .liveui-inbox-video {
         max-height: min(62vh, 620px);
       }
       .liveui-inbox-mail {
@@ -211,12 +212,13 @@
         font: 13px/1.55 system-ui, -apple-system, 'Segoe UI', sans-serif;
         color: rgba(255, 255, 255, 0.9);
       }
-      .liveui-inbox-image-wrap {
+      .liveui-inbox-media-wrap {
         display: flex;
         flex-direction: column;
         gap: 8px;
       }
-      .liveui-inbox-image {
+      .liveui-inbox-image,
+      .liveui-inbox-video {
         display: block;
         width: 100%;
         max-height: 320px;
@@ -224,6 +226,19 @@
         border-radius: 10px;
         background: #0f1117;
         border: 1px solid rgba(255, 255, 255, 0.1);
+      }
+      .liveui-inbox-video {
+        aspect-ratio: 16 / 9;
+        min-height: 180px;
+      }
+      .liveui-inbox-media-hint {
+        color: rgba(255, 255, 255, 0.54);
+        font: 11px/1.35 system-ui, -apple-system, 'Segoe UI', sans-serif;
+        overflow-wrap: anywhere;
+      }
+      .liveui-inbox-media-wrap--error .liveui-inbox-media-hint::before {
+        content: '预览加载失败，可另存或用系统播放器打开：';
+        color: #fca5a5;
       }
       .liveui-inbox-actions {
         display: flex;

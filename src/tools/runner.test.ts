@@ -244,3 +244,16 @@ describe('invalid JSON args', () => {
     expect(parsed.error).toContain('JSON')
   })
 })
+
+describe('seedance_video tool dispatch', () => {
+  it('rejects empty prompt', async () => {
+    const result = await runBuiltinTool(
+      'seedance_video',
+      JSON.stringify({ prompt: '' }),
+      ctx,
+    )
+    const parsed = JSON.parse(result)
+    expect(parsed.ok).toBe(false)
+    expect(parsed.error).toContain('prompt')
+  })
+})

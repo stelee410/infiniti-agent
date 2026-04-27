@@ -128,6 +128,24 @@ npm run setup:liveui -- ~/your-project
 
 **TTS（`config.tts`）**：本仓库只作为 TTS client 调用外部 service。VoxCPM2、MOSS-TTS-Nano ONNX 的安装、模型下载和启动见 `../infiniti-tts-service`；这里仅配置 `"provider"` 与 `"baseUrl"`。VoxCPM2 可选 `referenceAudioPath`、`controlInstruction`、`amplitudeNormalize`（`rms` / `peak` / `none`，默认 `rms`）等字段，详见 `src/config/types.ts` 的 `VoxcpmTtsConfig`。
 
+**Seedance 视频（`config.seedance`）**：`/video <提示词>` 或 `/seedance <提示词>` 会调用火山方舟异步视频任务，完成后下载到本地 `.infiniti-agent/inbox/assets/` 并写入你的邮箱。若当前消息带有 Live 拍照图片或用户上传图片，会自动作为参考图传给视频 API；LLM 也可通过内置工具 `seedance_video` 发起同样的异步任务。常用配置：
+
+```json
+{
+  "seedance": {
+    "provider": "volcengine",
+    "baseUrl": "https://ark.cn-beijing.volces.com",
+    "apiKey": "YOUR_ARK_API_KEY",
+    "model": "doubao-seedance-2-0-260128",
+    "ratio": "16:9",
+    "duration": 5,
+    "resolution": "720p",
+    "generateAudio": true,
+    "watermark": false
+  }
+}
+```
+
 **常用选项：**
 
 ```bash

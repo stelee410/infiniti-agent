@@ -174,6 +174,13 @@ export type LiveUiInboxUpdateMessage = {
   }
 }
 
+export type LiveUiInboxOpenMessage = {
+  type: 'INBOX_OPEN'
+  data: {
+    items: LiveUiInboxItem[]
+  }
+}
+
 export type LiveUiInboxSaveResultMessage = {
   type: 'INBOX_SAVE_RESULT'
   data: {
@@ -199,6 +206,7 @@ export type LiveUiMessage =
   | LiveUiVisionAttachmentClearMessage
   | LiveUiAttachmentClearMessage
   | LiveUiInboxUpdateMessage
+  | LiveUiInboxOpenMessage
   | LiveUiInboxSaveResultMessage
 
 export function isLiveUiMessage(x: unknown): x is LiveUiMessage {
@@ -254,12 +262,14 @@ export function isLiveUiMessage(x: unknown): x is LiveUiMessage {
     return true
   }
   if (o.type === 'AUDIO_RESET' || o.type === 'INTERRUPT' || o.type === 'VISION_ATTACHMENT_CLEAR' || o.type === 'ATTACHMENT_CLEAR') return true
-  if (o.type === 'INBOX_UPDATE') {
+  if (o.type === 'INBOX_UPDATE' || o.type === 'INBOX_OPEN') {
     const d = (x as { data?: unknown }).data
     if (!d || typeof d !== 'object') return false
-    const unread = (d as { unread?: unknown }).unread
-    if (!Array.isArray(unread)) return false
-    return unread.every((it) => {
+    const items = o.type === 'INBOX_UPDATE'
+      ? (d as { unread?: unknown }).unread
+      : (d as { items?: unknown }).items
+    if (!Array.isArray(items)) return false
+    return items.every((it) => {
       if (!it || typeof it !== 'object') return false
       const m = it as Record<string, unknown>
       return (

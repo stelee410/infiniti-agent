@@ -1,5 +1,8 @@
 import { type ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
+import { createReadStream, statSync } from 'node:fs'
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
+import { extname, isAbsolute } from 'node:path'
 import { WebSocketServer, WebSocket } from 'ws'
 import type {
   LiveUiActionMessage,
@@ -37,6 +40,7 @@ export class LiveUiSession {
   readonly mouth = new StreamMouthEstimator()
 
   private wss: WebSocketServer | null = null
+  private httpServer: Server | null = null
   private clients = new Set<WebSocket>()
   private listeners = new Set<LiveUiConnectionListener>()
   private userLineListeners = new Set<LiveUiUserLineListener>()
@@ -169,6 +173,10 @@ export class LiveUiSession {
     this.broadcast({ type: 'INBOX_UPDATE', data: { unread } } as LiveUiMessage)
   }
 
+  openInbox(items: LiveUiInboxItem[]): void {
+    this.broadcast({ type: 'INBOX_OPEN', data: { items } } as LiveUiMessage)
+  }
+
   sendInboxSaveResult(ok: boolean, message: string): void {
     this.broadcast({ type: 'INBOX_SAVE_RESULT', data: { ok, message } } as LiveUiMessage)
   }
@@ -235,9 +243,14 @@ export class LiveUiSession {
 
   async start(): Promise<void> {
     if (this.wss) return
-    const wss = new WebSocketServer({ port: this.port })
+    const httpServer = createServer((req, res) => {
+      this.handleHttpRequest(req, res)
+    })
+    const wss = new WebSocketServer({ server: httpServer })
+    this.httpServer = httpServer
     this.wss = wss
-    await once(wss, 'listening')
+    httpServer.listen(this.port)
+    await once(httpServer, 'listening')
 
     wss.on('connection', (ws) => {
       this.clients.add(ws)
@@ -376,6 +389,80 @@ export class LiveUiSession {
     wss.on('error', (err) => {
       console.error(`[liveui] WebSocket 服务错误: ${(err as Error).message}`)
     })
+  }
+
+  private handleHttpRequest(req: IncomingMessage, res: ServerResponse): void {
+    const method = req.method ?? 'GET'
+    if (method !== 'GET' && method !== 'HEAD') {
+      res.writeHead(405, { Allow: 'GET, HEAD' })
+      res.end()
+      return
+    }
+    const url = new URL(req.url ?? '/', `http://127.0.0.1:${this.port}`)
+    if (url.pathname !== '/media') {
+      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' })
+      res.end('Not Found')
+      return
+    }
+    const filePath = url.searchParams.get('path') ?? ''
+    if (!filePath || !isAbsolute(filePath)) {
+      res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' })
+      res.end('invalid media path')
+      return
+    }
+
+    let st: ReturnType<typeof statSync>
+    try {
+      st = statSync(filePath)
+      if (!st.isFile()) throw new Error('not file')
+    } catch {
+      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' })
+      res.end('media not found')
+      return
+    }
+
+    const size = st.size
+    const mime = mediaMimeType(filePath)
+    const commonHeaders = {
+      'Accept-Ranges': 'bytes',
+      'Content-Type': mime,
+      'Cache-Control': 'no-store',
+      'Access-Control-Allow-Origin': '*',
+    }
+    const range = req.headers.range
+    if (range) {
+      const m = /^bytes=(\d*)-(\d*)$/.exec(range)
+      if (!m) {
+        res.writeHead(416, { ...commonHeaders, 'Content-Range': `bytes */${size}` })
+        res.end()
+        return
+      }
+      const rawStart = m[1] ? Number(m[1]) : 0
+      const rawEnd = m[2] ? Number(m[2]) : size - 1
+      const start = Math.max(0, Math.min(rawStart, size - 1))
+      const end = Math.max(start, Math.min(rawEnd, size - 1))
+      res.writeHead(206, {
+        ...commonHeaders,
+        'Content-Range': `bytes ${start}-${end}/${size}`,
+        'Content-Length': String(end - start + 1),
+      })
+      if (method === 'HEAD') {
+        res.end()
+        return
+      }
+      createReadStream(filePath, { start, end }).pipe(res)
+      return
+    }
+
+    res.writeHead(200, {
+      ...commonHeaders,
+      'Content-Length': String(size),
+    })
+    if (method === 'HEAD') {
+      res.end()
+      return
+    }
+    createReadStream(filePath).pipe(res)
   }
 
   broadcast(msg: LiveUiMessage): void {
@@ -560,11 +647,28 @@ export class LiveUiSession {
       })
       this.wss = null
     }
+    if (this.httpServer) {
+      await new Promise<void>((resolve) => {
+        this.httpServer!.close(() => resolve())
+      })
+      this.httpServer = null
+    }
     if (this.electronChild && !this.electronChild.killed) {
       this.electronChild.kill('SIGTERM')
       this.electronChild = null
     }
   }
+}
+
+function mediaMimeType(filePath: string): string {
+  const ext = extname(filePath).toLowerCase()
+  if (ext === '.mp4' || ext === '.m4v') return 'video/mp4'
+  if (ext === '.webm') return 'video/webm'
+  if (ext === '.mov') return 'video/quicktime'
+  if (ext === '.png') return 'image/png'
+  if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg'
+  if (ext === '.webp') return 'image/webp'
+  return 'application/octet-stream'
 }
 
 function parseVisionLocation(raw: unknown): LiveUiVisionAttachment['location'] | undefined {
