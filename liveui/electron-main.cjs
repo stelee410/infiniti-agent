@@ -205,12 +205,11 @@ function createWindow() {
             : 560
         const height =
           payload && Number.isFinite(payload.height)
-            ? Math.max(72, Math.min(180, Math.round(payload.height)))
+            ? Math.max(72, Math.min(520, Math.round(payload.height)))
             : 96
         const cur = win.getBounds()
-        const nextX = cur.x + Math.round((cur.width - width) / 2)
         const nextY = cur.y + cur.height - height
-        win.setBounds({ x: nextX, y: nextY, width, height })
+        win.setBounds({ x: cur.x, y: nextY, width: cur.width, height })
         win.setIgnoreMouseEvents(false)
       } else if (preMinimalBounds) {
         win.setBounds(preMinimalBounds)

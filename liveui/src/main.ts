@@ -605,6 +605,7 @@ async function bootstrap(): Promise<void> {
     speechBubble.classList.add('visible', 'liveui-bubble-waiting')
     speechBubble.setAttribute('aria-hidden', 'false')
     positionBubbleOverFigure()
+    requestAnimationFrame(() => syncMinimalWindowBounds())
   }
 
   const runBubbleReadingFrame = (): void => {
@@ -663,6 +664,7 @@ async function bootstrap(): Promise<void> {
     speechBubble.classList.add('visible')
     speechBubble.setAttribute('aria-hidden', 'false')
     positionBubbleOverFigure()
+    if (minimalMode && (typedThisFrame || needMoreFrames)) syncMinimalWindowBounds()
 
     if (needMoreFrames) {
       typewriterRaf = requestAnimationFrame(runBubbleReadingFrame)
@@ -703,6 +705,7 @@ async function bootstrap(): Promise<void> {
     speechBubble.classList.add('visible')
     speechBubble.setAttribute('aria-hidden', 'false')
     positionBubbleOverFigure()
+    requestAnimationFrame(() => syncMinimalWindowBounds())
     ensureTypewriter()
   }
 
@@ -1273,6 +1276,7 @@ async function bootstrap(): Promise<void> {
     if (!slashMenuOpenLive) {
       slashMenuEl.hidden = true
       slashMenuEl.setAttribute('aria-hidden', 'true')
+      requestAnimationFrame(() => syncMinimalWindowBounds())
       return
     }
     slashMenuEl.hidden = false
@@ -1314,6 +1318,7 @@ async function bootstrap(): Promise<void> {
       row.append(kindEl, labEl, descEl)
       slashListEl.append(row)
     }
+    requestAnimationFrame(() => syncMinimalWindowBounds())
   }
 
   let lastConvActivity = Date.now()
@@ -1322,6 +1327,7 @@ async function bootstrap(): Promise<void> {
   let maybeAutoStartAsr = (): void => {}
   let exitVoiceModeForMinimal = (): void => {}
   let forceWindowInteractive = (): void => {}
+  let syncMinimalWindowBounds = (): void => {}
 
   const touchConvActivity = (): void => {
     lastConvActivity = Date.now()
@@ -2371,23 +2377,32 @@ async function bootstrap(): Promise<void> {
     updateSpeakerBtn()
     layoutFigureInStage()
     positionBubbleOverFigure()
+    syncMinimalWindowBounds = () => {
+      if (!minimalMode) return
+      const dock = document.getElementById('liveui-bottom-dock')
+      const tools = document.getElementById('liveui-window-tools')
+      const rects = [
+        dock?.getBoundingClientRect(),
+        tools?.getBoundingClientRect(),
+        slashMenuEl && !slashMenuEl.hidden ? slashMenuEl.getBoundingClientRect() : undefined,
+        speechBubble?.classList.contains('visible') ? speechBubble.getBoundingClientRect() : undefined,
+      ].filter((r): r is DOMRect => !!r && r.width > 0 && r.height > 0)
+      if (!rects.length) return
+      const left = Math.min(...rects.map((r) => r.left))
+      const right = Math.max(...rects.map((r) => r.right))
+      const top = Math.min(...rects.map((r) => r.top))
+      const bottom = Math.max(...rects.map((r) => r.bottom))
+      const width = Math.ceil(right - left + 24)
+      const height = Math.ceil(bottom - top + 16)
+      window.infinitiLiveUi?.setMinimalModeOpen?.(true, { width, height })
+    }
     requestAnimationFrame(() => {
       if (!minimalMode) {
         window.infinitiLiveUi?.setMinimalModeOpen?.(false)
         requestAnimationFrame(() => forceWindowInteractive())
         return
       }
-      const dock = document.getElementById('liveui-bottom-dock')
-      const tools = document.getElementById('liveui-window-tools')
-      const dockRect = dock?.getBoundingClientRect()
-      const toolsRect = tools?.getBoundingClientRect()
-      const left = Math.min(dockRect?.left ?? 0, toolsRect?.left ?? dockRect?.left ?? 0)
-      const right = Math.max(dockRect?.right ?? 0, toolsRect?.right ?? dockRect?.right ?? 0)
-      const top = Math.min(dockRect?.top ?? 0, toolsRect?.top ?? dockRect?.top ?? 0)
-      const bottom = Math.max(dockRect?.bottom ?? 0, toolsRect?.bottom ?? dockRect?.bottom ?? 0)
-      const width = Math.ceil(right - left + 20)
-      const height = Math.ceil(bottom - top + 12)
-      window.infinitiLiveUi?.setMinimalModeOpen?.(true, { width, height })
+      syncMinimalWindowBounds()
     })
     if (!minimalMode && minimalBubbleWaiting) {
       startMinimalBubbleReading()
@@ -3207,6 +3222,8 @@ async function bootstrap(): Promise<void> {
       if (
         dom &&
         (dom.closest('#liveui-control-bar') ||
+          dom.closest('#liveui-slash-menu') ||
+          dom.closest('#speech-bubble') ||
           dom.closest('#liveui-config-panel') ||
           dom.closest('#liveui-photo-preview') ||
           dom.closest('#liveui-inbox'))
