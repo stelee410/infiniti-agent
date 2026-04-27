@@ -11,6 +11,8 @@ export type CaptureVisionSnapshotOptions = {
   timeoutMs?: number
   maxBytes?: number
   logPath?: string
+  /** 先打开摄像头并预热，然后至少等待该时长再抓帧。用于让 UI 倒计时和实际拍照对齐。 */
+  captureDelayMs?: number
 }
 
 export type CaptureVisionSnapshotResult =
@@ -106,6 +108,7 @@ final class FrameDelegate: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
 
 let outputPath = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "/tmp/infiniti-agent-camera.jpg"
 let timeoutSeconds = CommandLine.arguments.count > 2 ? max(3.0, Double(CommandLine.arguments[2]) ?? 20.0) : 20.0
+let captureDelaySeconds = CommandLine.arguments.count > 4 ? max(0.0, Double(CommandLine.arguments[4]) ?? 0.0) : 0.0
 let outputURL = URL(fileURLWithPath: outputPath)
 let warmupSeconds = 1.2
 let minFrameCount = 20
@@ -160,7 +163,8 @@ output.alwaysDiscardsLateVideoFrames = true
 output.videoSettings = [
   kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
 ]
-let delegate = FrameDelegate(outputURL: outputURL, warmupSeconds: warmupSeconds, minFrameCount: minFrameCount)
+let effectiveWarmupSeconds = max(warmupSeconds, captureDelaySeconds)
+let delegate = FrameDelegate(outputURL: outputURL, warmupSeconds: effectiveWarmupSeconds, minFrameCount: minFrameCount)
 let queue = DispatchQueue(label: "infiniti-agent.camera.capture")
 output.setSampleBufferDelegate(delegate, queue: queue)
 
@@ -171,7 +175,7 @@ guard session.canAddOutput(output) else {
 session.addOutput(output)
 session.commitConfiguration()
 
-log("[camera-native] startRunning warmupSeconds=\(warmupSeconds) minFrameCount=\(minFrameCount)")
+log("[camera-native] startRunning warmupSeconds=\(effectiveWarmupSeconds) captureDelaySeconds=\(captureDelaySeconds) minFrameCount=\(minFrameCount)")
 session.startRunning()
 guard session.isRunning else {
   log("[camera-native] session did not start")
@@ -370,7 +374,12 @@ async function ensureMacOsNativeCameraHelper(timeoutMs: number): Promise<string>
   return appPath
 }
 
-async function captureWithMacOsNativeCamera(timeoutMs: number, maxBytes: number, logPath?: string): Promise<Buffer> {
+async function captureWithMacOsNativeCamera(
+  timeoutMs: number,
+  maxBytes: number,
+  logPath?: string,
+  captureDelayMs = 0,
+): Promise<Buffer> {
   const dir = await mkdtemp(join(tmpdir(), 'infiniti-agent-camera-'))
   const imagePath = join(dir, `${randomUUID()}.jpg`)
   const appPath = await ensureMacOsNativeCameraHelper(timeoutMs)
@@ -385,7 +394,8 @@ async function captureWithMacOsNativeCamera(timeoutMs: number, maxBytes: number,
         '--args',
         imagePath,
         String(Math.ceil(timeoutMs / 1000)),
-        ...(logPath ? [logPath] : []),
+        logPath ?? '',
+        String(Math.max(0, captureDelayMs / 1000)),
       ],
       timeoutMs,
       '[camera-native]',
@@ -518,7 +528,7 @@ export async function captureVisionSnapshotResult(
 
   if (process.platform === 'darwin' && process.env.INFINITI_LIVEUI_CAMERA_DISABLE_NATIVE !== '1') {
     try {
-      const image = await captureWithMacOsNativeCamera(timeoutMs, maxBytes, opts.logPath)
+      const image = await captureWithMacOsNativeCamera(timeoutMs, maxBytes, opts.logPath, opts.captureDelayMs)
       console.error(`[liveui] macOS 原生视觉快照已拍摄: ${image.length} bytes`)
       return {
         ok: true,

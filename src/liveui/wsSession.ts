@@ -577,9 +577,17 @@ export class LiveUiSession {
       data && typeof data === 'object'
         ? parseVisionLocation((data as { location?: unknown }).location)
         : undefined
+    const rawDelay =
+      data && typeof data === 'object'
+        ? (data as { captureDelayMs?: unknown }).captureDelayMs
+        : undefined
+    const captureDelayMs =
+      typeof rawDelay === 'number' && Number.isFinite(rawDelay)
+        ? Math.max(0, Math.min(10_000, Math.round(rawDelay)))
+        : 0
 
-    console.error(`[liveui] vision capture requested: ${requestId}`)
-    const result = await captureVisionSnapshotResult({ location })
+    console.error(`[liveui] vision capture requested: ${requestId}, captureDelayMs=${captureDelayMs}`)
+    const result = await captureVisionSnapshotResult({ location, captureDelayMs })
     if (result.ok) {
       this.lastVisionCapture = { requestId, vision: result.vision }
       if (ws.readyState === WebSocket.OPEN) {

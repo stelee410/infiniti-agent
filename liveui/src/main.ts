@@ -50,6 +50,8 @@ declare global {
       setConfigPanelOpen?: (open: boolean) => void
       /** Electron：拍照倒计时/闪光时临时铺满屏幕 */
       setCameraCaptureOpen?: (open: boolean) => void
+      /** Electron：极简模式时收缩/恢复透明窗口边界 */
+      setMinimalModeOpen?: (open: boolean, bounds?: { width: number; height: number }) => void
       /** Electron：读取窗口位置，供自绘拖拽按钮使用 */
       getWindowBounds?: () => Promise<{ x: number; y: number; width: number; height: number } | null>
       /** Electron：移动窗口，供自绘拖拽按钮使用 */
@@ -215,6 +217,14 @@ function readPort(): string {
   const fromPreload = window.infinitiLiveUi?.port?.trim()
   if (fromPreload) return fromPreload
   return new URLSearchParams(window.location.search).get('port') ?? '8080'
+}
+
+function escapeHtmlText(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
 }
 
 /** 将 TUI 情感名映射到 mao_pro 等模型的 expression 名（model3 内 Name 字段） */
@@ -504,6 +514,9 @@ async function bootstrap(): Promise<void> {
   let twCarry = 0
   let bubbleAutoDismissTimer: ReturnType<typeof setTimeout> | undefined
   let bubbleIsStreaming = false
+  let minimalMode = false
+  let minimalBubbleWaiting = false
+  let minimalBubbleStarted = false
 
   const positionInboxAtComposer = (): void => {
     if (!inboxRoot) return
@@ -548,9 +561,11 @@ async function bootstrap(): Promise<void> {
   const scheduleBubbleDismiss = (): void => {
     clearBubbleDismiss()
     if (!bubbleTarget.trim()) return
+    if (minimalMode && minimalBubbleWaiting) return
     const ms = estimateReadTimeMs(bubbleTarget)
     bubbleAutoDismissTimer = setTimeout(() => {
       speechBubble?.classList.remove('visible')
+      speechBubble?.classList.remove('liveui-bubble-waiting')
       speechBubble?.setAttribute('aria-hidden', 'true')
       bubbleAutoDismissTimer = undefined
     }, ms)
@@ -571,12 +586,26 @@ async function bootstrap(): Promise<void> {
     twLastPerf = 0
     twCarry = 0
     bubbleIsStreaming = true
+    minimalBubbleWaiting = false
+    minimalBubbleStarted = false
     if (speechBubbleText) {
       speechBubbleText.innerHTML = ''
       speechBubbleText.scrollTop = 0
     }
     speechBubble?.classList.remove('visible')
+    speechBubble?.classList.remove('liveui-bubble-waiting')
     speechBubble?.setAttribute('aria-hidden', 'true')
+  }
+
+  const setWaitingBubbleFirstChar = (): void => {
+    if (!speechBubbleText || !speechBubble) return
+    const first = Array.from(bubbleTarget.trimStart())[0] ?? ''
+    speechBubbleText.innerHTML = `<span class="liveui-bubble-first-char">${escapeHtmlText(first)}</span>`
+    speechBubbleText.scrollTop = 0
+    speechBubble.classList.add('visible', 'liveui-bubble-waiting')
+    speechBubble.setAttribute('aria-hidden', 'false')
+    positionBubbleOverFigure()
+    requestAnimationFrame(() => syncMinimalWindowBounds())
   }
 
   const runBubbleReadingFrame = (): void => {
@@ -584,6 +613,7 @@ async function bootstrap(): Promise<void> {
       typewriterRaf = undefined
       return
     }
+    speechBubble.classList.remove('liveui-bubble-waiting')
     const now = performance.now()
     const dt = twLastPerf ? Math.min(50, Math.max(0, now - twLastPerf)) : 0
     twLastPerf = now
@@ -634,12 +664,14 @@ async function bootstrap(): Promise<void> {
     speechBubble.classList.add('visible')
     speechBubble.setAttribute('aria-hidden', 'false')
     positionBubbleOverFigure()
+    if (minimalMode && (typedThisFrame || needMoreFrames)) syncMinimalWindowBounds()
 
     if (needMoreFrames) {
       typewriterRaf = requestAnimationFrame(runBubbleReadingFrame)
     } else {
       typewriterRaf = undefined
       twLastPerf = 0
+      if (!bubbleIsStreaming) scheduleBubbleDismiss()
     }
   }
 
@@ -659,12 +691,32 @@ async function bootstrap(): Promise<void> {
     }
     clearBubbleDismiss()
     if (bubbleShown > bubbleTarget.length) bubbleShown = bubbleTarget.length
+    if (minimalMode && !minimalBubbleStarted) {
+      minimalBubbleWaiting = true
+      stopTypewriter()
+      setWaitingBubbleFirstChar()
+      return
+    }
+    minimalBubbleWaiting = false
+    speechBubble.classList.remove('liveui-bubble-waiting')
     speechBubbleText.innerHTML = renderLiveUiBubbleMarkdown(
       bubbleTarget.slice(0, bubbleShown),
     )
     speechBubble.classList.add('visible')
     speechBubble.setAttribute('aria-hidden', 'false')
     positionBubbleOverFigure()
+    requestAnimationFrame(() => syncMinimalWindowBounds())
+    ensureTypewriter()
+  }
+
+  const startMinimalBubbleReading = (): void => {
+    if (!minimalBubbleWaiting || !bubbleTarget.trim()) return
+    minimalBubbleWaiting = false
+    minimalBubbleStarted = true
+    bubbleShown = 0
+    twCarry = 0
+    twLastPerf = performance.now()
+    speechBubble?.classList.remove('liveui-bubble-waiting')
     ensureTypewriter()
   }
 
@@ -1224,6 +1276,7 @@ async function bootstrap(): Promise<void> {
     if (!slashMenuOpenLive) {
       slashMenuEl.hidden = true
       slashMenuEl.setAttribute('aria-hidden', 'true')
+      requestAnimationFrame(() => syncMinimalWindowBounds())
       return
     }
     slashMenuEl.hidden = false
@@ -1265,12 +1318,16 @@ async function bootstrap(): Promise<void> {
       row.append(kindEl, labEl, descEl)
       slashListEl.append(row)
     }
+    requestAnimationFrame(() => syncMinimalWindowBounds())
   }
 
   let lastConvActivity = Date.now()
   let statusPillVariant: LiveUiStatusVariant = 'ready'
   let idleMotionBusy = false
   let maybeAutoStartAsr = (): void => {}
+  let exitVoiceModeForMinimal = (): void => {}
+  let forceWindowInteractive = (): void => {}
+  let syncMinimalWindowBounds = (): void => {}
 
   const touchConvActivity = (): void => {
     lastConvActivity = Date.now()
@@ -2149,6 +2206,7 @@ async function bootstrap(): Promise<void> {
     } else if (msg.type === 'VISION_CAPTURE_RESULT') {
       const requestId = typeof msg.data?.requestId === 'string' ? msg.data.requestId : ''
       if (!requestId || requestId !== activeCameraRequestId) return
+      window.infinitiLiveUi?.setCameraCaptureOpen?.(false)
       finishCameraCaptureUi()
       if (msg.data?.ok === true) {
         const vision = parseVisionAttachment(msg.data.vision)
@@ -2161,7 +2219,7 @@ async function bootstrap(): Promise<void> {
     } else if (msg.type === 'VISION_ATTACHMENT_CLEAR') {
       clearConfirmedPhotoUi(false)
     } else if (msg.type === 'AUDIO_CHUNK') {
-      if (ttsEnabled && msg.data) enqueueAudioChunk(msg.data)
+      if (!minimalMode && ttsEnabled && msg.data) enqueueAudioChunk(msg.data)
     } else if (msg.type === 'AUDIO_RESET') {
       resetAudioQueue()
     } else if (msg.type === 'ACTION') {
@@ -2184,7 +2242,7 @@ async function bootstrap(): Promise<void> {
       setBubbleFromDisplayText(stripLiveUiKnownEmotionTagsEverywhere(displayText, streamManifestForStrip))
       if (msg.data?.done && bubbleTarget.trim()) {
         bubbleIsStreaming = false
-        scheduleBubbleDismiss()
+        if (!minimalBubbleWaiting) scheduleBubbleDismiss()
       }
       touchConvActivity()
     } else if (msg.type === 'STATUS_PILL' && statusPill) {
@@ -2200,7 +2258,7 @@ async function bootstrap(): Promise<void> {
       statusPill.className = `liveui-status-pill liveui-status-pill--${variant}`
       if (wasBusy && variant === 'ready' && bubbleTarget.trim()) {
         bubbleIsStreaming = false
-        scheduleBubbleDismiss()
+        if (!minimalBubbleWaiting) scheduleBubbleDismiss()
       }
     }
   })
@@ -2281,10 +2339,12 @@ async function bootstrap(): Promise<void> {
   const updateSpeakerBtn = (): void => {
     if (!speakerBtn) return
     speakerBtn.disabled = !ttsAvailable
-    const on = ttsEnabled && ttsAvailable
+    const on = !minimalMode && ttsEnabled && ttsAvailable
     speakerBtn.setAttribute('aria-pressed', String(on))
     speakerBtn.title = !ttsAvailable
       ? '语音回复：未配置 TTS（config.tts：minimax、moss_tts_nano 或 voxcpm）'
+      : minimalMode
+        ? '语音回复：极简模式中暂停'
       : on
         ? '语音回复：已开启'
         : '语音回复：已关闭'
@@ -2300,6 +2360,73 @@ async function bootstrap(): Promise<void> {
       socket.send(JSON.stringify({ type: 'TTS_TOGGLE', data: { enabled: ttsEnabled } }))
     }
     if (!ttsEnabled) resetAudioQueue()
+  })
+
+  const minimalBtn = document.getElementById('liveui-btn-minimal') as HTMLButtonElement | null
+
+  const updateMinimalBtn = (): void => {
+    if (!minimalBtn) return
+    minimalBtn.setAttribute('aria-pressed', String(minimalMode))
+    minimalBtn.title = minimalMode ? '退出极简模式（Esc）' : '极简模式'
+  }
+
+  const setMinimalMode = (next: boolean): void => {
+    minimalMode = next
+    document.body.classList.toggle('liveui-minimal-mode', minimalMode)
+    updateMinimalBtn()
+    updateSpeakerBtn()
+    layoutFigureInStage()
+    positionBubbleOverFigure()
+    syncMinimalWindowBounds = () => {
+      if (!minimalMode) return
+      const dock = document.getElementById('liveui-bottom-dock')
+      const tools = document.getElementById('liveui-window-tools')
+      const rects = [
+        dock?.getBoundingClientRect(),
+        tools?.getBoundingClientRect(),
+        slashMenuEl && !slashMenuEl.hidden ? slashMenuEl.getBoundingClientRect() : undefined,
+        speechBubble?.classList.contains('visible') ? speechBubble.getBoundingClientRect() : undefined,
+      ].filter((r): r is DOMRect => !!r && r.width > 0 && r.height > 0)
+      if (!rects.length) return
+      const left = Math.min(...rects.map((r) => r.left))
+      const right = Math.max(...rects.map((r) => r.right))
+      const top = Math.min(...rects.map((r) => r.top))
+      const bottom = Math.max(...rects.map((r) => r.bottom))
+      const width = Math.ceil(right - left + 24)
+      const height = Math.ceil(bottom - top + 16)
+      window.infinitiLiveUi?.setMinimalModeOpen?.(true, { width, height })
+    }
+    requestAnimationFrame(() => {
+      if (!minimalMode) {
+        window.infinitiLiveUi?.setMinimalModeOpen?.(false)
+        requestAnimationFrame(() => forceWindowInteractive())
+        return
+      }
+      syncMinimalWindowBounds()
+    })
+    if (!minimalMode && minimalBubbleWaiting) {
+      startMinimalBubbleReading()
+    }
+    if (minimalMode) {
+      resetAudioQueue()
+      exitVoiceModeForMinimal()
+      userLineInput?.focus()
+    } else {
+      maybeAutoStartAsr()
+    }
+  }
+
+  minimalBtn?.addEventListener('click', () => {
+    setMinimalMode(!minimalMode)
+  })
+
+  speechBubble?.addEventListener('click', () => {
+    startMinimalBubbleReading()
+  })
+
+  window.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'Escape' || !minimalMode) return
+    setMinimalMode(false)
   })
 
   document.getElementById('liveui-btn-config')?.addEventListener('click', () => {
@@ -2649,10 +2776,15 @@ async function bootstrap(): Promise<void> {
   }
 
   const enterVoiceMode = async (): Promise<void> => {
+    if (minimalMode) return
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: { sampleRate: 16000, channelCount: 1 },
       })
+      if (minimalMode) {
+        stream.getTracks().forEach((t) => t.stop())
+        return
+      }
       micStream = stream
       micAudioCtx = new AudioContext()
       const source = micAudioCtx.createMediaStreamSource(stream)
@@ -2683,7 +2815,7 @@ async function bootstrap(): Promise<void> {
   }
 
   maybeAutoStartAsr = (): void => {
-    if (!voiceMic.asrAutoEnabled || !asrAvailable || voiceMode) return
+    if (minimalMode || !voiceMic.asrAutoEnabled || !asrAvailable || voiceMode) return
     void enterVoiceMode()
   }
   maybeAutoStartAsr()
@@ -2711,6 +2843,7 @@ async function bootstrap(): Promise<void> {
       userLineInput.placeholder = ''
     }
   }
+  exitVoiceModeForMinimal = exitVoiceMode
 
   const finishPushToTalkIfNeeded = (): void => {
     if (!voiceMode || voiceMicAuto) return
@@ -2768,6 +2901,7 @@ async function bootstrap(): Promise<void> {
   const cameraCountdownNumber = document.getElementById('liveui-camera-countdown-number') as HTMLElement | null
   const cameraFlash = document.getElementById('liveui-camera-flash') as HTMLElement | null
   const attachmentList = document.getElementById('liveui-attachment-list')
+  const CAMERA_COUNTDOWN_CAPTURE_DELAY_MS = 3 * 720 + 120
 
   const photoDataUrl = (vision: LiveUiVisionAttachment): string =>
     `data:${vision.mediaType};base64,${vision.imageBase64}`
@@ -3015,33 +3149,27 @@ async function bootstrap(): Promise<void> {
     const requestId = `photo-${Date.now()}-${++cameraCaptureSeq}`
     activeCameraRequestId = requestId
     updateCameraBtn()
-    let prepared: PreparedCameraCapture | null = null
     cameraUiTimeout = window.setTimeout(() => {
       if (activeCameraRequestId !== requestId) return
       console.warn('[liveui] 拍照请求超时，已恢复相机按钮')
-      prepared?.close()
       window.infinitiLiveUi?.setCameraCaptureOpen?.(false)
       finishCameraCaptureUi()
     }, 30_000)
     try {
+      if (socket.readyState !== WebSocket.OPEN) {
+        throw new Error('LiveUI WebSocket 未连接，无法请求 CLI 摄像头拍照')
+      }
       window.infinitiLiveUi?.setCameraCaptureOpen?.(true)
-      prepared = await prepareCameraCapture()
       layoutFigureInStage()
       positionBubbleOverFigure()
-      const locationPromise = getCurrentLocation(1200)
+      if (activeCameraRequestId !== requestId) return
+      socket.send(JSON.stringify({
+        type: 'VISION_CAPTURE_REQUEST',
+        data: { requestId, captureDelayMs: CAMERA_COUNTDOWN_CAPTURE_DELAY_MS },
+      }))
       await runCameraCountdown()
-      const location = await locationPromise
-      const vision = prepared.capture(location)
-      prepared.close()
-      prepared = null
-      window.infinitiLiveUi?.setCameraCaptureOpen?.(false)
-      if (activeCameraRequestId === requestId) {
-        showPhotoPreview(requestId, vision)
-        finishCameraCaptureUi()
-      }
     } catch (e) {
       console.warn(`[liveui] 拍照失败: ${describeCameraError(e)}`)
-      prepared?.close()
       window.infinitiLiveUi?.setCameraCaptureOpen?.(false)
       if (activeCameraRequestId === requestId) finishCameraCaptureUi()
     }
@@ -3083,6 +3211,10 @@ async function bootstrap(): Promise<void> {
   const setIgnore = window.infinitiLiveUi?.setIgnoreMouseEvents
   if (setIgnore) {
     let windowIgnoring = true
+    forceWindowInteractive = () => {
+      windowIgnoring = false
+      setIgnore(false)
+    }
 
     const isOverInteractive = (ex: number, ey: number): boolean => {
       if (configPanelOpen || inboxPanelOpen) return true
@@ -3090,6 +3222,8 @@ async function bootstrap(): Promise<void> {
       if (
         dom &&
         (dom.closest('#liveui-control-bar') ||
+          dom.closest('#liveui-slash-menu') ||
+          dom.closest('#speech-bubble') ||
           dom.closest('#liveui-config-panel') ||
           dom.closest('#liveui-photo-preview') ||
           dom.closest('#liveui-inbox'))

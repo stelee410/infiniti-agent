@@ -95,6 +95,7 @@ function createWindow() {
   const preload = path.join(__dirname, 'preload.cjs')
   let preConfigBounds = null
   let preCameraBounds = null
+  let preMinimalBounds = null
 
   const win = new BrowserWindow({
     title: 'Infiniti LiveUI',
@@ -188,6 +189,31 @@ function createWindow() {
       } else if (preCameraBounds) {
         win.setBounds(preCameraBounds)
         preCameraBounds = null
+        if (!debugWindow) win.setIgnoreMouseEvents(true, { forward: true })
+      }
+    } catch { /* window may be destroyed */ }
+  })
+
+  ipcMain.on('liveui-minimal-mode-open', (_e, payload) => {
+    try {
+      const open = !!(payload && payload.open)
+      if (open) {
+        if (!preMinimalBounds) preMinimalBounds = win.getBounds()
+        const width =
+          payload && Number.isFinite(payload.width)
+            ? Math.max(280, Math.min(720, Math.round(payload.width)))
+            : 560
+        const height =
+          payload && Number.isFinite(payload.height)
+            ? Math.max(72, Math.min(520, Math.round(payload.height)))
+            : 96
+        const cur = win.getBounds()
+        const nextY = cur.y + cur.height - height
+        win.setBounds({ x: cur.x, y: nextY, width: cur.width, height })
+        win.setIgnoreMouseEvents(false)
+      } else if (preMinimalBounds) {
+        win.setBounds(preMinimalBounds)
+        preMinimalBounds = null
         if (!debugWindow) win.setIgnoreMouseEvents(true, { forward: true })
       }
     } catch { /* window may be destroyed */ }

@@ -57,6 +57,9 @@ contextBridge.exposeInMainWorld('infinitiLiveUi', {
   setCameraCaptureOpen: (open) => {
     ipcRenderer.send('liveui-camera-capture-open', !!open)
   },
+  setMinimalModeOpen: (open, bounds) => {
+    ipcRenderer.send('liveui-minimal-mode-open', { open: !!open, ...(bounds || {}) })
+  },
   getWindowBounds: () => ipcRenderer.invoke('liveui-get-window-bounds'),
   setWindowPosition: (x, y) => {
     ipcRenderer.send('liveui-set-window-position', { x, y })
