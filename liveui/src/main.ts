@@ -50,6 +50,8 @@ declare global {
       setConfigPanelOpen?: (open: boolean) => void
       /** Electron：拍照倒计时/闪光时临时铺满屏幕 */
       setCameraCaptureOpen?: (open: boolean) => void
+      /** Electron：极简模式时收缩/恢复透明窗口边界 */
+      setMinimalModeOpen?: (open: boolean, bounds?: { width: number; height: number }) => void
       /** Electron：读取窗口位置，供自绘拖拽按钮使用 */
       getWindowBounds?: () => Promise<{ x: number; y: number; width: number; height: number } | null>
       /** Electron：移动窗口，供自绘拖拽按钮使用 */
@@ -1319,6 +1321,7 @@ async function bootstrap(): Promise<void> {
   let idleMotionBusy = false
   let maybeAutoStartAsr = (): void => {}
   let exitVoiceModeForMinimal = (): void => {}
+  let forceWindowInteractive = (): void => {}
 
   const touchConvActivity = (): void => {
     lastConvActivity = Date.now()
@@ -2368,6 +2371,24 @@ async function bootstrap(): Promise<void> {
     updateSpeakerBtn()
     layoutFigureInStage()
     positionBubbleOverFigure()
+    requestAnimationFrame(() => {
+      if (!minimalMode) {
+        window.infinitiLiveUi?.setMinimalModeOpen?.(false)
+        requestAnimationFrame(() => forceWindowInteractive())
+        return
+      }
+      const dock = document.getElementById('liveui-bottom-dock')
+      const tools = document.getElementById('liveui-window-tools')
+      const dockRect = dock?.getBoundingClientRect()
+      const toolsRect = tools?.getBoundingClientRect()
+      const left = Math.min(dockRect?.left ?? 0, toolsRect?.left ?? dockRect?.left ?? 0)
+      const right = Math.max(dockRect?.right ?? 0, toolsRect?.right ?? dockRect?.right ?? 0)
+      const top = Math.min(dockRect?.top ?? 0, toolsRect?.top ?? dockRect?.top ?? 0)
+      const bottom = Math.max(dockRect?.bottom ?? 0, toolsRect?.bottom ?? dockRect?.bottom ?? 0)
+      const width = Math.ceil(right - left + 20)
+      const height = Math.ceil(bottom - top + 12)
+      window.infinitiLiveUi?.setMinimalModeOpen?.(true, { width, height })
+    })
     if (!minimalMode && minimalBubbleWaiting) {
       startMinimalBubbleReading()
     }
@@ -3175,6 +3196,10 @@ async function bootstrap(): Promise<void> {
   const setIgnore = window.infinitiLiveUi?.setIgnoreMouseEvents
   if (setIgnore) {
     let windowIgnoring = true
+    forceWindowInteractive = () => {
+      windowIgnoring = false
+      setIgnore(false)
+    }
 
     const isOverInteractive = (ex: number, ey: number): boolean => {
       if (configPanelOpen || inboxPanelOpen) return true
