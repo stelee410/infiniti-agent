@@ -23,6 +23,7 @@ export function resolveElectronCliJs(): string | null {
 }
 
 export type LiveUiElectronSpawnOptions = {
+  renderer?: 'live2d' | 'sprite' | 'real2d'
   model3FileUrl?: string
   /** 含尾斜杠的 `file:` URL，指向含 `exp_01.png`…的目录 */
   spriteExpressionDirFileUrl?: string
@@ -60,6 +61,7 @@ export function spawnLiveElectron(port: number, opts?: LiveUiElectronSpawnOption
     env: {
       ...process.env,
       INFINITI_LIVEUI_PORT: String(port),
+      ...(opts?.renderer ? { INFINITI_LIVEUI_RENDERER: opts.renderer } : {}),
       ...(opts?.model3FileUrl ? { INFINITI_LIVEUI_MODEL3_FILE_URL: opts.model3FileUrl } : {}),
       ...(opts?.spriteExpressionDirFileUrl
         ? { INFINITI_LIVEUI_SPRITE_EXPRESSION_DIR: opts.spriteExpressionDirFileUrl }

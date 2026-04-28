@@ -2,6 +2,7 @@
 const { contextBridge, ipcRenderer } = require('electron')
 
 const port = process.env.INFINITI_LIVEUI_PORT || '8080'
+const renderer = process.env.INFINITI_LIVEUI_RENDERER || ''
 const model3FileUrl = process.env.INFINITI_LIVEUI_MODEL3_FILE_URL || ''
 const spriteExpressionDirFileUrl = process.env.INFINITI_LIVEUI_SPRITE_EXPRESSION_DIR || ''
 
@@ -39,6 +40,7 @@ try {
 
 contextBridge.exposeInMainWorld('infinitiLiveUi', {
   port,
+  renderer,
   model3FileUrl,
   spriteExpressionDirFileUrl,
   voiceMic,
