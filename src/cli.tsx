@@ -157,13 +157,21 @@ function restartLiveUiElectron(
   }
 
   const useSprite = Boolean(spriteResolved?.dirFileUrl)
-  if (useSprite) {
+  const renderer = cfg.liveUi?.renderer ?? (useSprite ? 'sprite' : 'live2d')
+  const useReal2d = renderer === 'real2d' && useSprite
+  const useSpriteOnly = renderer === 'sprite' && useSprite
+  if (renderer === 'real2d' && !useSprite) {
+    console.error('[liveui] renderer=real2d 需要 liveUi.spriteExpressions.dir，当前将回退 Live2D/占位')
+  } else if (useReal2d) {
+    console.error(`[liveui] 已启用 real2d（基于 spriteExpressions PNG），不使用 Live2D 模型 URL`)
+  } else if (useSpriteOnly) {
     console.error(`[liveui] 已启用 spriteExpressions（PNG），不使用 Live2D 模型 URL`)
   }
 
   const child = spawnLiveElectron(liveUi.port, {
-    model3FileUrl: useSprite ? undefined : resolved?.model3FileUrl,
-    spriteExpressionDirFileUrl: spriteResolved?.dirFileUrl,
+    renderer: useReal2d ? 'real2d' : useSpriteOnly ? 'sprite' : 'live2d',
+    model3FileUrl: useReal2d || useSpriteOnly ? undefined : resolved?.model3FileUrl,
+    spriteExpressionDirFileUrl: useReal2d || useSpriteOnly ? spriteResolved?.dirFileUrl : undefined,
     voiceMicJson: buildLiveUiVoiceMicEnvJson(cfg.liveUi, { auto: opts.auto === true }),
     figureZoom: opts.figureZoom,
   })
@@ -180,6 +188,7 @@ async function runChatTui(
     skipPermissions?: boolean
     disableThinking?: boolean
     liveUi?: LiveUiSession | null
+    liveUiRenderer?: 'live2d' | 'sprite' | 'real2d'
     liveUiModel3FileUrl?: string
     /** `live` 且配置了 `spriteExpressions.dir` 时注入 Electron（`INFINITI_LIVEUI_SPRITE_EXPRESSION_DIR`） */
     liveUiSpriteExpressionDirFileUrl?: string
@@ -216,6 +225,7 @@ async function runChatTui(
       liveUi.startMouthPump()
       await configureLiveUiEngines(liveUi, cfg)
       const child = spawnLiveElectron(liveUi.port, {
+        renderer: opts.liveUiRenderer,
         model3FileUrl: opts.liveUiModel3FileUrl,
         spriteExpressionDirFileUrl: opts.liveUiSpriteExpressionDirFileUrl,
         voiceMicJson: opts.liveUiVoiceMicJson,
@@ -504,7 +514,14 @@ async function main(): Promise<void> {
       }
 
       const useSprite = Boolean(spriteResolved?.dirFileUrl)
-      if (useSprite) {
+      const renderer = cfg.liveUi?.renderer ?? (useSprite ? 'sprite' : 'live2d')
+      const useReal2d = renderer === 'real2d' && useSprite
+      const useSpriteOnly = renderer === 'sprite' && useSprite
+      if (renderer === 'real2d' && !useSprite) {
+        console.error('[liveui] renderer=real2d 需要 liveUi.spriteExpressions.dir，当前将回退 Live2D/占位')
+      } else if (useReal2d) {
+        console.error(`[liveui] 已启用 real2d（基于 spriteExpressions PNG），不使用 Live2D 模型 URL`)
+      } else if (useSpriteOnly) {
         console.error(`[liveui] 已启用 spriteExpressions（PNG），不使用 Live2D 模型 URL`)
       }
 
@@ -525,8 +542,9 @@ async function main(): Promise<void> {
         skipPermissions,
         disableThinking,
         liveUi,
-        liveUiModel3FileUrl: useSprite ? undefined : resolved?.model3FileUrl,
-        liveUiSpriteExpressionDirFileUrl: spriteResolved?.dirFileUrl,
+        liveUiRenderer: useReal2d ? 'real2d' : useSpriteOnly ? 'sprite' : 'live2d',
+        liveUiModel3FileUrl: useReal2d || useSpriteOnly ? undefined : resolved?.model3FileUrl,
+        liveUiSpriteExpressionDirFileUrl: useReal2d || useSpriteOnly ? spriteResolved?.dirFileUrl : undefined,
         liveUiVoiceMicJson: buildLiveUiVoiceMicEnvJson(cfg.liveUi, { auto: cmdOpts.auto === true }),
         liveUiFigureZoom: figureZoom,
         onConfigReload: async (nextCfg) => {

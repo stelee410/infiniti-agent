@@ -138,6 +138,8 @@ export type SeedanceVideoConfig = {
 export type LiveUiConfig = {
   /** WebSocket 端口；`infiniti-agent live` 未传 `--port` 时使用 */
   port?: number
+  /** 角色渲染方式；未设置时保持旧逻辑：spriteExpressions.dir 优先，否则 Live2D。 */
+  renderer?: 'live2d' | 'sprite' | 'real2d'
   /** LiveUI 启动后是否自动开启 TTS 播放；默认 true。 */
   ttsAutoEnabled?: boolean
   /** LiveUI 启动后是否自动开启 ASR 麦克风模式；默认 false。 */

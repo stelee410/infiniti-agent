@@ -1,0 +1,170 @@
+/* Avatar Visual Runtime layer styles */
+.avr-root {
+  position: relative;
+  /* Subtle vertical gradient — looks like a softbox studio backdrop. The
+     scene layer sits on top of this and adds the active mood/colour. */
+  background: linear-gradient(180deg, #2a3142 0%, #161b22 100%);
+  font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", sans-serif;
+  user-select: none;
+}
+
+.avr-layer {
+  position: absolute;
+  inset: 0;
+}
+
+.avr-scene {
+  z-index: 1;
+  transition: background 600ms ease, filter 600ms ease;
+}
+
+.avr-avatar {
+  z-index: 2;
+}
+
+.avr-prop {
+  z-index: 3;
+}
+
+.avr-effect {
+  z-index: 4;
+}
+
+.avr-ui {
+  z-index: 5;
+}
+
+/* Default scene moods */
+.avr-scene.bg-day {
+  background: linear-gradient(180deg, #cfe9ff 0%, #fdf6e3 100%);
+}
+.avr-scene.bg-night {
+  background: linear-gradient(180deg, #0b1735 0%, #2a1d4a 100%);
+}
+.avr-scene.bg-sunset {
+  background: linear-gradient(180deg, #ff9a8b 0%, #ffd285 60%, #6d3a8a 100%);
+}
+.avr-scene.bg-indoor {
+  background: linear-gradient(180deg, #f3e7d3 0%, #d8b58a 100%);
+}
+.avr-scene.bg-studio {
+  background:
+    radial-gradient(ellipse 70% 60% at 50% 35%, rgba(255, 210, 170, 0.18) 0%, transparent 65%),
+    radial-gradient(ellipse 90% 80% at 50% 50%, #3a4458 0%, #1c2230 60%, #0e1320 100%);
+}
+.avr-scene.bg-transparent {
+  background: transparent;
+}
+
+.avr-scene.mood-calm {
+  filter: saturate(0.9) brightness(1);
+}
+.avr-scene.mood-warm {
+  filter: saturate(1.15) hue-rotate(-8deg) brightness(1.05);
+}
+.avr-scene.mood-cool {
+  filter: saturate(0.95) hue-rotate(10deg) brightness(0.95);
+}
+.avr-scene.mood-dramatic {
+  filter: contrast(1.15) saturate(1.2) brightness(0.92);
+}
+.avr-scene.mood-neutral {
+  filter: none;
+}
+
+/* Props */
+.avr-prop-item {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  transition: opacity 200ms ease;
+}
+
+.avr-prop-item.fade-in {
+  animation: avr-pop-in 280ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.avr-prop-item.fade-out {
+  animation: avr-fade-out 220ms ease forwards;
+}
+
+@keyframes avr-pop-in {
+  0% { transform: translate(-50%, -50%) scale(0.2); opacity: 0; }
+  60% { transform: translate(-50%, -50%) scale(1.15); opacity: 1; }
+  100% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+}
+@keyframes avr-fade-out {
+  to { transform: translate(-50%, -50%) scale(0.7); opacity: 0; }
+}
+@keyframes avr-bob {
+  0%, 100% { transform: translate(-50%, -50%) translateY(0); }
+  50% { transform: translate(-50%, -50%) translateY(-6px); }
+}
+.avr-prop-item.bob {
+  animation: avr-pop-in 280ms cubic-bezier(0.34, 1.56, 0.64, 1),
+    avr-bob 1600ms ease-in-out 280ms infinite;
+}
+
+/* UI */
+.avr-bubble {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(255, 255, 255, 0.92);
+  color: #222;
+  padding: 8px 14px;
+  border-radius: 14px;
+  font-size: 14px;
+  max-width: 80%;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+  opacity: 0;
+  transition: opacity 200ms ease;
+}
+.avr-bubble.visible {
+  opacity: 1;
+}
+
+/* Effect: shake-screen */
+.avr-root.shake {
+  animation: avr-shake 280ms cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+}
+@keyframes avr-shake {
+  10%, 90% { transform: translate3d(-1px, 0, 0); }
+  20%, 80% { transform: translate3d(2px, 0, 0); }
+  30%, 50%, 70% { transform: translate3d(-3px, 0, 0); }
+  40%, 60% { transform: translate3d(3px, 0, 0); }
+}
+
+/* Effect: flash */
+.avr-flash {
+  position: absolute;
+  inset: 0;
+  background: white;
+  opacity: 0;
+  pointer-events: none;
+}
+.avr-flash.fire {
+  animation: avr-flash 240ms ease-out;
+}
+@keyframes avr-flash {
+  0% { opacity: 0; }
+  20% { opacity: 0.85; }
+  100% { opacity: 0; }
+}
+
+/* Sparkle */
+.avr-sparkle {
+  fill: #ffe978;
+  filter: drop-shadow(0 0 4px #ffec8b);
+  transform-origin: center;
+  animation: avr-spark 900ms ease-out forwards;
+  opacity: 0;
+}
+@keyframes avr-spark {
+  0% { transform: scale(0.2) rotate(0deg); opacity: 0; }
+  20% { opacity: 1; }
+  100% { transform: scale(1.4) rotate(120deg); opacity: 0; }
+}

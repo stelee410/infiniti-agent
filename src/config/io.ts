@@ -249,6 +249,9 @@ function parseLiveUiConfig(raw: unknown): LiveUiConfig | undefined {
   if (typeof u.ttsAutoEnabled === 'boolean') {
     out.ttsAutoEnabled = u.ttsAutoEnabled
   }
+  if (u.renderer === 'live2d' || u.renderer === 'sprite' || u.renderer === 'real2d') {
+    out.renderer = u.renderer
+  }
   if (typeof u.asrAutoEnabled === 'boolean') {
     out.asrAutoEnabled = u.asrAutoEnabled
   }

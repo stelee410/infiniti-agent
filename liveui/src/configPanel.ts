@@ -345,24 +345,28 @@ export function initConfigPanel(opts: ConfigPanelOptions): {
   const renderLiveUi = (root: HTMLElement): void => {
     cfg.liveUi ??= {}
     const l = cfg.liveUi
-    const mode = l.spriteExpressions?.dir ? 'sprite' : 'live2d'
+    const mode = l.renderer || (l.spriteExpressions?.dir ? 'sprite' : 'live2d')
     const section = el('section', { class: 'config-section config-section--active' })
     const grid = el('div', { class: 'config-grid' })
     grid.append(
       field('TTS 自动', select(l.ttsAutoEnabled === false ? 'false' : 'true', [['true', '开启'], ['false', '关闭']], (v) => { l.ttsAutoEnabled = v === 'true' })),
       field('ASR 自动', select(l.asrAutoEnabled ? 'true' : 'false', [['false', '关闭'], ['true', '开启']], (v) => { l.asrAutoEnabled = v === 'true' })),
       field('ASR 模式', select(text(l.asrMode || 'manual'), [['manual', '手动识别'], ['auto', '自动识别']], (v) => { l.asrMode = v })),
-      field('角色渲染方式', select(mode, [['live2d', 'Live2D model3'], ['sprite', 'spriteExpressions']], (v) => {
-        if (v === 'sprite') l.spriteExpressions ??= {}
+      field('角色渲染方式', select(mode, [['live2d', 'Live2D model3'], ['sprite', 'spriteExpressions'], ['real2d', 'real2d']], (v) => {
+        l.renderer = v
+        if (v === 'sprite' || v === 'real2d') l.spriteExpressions ??= {}
         else delete l.spriteExpressions
         rerender()
       })),
       field('voiceMicSpeechRmsThreshold', input(num(l.voiceMicSpeechRmsThreshold, '0.0195'), (v) => { l.voiceMicSpeechRmsThreshold = Number(v) }, 'number')),
     )
-    if (mode === 'sprite') {
+    if (mode === 'sprite' || mode === 'real2d') {
       l.spriteExpressions ??= {}
       grid.append(pathField('spriteExpressions 目录', text(l.spriteExpressions.dir), 'directory', (v) => { l.spriteExpressions.dir = v }))
       grid.append(pathField('expressions.json（可选）', text(l.spriteExpressions.manifest), 'file', (v) => { l.spriteExpressions.manifest = v }))
+      if (mode === 'real2d') {
+        grid.append(field('real2d 说明', el('div', { class: 'config-help' }, '目录需包含 exp01.png 到 exp06.png；exp_open.png 可选，用于说话口型。')))
+      }
     } else {
       grid.append(pathField('Live2D model3.json', text(l.live2dModel3Json), 'file', (v) => { l.live2dModel3Json = v }))
       grid.append(pathField('model_dict.json（可选）', text(l.live2dModelDict), 'file', (v) => { l.live2dModelDict = v }))

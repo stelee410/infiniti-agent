@@ -27,6 +27,7 @@ import {
   type SpriteExpressionManifestV1,
 } from '../../src/liveui/spriteExpressionManifestCore.ts'
 import { initConfigPanel } from './configPanel.ts'
+import { Real2dLiveUiAdapter } from './real2dLiveUiAdapter.ts'
 
 /** 由 expressions.json 注入，覆盖默认 exp_xx 映射 */
 let spriteEmotionToIdOverride: Record<string, string> | null = null
@@ -37,6 +38,7 @@ declare global {
   interface Window {
     infinitiLiveUi?: {
       port: string
+      renderer?: string
       model3FileUrl: string
       /** 含尾斜杠的 `file:` URL，指向含 `exp_01.png`…的目录（与 CLI `spriteExpressions.dir` 一致） */
       spriteExpressionDirFileUrl?: string
@@ -333,6 +335,7 @@ async function bootstrap(): Promise<void> {
   mouth.position.set(face.x, face.y + 38)
 
   let liveModel: InstanceType<typeof Live2DModel> | null = null
+  let real2dAvatar: Real2dLiveUiAdapter | null = null
   /** PNG 表情精灵（`spriteExpressions.dir`）；与 Live2D 二选一，由预加载环境变量决定 */
   let expressionSprite: PIXI.Sprite | null = null
   /** `file:` 基址，含尾斜杠，用于 `new URL('exp_XX.png', base)` */
@@ -496,6 +499,17 @@ async function bootstrap(): Promise<void> {
     face.beginFill(fill, 0.88)
     face.drawCircle(0, 0, FACE_RADIUS)
     face.endFill()
+  }
+
+  const setVisualMouth = (open01: number): void => {
+    const open = Math.max(0, Math.min(1, open01))
+    mouthOpen = open
+    real2dAvatar?.setMouthOpen(open)
+    if (liveModel) {
+      setMouthFromModel(liveModel, open)
+    } else {
+      redrawPlaceholderMouth()
+    }
   }
 
   /**
@@ -725,9 +739,17 @@ async function bootstrap(): Promise<void> {
     target.cursor = 'default'
   }
 
-  const rawSpriteUrl = window.infinitiLiveUi?.spriteExpressionDirFileUrl?.trim() ?? ''
+  const configuredRenderer = (window.infinitiLiveUi?.renderer ?? '').trim().toLowerCase()
+  const rawSpriteUrl = configuredRenderer === 'live2d'
+    ? ''
+    : (window.infinitiLiveUi?.spriteExpressionDirFileUrl?.trim() ?? '')
   if (rawSpriteUrl) {
     spriteExpressionDirFileUrl = rawSpriteUrl.endsWith('/') ? rawSpriteUrl : `${rawSpriteUrl}/`
+  }
+  const wantsReal2d = configuredRenderer === 'real2d'
+  let useReal2d = wantsReal2d && Boolean(spriteExpressionDirFileUrl)
+  if (wantsReal2d && !spriteExpressionDirFileUrl) {
+    console.warn('[liveui] real2d 需要 spriteExpressions.dir，未配置时回退 Live2D/占位')
   }
 
   spriteEmotionToIdOverride = null
@@ -758,7 +780,54 @@ async function bootstrap(): Promise<void> {
       img.src = url
     })
 
-  if (spriteExpressionDirFileUrl) {
+  if (useReal2d) {
+    const real2dPlaceholder = document.createElement('img')
+    try {
+      real2dPlaceholder.src = spritePngUrl('exp01')
+      real2dPlaceholder.alt = ''
+      real2dPlaceholder.style.position = 'fixed'
+      real2dPlaceholder.style.inset = '0'
+      real2dPlaceholder.style.width = '100vw'
+      real2dPlaceholder.style.height = '100vh'
+      real2dPlaceholder.style.objectFit = 'contain'
+      real2dPlaceholder.style.pointerEvents = 'none'
+      real2dPlaceholder.style.zIndex = '10'
+      real2dPlaceholder.style.transform = 'scale(0.8)'
+      real2dPlaceholder.style.transformOrigin = '50% 72%'
+      document.body.appendChild(real2dPlaceholder)
+
+      const stage = document.createElement('div')
+      stage.id = 'liveui-real2d-stage'
+      stage.style.position = 'fixed'
+      stage.style.inset = '0'
+      stage.style.width = '100vw'
+      stage.style.height = '100vh'
+      stage.style.pointerEvents = 'none'
+      stage.style.zIndex = '11'
+      document.body.appendChild(stage)
+      real2dAvatar = new Real2dLiveUiAdapter({
+        container: stage,
+        spriteExpressionDirFileUrl,
+        width: window.innerWidth,
+        height: window.innerHeight,
+        onError: (e) => console.warn('[liveui] real2d runtime error:', e),
+      })
+      await real2dAvatar.init()
+      real2dPlaceholder.remove()
+      app.stage.removeChild(face)
+      app.stage.removeChild(mouth)
+      console.debug('[liveui] real2d 已加载', spriteExpressionDirFileUrl)
+    } catch (e) {
+      real2dPlaceholder.remove()
+      document.getElementById('liveui-real2d-stage')?.remove()
+      console.warn('[liveui] real2d 加载失败，回退 sprite/Live2D/占位:', e)
+      real2dAvatar?.destroy()
+      real2dAvatar = null
+      useReal2d = false
+    }
+  }
+
+  if (!useReal2d && spriteExpressionDirFileUrl) {
     try {
       const tex = await loadSpritePngTexture(spritePngUrl(emotionToExpressionId('neutral')))
       const sp = new PIXI.Sprite(tex)
@@ -782,7 +851,7 @@ async function bootstrap(): Promise<void> {
     }
   }
 
-  const modelUrl = expressionSprite ? '' : (window.infinitiLiveUi?.model3FileUrl?.trim() ?? '')
+  const modelUrl = expressionSprite || useReal2d ? '' : (window.infinitiLiveUi?.model3FileUrl?.trim() ?? '')
 
   if (modelUrl) {
     try {
@@ -812,7 +881,7 @@ async function bootstrap(): Promise<void> {
       wireHover(face)
       layoutFigureInStage()
     }
-  } else if (!expressionSprite) {
+  } else if (!expressionSprite && !useReal2d) {
     app.stage.addChild(face)
     app.stage.addChild(mouth)
     applyPlaceholderExpression('neutral')
@@ -823,6 +892,10 @@ async function bootstrap(): Promise<void> {
 
   const applyLive2dExpression = (em: string): void => {
     expression = em
+    if (real2dAvatar) {
+      real2dAvatar.setEmotion(em)
+      return
+    }
     if (expressionSprite && spriteExpressionDirFileUrl) {
       const base = emotionToExpressionId(em)
       const url = spritePngUrl(base)
@@ -907,6 +980,7 @@ async function bootstrap(): Promise<void> {
 
   window.addEventListener('resize', () => {
     app.renderer.resize(window.innerWidth, window.innerHeight)
+    real2dAvatar?.resize(window.innerWidth, window.innerHeight)
     layoutFigureInStage()
     positionBubbleOverFigure()
   })
@@ -1900,12 +1974,7 @@ async function bootstrap(): Promise<void> {
     }
     const rms = Math.sqrt(sum / audioAnalyserData.length)
     const open = Math.min(1, rms * 3.5)
-    mouthOpen = open
-    if (liveModel) {
-      setMouthFromModel(liveModel, open)
-    } else {
-      redrawPlaceholderMouth()
-    }
+    setVisualMouth(open)
     if (audioPlaying) {
       audioMouthRaf = requestAnimationFrame(setMouthFromAudio)
     }
@@ -1926,9 +1995,7 @@ async function bootstrap(): Promise<void> {
     if (audioMouthRaf) cancelAnimationFrame(audioMouthRaf)
     audioMouthRaf = undefined
     audioAnalyser = null
-    mouthOpen = 0
-    if (liveModel) setMouthFromModel(liveModel, 0)
-    else redrawPlaceholderMouth()
+    setVisualMouth(0)
     audioPlaying = false
     ttsActive = false
   }
@@ -2034,9 +2101,7 @@ async function bootstrap(): Promise<void> {
           audioAnalyser = null
           if (audioMouthRaf) cancelAnimationFrame(audioMouthRaf)
           audioMouthRaf = undefined
-          mouthOpen = 0
-          if (liveModel) setMouthFromModel(liveModel, 0)
-          else redrawPlaceholderMouth()
+          setVisualMouth(0)
           if (audioQueue.length > 0) {
             playNextInQueue()
           } else {
@@ -2096,6 +2161,7 @@ async function bootstrap(): Promise<void> {
     if (audioMouthRaf) cancelAnimationFrame(audioMouthRaf)
     audioMouthRaf = undefined
     audioAnalyser = null
+    setVisualMouth(0)
   }
 
   socket.addEventListener('open', () => {
@@ -2119,12 +2185,7 @@ async function bootstrap(): Promise<void> {
     }
     if (msg.type === 'SYNC_PARAM' && msg.data?.id === 'ParamMouthOpenY') {
       if (!ttsActive) {
-        mouthOpen = Math.max(0, Math.min(1, Number(msg.data.value) || 0))
-        if (liveModel) {
-          setMouthFromModel(liveModel, mouthOpen)
-        } else {
-          redrawPlaceholderMouth()
-        }
+        setVisualMouth(Math.max(0, Math.min(1, Number(msg.data.value) || 0)))
       }
     } else if (msg.type === 'INBOX_UPDATE') {
       const raw = msg.data?.unread
@@ -2226,6 +2287,9 @@ async function bootstrap(): Promise<void> {
       const em = msg.data?.expression
       if (em) applyLive2dExpression(em)
       const motion = msg.data?.motion
+      if (motion && real2dAvatar) {
+        real2dAvatar.triggerMotion(motion)
+      }
       if (motion && liveModel) {
         console.debug('[liveui] motion 指令（可扩展 motion 组映射）:', motion)
       }
