@@ -365,7 +365,7 @@ export function initConfigPanel(opts: ConfigPanelOptions): {
       grid.append(pathField('spriteExpressions 目录', text(l.spriteExpressions.dir), 'directory', (v) => { l.spriteExpressions.dir = v }))
       grid.append(pathField('expressions.json（可选）', text(l.spriteExpressions.manifest), 'file', (v) => { l.spriteExpressions.manifest = v }))
       if (mode === 'real2d') {
-        grid.append(field('real2d 说明', el('div', { class: 'config-help' }, '目录需包含 exp01.png 到 exp06.png；exp_open.png 可选，用于说话口型。')))
+        grid.append(field('real2d 说明', el('div', { class: 'config-help' }, '默认读取 exp01.png 到 exp06.png；expressions.json 可覆盖 real2d 表情槽位；exp_open.png 可选，用于说话口型。')))
       }
     } else {
       grid.append(pathField('Live2D model3.json', text(l.live2dModel3Json), 'file', (v) => { l.live2dModel3Json = v }))

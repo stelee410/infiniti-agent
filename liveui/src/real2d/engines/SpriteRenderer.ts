@@ -456,18 +456,12 @@ export class SpriteRenderer implements Renderer {
 
   private updateLipsync(dt: number): void {
     if (this.audioDriven) {
-      // Threshold-shaped envelope follower. Lerping the overlay alpha
-      // directly from the RMS curve (a) caps it at typical RMS peaks
-      // (~0.4-0.8 for speech) so exp_open never reaches full opacity,
-      // and (b) makes alpha pulse with every syllable, which reads as
-      // ghost / flicker. Instead we treat audio as a voice-activity
-      // gate: above the floor → speakingFade rises to 1 (overlay fully
-      // visible), below → falls to 0. Asymmetric time constants (fast
-      // attack, slow release) keep brief consonant gaps from causing
-      // the overlay to dip. The warp side keeps using raw amplitude
-      // for continuous lip-size variation (in MotionEngine).
-      const target = this.audioAmplitude > 0.05 ? 1 : 0;
-      const tc = target > this.speakingFade ? 40 : 300;
+      const floor = 0.035;
+      const full = 0.18;
+      const target = this.audioAmplitude <= floor
+        ? 0
+        : Math.max(0, Math.min(1, (this.audioAmplitude - floor) / (full - floor)));
+      const tc = target > this.speakingFade ? 24 : 64;
       this.speakingFade += (target - this.speakingFade) * Math.min(1, dt / tc);
     } else {
       const target = this.speaking ? 1 : 0;

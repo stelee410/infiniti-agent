@@ -4,15 +4,41 @@ import { AvatarRuntime } from './real2d/runtime/AvatarRuntime.ts'
 import { TALK_KEY } from './real2d/engines/SpriteRenderer.ts'
 import type { Emotion, Motion } from './real2d/types/index.ts'
 
+export type Real2dExpressionSlot =
+  | 'neutral'
+  | 'happy'
+  | 'sad'
+  | 'angry'
+  | 'surprised'
+  | 'eyes_closed'
+  | 'exp_a'
+  | 'exp_ee'
+  | 'exp_o'
+  | typeof TALK_KEY
+
 export type Real2dLiveUiAdapterOptions = {
   container: HTMLElement
   spriteExpressionDirFileUrl: string
+  expressionIds?: Partial<Record<Real2dExpressionSlot, string>>
   width: number
   height: number
   onError?: (error: unknown) => void
 }
 
-const REAL2D_EMOTIONS: Emotion[] = ['neutral', 'happy', 'sad', 'angry', 'surprised']
+const REAL2D_EMOTIONS: Emotion[] = ['neutral', 'happy', 'sad', 'angry', 'thinking', 'surprised', 'shy']
+
+const DEFAULT_REAL2D_EXPRESSION_IDS: Record<Real2dExpressionSlot, string> = {
+  neutral: 'exp01',
+  happy: 'exp02',
+  sad: 'exp03',
+  angry: 'exp04',
+  surprised: 'exp05',
+  eyes_closed: 'exp06',
+  exp_a: 'exp_a',
+  exp_ee: 'exp_ee',
+  exp_o: 'exp_o',
+  [TALK_KEY]: TALK_KEY,
+}
 
 function spriteUrl(base: string, id: string): string {
   return new URL(`${id}.png`, base).href
@@ -46,19 +72,24 @@ export class Real2dLiveUiAdapter {
     this.runtime = runtime
     runtime.setScene('transparent', 'neutral')
 
-    // Keep this aligned with /real2d demo auto-load: exp01..exp06 are the
-    // required expression sprites and exp_open is the optional talk overlay.
+    const expressionId = (slot: Real2dExpressionSlot): string =>
+      this.opts.expressionIds?.[slot]?.trim() || DEFAULT_REAL2D_EXPRESSION_IDS[slot]
+
+    // Keep this aligned with /real2d demo auto-load by default: exp01..exp06
+    // are the required expression sprites and exp_open is the optional talk overlay.
+    // A real2d-specific expressions.json can override these ids when an avatar
+    // package uses a different semantic order from spriteExpressions mode.
     const files: Parameters<AvatarRuntime['loadSpriteSet']>[0] = {
-      neutral: spriteUrl(this.opts.spriteExpressionDirFileUrl, 'exp01'),
-      happy: spriteUrl(this.opts.spriteExpressionDirFileUrl, 'exp02'),
-      sad: spriteUrl(this.opts.spriteExpressionDirFileUrl, 'exp03'),
-      angry: spriteUrl(this.opts.spriteExpressionDirFileUrl, 'exp04'),
-      surprised: spriteUrl(this.opts.spriteExpressionDirFileUrl, 'exp05'),
-      eyes_closed: spriteUrl(this.opts.spriteExpressionDirFileUrl, 'exp06'),
-      exp_a: spriteUrl(this.opts.spriteExpressionDirFileUrl, 'exp_a'),
-      exp_ee: spriteUrl(this.opts.spriteExpressionDirFileUrl, 'exp_ee'),
-      exp_o: spriteUrl(this.opts.spriteExpressionDirFileUrl, 'exp_o'),
-      [TALK_KEY]: spriteUrl(this.opts.spriteExpressionDirFileUrl, 'exp_open'),
+      neutral: spriteUrl(this.opts.spriteExpressionDirFileUrl, expressionId('neutral')),
+      happy: spriteUrl(this.opts.spriteExpressionDirFileUrl, expressionId('happy')),
+      sad: spriteUrl(this.opts.spriteExpressionDirFileUrl, expressionId('sad')),
+      angry: spriteUrl(this.opts.spriteExpressionDirFileUrl, expressionId('angry')),
+      surprised: spriteUrl(this.opts.spriteExpressionDirFileUrl, expressionId('surprised')),
+      eyes_closed: spriteUrl(this.opts.spriteExpressionDirFileUrl, expressionId('eyes_closed')),
+      exp_a: spriteUrl(this.opts.spriteExpressionDirFileUrl, expressionId('exp_a')),
+      exp_ee: spriteUrl(this.opts.spriteExpressionDirFileUrl, expressionId('exp_ee')),
+      exp_o: spriteUrl(this.opts.spriteExpressionDirFileUrl, expressionId('exp_o')),
+      [TALK_KEY]: spriteUrl(this.opts.spriteExpressionDirFileUrl, expressionId(TALK_KEY)),
     }
 
     await runtime.loadSpriteSet(files)
@@ -137,6 +168,9 @@ export class Real2dLiveUiAdapter {
     if (e === 'sadness' || e === 'fear' || e === 'frown') return 'sad'
     if (e === 'anger') return 'angry'
     if (e === 'surprise') return 'surprised'
+    if (e === 'think') return 'thinking'
+    if (e === 'blush') return 'shy'
+    if (e === 'smirk' || e === 'disgust') return 'happy'
     return 'neutral'
   }
 

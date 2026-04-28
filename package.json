@@ -80,6 +80,6 @@
     "vitest": "^4.1.4"
   },
   "optionalDependencies": {
-    "electron": "^33.2.0"
+    "electron": "^41.3.0"
   }
 }

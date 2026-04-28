@@ -27,7 +27,7 @@ import {
   type SpriteExpressionManifestV1,
 } from '../../src/liveui/spriteExpressionManifestCore.ts'
 import { initConfigPanel } from './configPanel.ts'
-import { Real2dLiveUiAdapter } from './real2dLiveUiAdapter.ts'
+import { Real2dLiveUiAdapter, type Real2dExpressionSlot } from './real2dLiveUiAdapter.ts'
 
 /** 由 expressions.json 注入，覆盖默认 exp_xx 映射 */
 let spriteEmotionToIdOverride: Record<string, string> | null = null
@@ -253,6 +253,38 @@ function emotionToExpressionId(em: string): string {
     fear: 'exp_02',
   }
   return map[e] ?? 'exp_01'
+}
+
+function firstMappedExpressionId(map: Record<string, string>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const id = map[key]?.trim()
+    if (id) return id
+  }
+  return undefined
+}
+
+function real2dExpressionIdsFromEmotionMap(
+  map: Record<string, string> | null,
+): Partial<Record<Real2dExpressionSlot, string>> | undefined {
+  if (!map) return undefined
+  const out: Partial<Record<Real2dExpressionSlot, string>> = {}
+  const slots: Array<[Real2dExpressionSlot, string[]]> = [
+    ['neutral', ['neutral', 'calm']],
+    ['happy', ['happy', 'joy']],
+    ['sad', ['sad', 'sadness', 'fear', 'frown', 'unhappy']],
+    ['angry', ['angry', 'anger']],
+    ['surprised', ['surprised', 'surprise']],
+    ['eyes_closed', ['eyes_closed', 'eyesclosed', 'blink', 'closed']],
+    ['exp_a', ['exp_a', 'mouth_a', 'viseme_a']],
+    ['exp_ee', ['exp_ee', 'mouth_ee', 'viseme_ee']],
+    ['exp_o', ['exp_o', 'mouth_o', 'viseme_o']],
+    ['exp_open', ['exp_open', 'talk', 'talking', 'speaking']],
+  ]
+  for (const [slot, keys] of slots) {
+    const id = firstMappedExpressionId(map, keys)
+    if (id) out[slot] = id
+  }
+  return Object.keys(out).length > 0 ? out : undefined
 }
 
 /**
@@ -771,6 +803,8 @@ async function bootstrap(): Promise<void> {
 
   const spritePngUrl = (expBase: string): string =>
     new URL(`${expBase}.png`, spriteExpressionDirFileUrl).href
+  const real2dExpressionIds = real2dExpressionIdsFromEmotionMap(spriteEmotionToIdOverride)
+  const real2dNeutralExpressionId = real2dExpressionIds?.neutral ?? 'exp01'
 
   const loadSpritePngTexture = (url: string): Promise<PIXI.Texture> =>
     new Promise((resolve, reject) => {
@@ -783,7 +817,7 @@ async function bootstrap(): Promise<void> {
   if (useReal2d) {
     const real2dPlaceholder = document.createElement('img')
     try {
-      real2dPlaceholder.src = spritePngUrl('exp01')
+      real2dPlaceholder.src = spritePngUrl(real2dNeutralExpressionId)
       real2dPlaceholder.alt = ''
       real2dPlaceholder.style.position = 'fixed'
       real2dPlaceholder.style.inset = '0'
@@ -808,6 +842,7 @@ async function bootstrap(): Promise<void> {
       real2dAvatar = new Real2dLiveUiAdapter({
         container: stage,
         spriteExpressionDirFileUrl,
+        expressionIds: real2dExpressionIds,
         width: window.innerWidth,
         height: window.innerHeight,
         onError: (e) => console.warn('[liveui] real2d runtime error:', e),
@@ -1816,7 +1851,8 @@ async function bootstrap(): Promise<void> {
   let audioMouthRaf: number | undefined
   let audioSource: AudioBufferSourceNode | null = null
   let audioAnalyser: AnalyserNode | null = null
-  const audioAnalyserData = new Uint8Array(256)
+  const TTS_MOUTH_ANALYSER_FFT_SIZE = 256
+  const audioAnalyserData = new Uint8Array(TTS_MOUTH_ANALYSER_FFT_SIZE / 2)
   let ttsActive = false
 
   /** PCM 流式：按 AudioContext 时间线首尾相接，避免多块 BufferSource 链式播放的缝隙与裂音 */
@@ -1849,7 +1885,7 @@ async function bootstrap(): Promise<void> {
   const ensureTtsPcmAnalyser = (ctx: AudioContext): AnalyserNode => {
     if (!ttsPcmAnalyser || ttsPcmAnalyser.context !== ctx) {
       ttsPcmAnalyser = ctx.createAnalyser()
-      ttsPcmAnalyser.fftSize = 512
+      ttsPcmAnalyser.fftSize = TTS_MOUTH_ANALYSER_FFT_SIZE
       ttsPcmAnalyser.connect(ctx.destination)
     }
     return ttsPcmAnalyser
@@ -2089,7 +2125,7 @@ async function bootstrap(): Promise<void> {
         const src = ctx.createBufferSource()
         src.buffer = decoded
         const analyser = ctx.createAnalyser()
-        analyser.fftSize = 512
+        analyser.fftSize = TTS_MOUTH_ANALYSER_FFT_SIZE
         src.connect(analyser)
         analyser.connect(ctx.destination)
         audioSource = src
