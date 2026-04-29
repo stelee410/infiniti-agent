@@ -210,7 +210,7 @@ function createWindow() {
             : 96
         const cur = win.getBounds()
         const nextY = cur.y + cur.height - height
-        win.setBounds({ x: cur.x, y: nextY, width: cur.width, height })
+        win.setBounds({ x: cur.x, y: nextY, width, height })
         win.setIgnoreMouseEvents(false)
       } else if (preMinimalBounds) {
         win.setBounds(preMinimalBounds)

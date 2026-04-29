@@ -41,6 +41,8 @@ import type { LiveUiInteractionKind, LiveUiSession } from '../liveui/wsSession.j
 import type { LiveUiFileAttachment, LiveUiStatusVariant, LiveUiVisionAttachment } from '../liveui/protocol.js'
 import { enqueueSnapPhotoJob } from '../snap/asyncSnap.js'
 import { enqueueSeedanceVideoJob, seedanceReferenceImagesFromLiveInputs } from '../video/asyncVideo.js'
+import { enqueueAvatarGenJob } from '../avatar/asyncAvatarGen.js'
+import { avatarGenReferenceImagesFromLiveInputs } from '../avatar/real2dAvatarGen.js'
 import { listInboxMessages, markInboxMessageRead, type InboxMessage } from '../inbox/store.js'
 import { parseScheduleRequest } from '../schedule/parser.js'
 import {
@@ -136,6 +138,23 @@ async function polishVideoQueuedReply(config: InfinitiConfig, prompt: string, jo
       system:
         '你是 Infiniti Agent 的日常对话人格。请只输出中文正文，不要标题，不要列表，不要任务 ID，不要像系统通知。用户刚发出 /video 或 /seedance 视频生成命令；你的回复要像普通聊天里自然接话，亲近、轻松、简短。表达：你会在后台生成视频；用户可以继续聊天；完成后会下载到本地并放进你的邮箱，小信封亮起即可查看。',
       user: `用户想生成的视频：${prompt}\n内部任务 ID（不要输出）：${jobId}\n请给出一句或两句自然口语回复。参考但不要照抄：\n\n${fallback}`,
+    })
+    return out.trim() || fallback
+  } catch {
+    return fallback
+  }
+}
+
+async function polishAvatarGenQueuedReply(config: InfinitiConfig, prompt: string, jobId: string): Promise<string> {
+  const fallback =
+    `好，我把这套 Real2D 表情 PNG 放到后台生成。你可以继续聊，等 exp01 到 exp06 和 exp_open 都好了，我会把它们放进你的邮箱，小信封亮起来就能查看。`
+  try {
+    const out = await oneShotTextCompletion({
+      config,
+      maxOutTokens: 500,
+      system:
+        '你是 Infiniti Agent 的日常对话人格。请只输出中文正文，不要标题，不要列表，不要任务 ID，不要像系统通知。用户刚发出 /avatargen real2d 表情集生成命令；你的回复要像普通聊天里自然接话，亲近、轻松、简短。表达：你会在后台生成 exp01 到 exp06 和 exp_open；用户可以继续聊天；完成后会放进你的邮箱，小信封亮起即可查看。',
+      user: `用户对 Real2D 表情集的要求：${prompt}\n内部任务 ID（不要输出）：${jobId}\n请给出一句或两句自然口语回复。参考但不要照抄：\n\n${fallback}`,
     })
     return out.trim() || fallback
   } catch {
@@ -775,9 +794,57 @@ export function ChatApp({
       }
       if (raw === '/help') {
         setError(
-          '输入 / 可补全：斜杠命令与全部工具（↑↓ Tab）。命令: /exit /clear /reload /config /debug /schedule /memory /inbox /last_email /undo /roll /compact /permission /speak /snap /video — /schedule list 查看计划，/schedule add 每天早上8点做某事 创建计划；自然语言提醒/定时会由模型调用 schedule 工具。/config 仅 Live 模式打开配置面板；/debug 切换 LiveUI 调试叠层；/last_email 打开最近一封邮箱消息；/speak 后接正文仅 TTS 朗读、不写会话；/snap 后接提示词异步生成合照/写实照片；/video 后接提示词异步生成 Seedance 视频，完成后写入你的邮箱。/roll 2 可按 LLM 输出层回滚对话。改文件/bash/HTTP 默认需确认（Y 允许 · A 本次会话始终允许该工具 · N 拒绝）；启动时加 --dangerously-skip-permissions 可跳过所有确认。/permission 查看当前状态。/compact 压缩较早历史。卡死排查：INFINITI_AGENT_DEBUG=1。',
+          '输入 / 可补全：斜杠命令与全部工具（↑↓ Tab）。命令: /exit /clear /reload /config /debug /schedule /memory /inbox /last_email /undo /roll /compact /permission /speak /snap /avatargen /video — /schedule list 查看计划，/schedule add 每天早上8点做某事 创建计划；自然语言提醒/定时会由模型调用 schedule 工具。/config 仅 Live 模式打开配置面板；/debug 切换 LiveUI 调试叠层；/last_email 打开最近一封邮箱消息；/speak 后接正文仅 TTS 朗读、不写会话；/snap 后接提示词异步生成合照/写实照片；/avatargen 后接要求并附带头像图，异步生成 real2d 的 exp01..exp06 与 exp_open；/video 后接提示词异步生成 Seedance 视频，完成后写入你的邮箱。/roll 2 可按 LLM 输出层回滚对话。改文件/bash/HTTP 默认需确认（Y 允许 · A 本次会话始终允许该工具 · N 拒绝）；启动时加 --dangerously-skip-permissions 可跳过所有确认。/permission 查看当前状态。/compact 压缩较早历史。卡死排查：INFINITI_AGENT_DEBUG=1。',
         )
         setInput('')
+        return
+      }
+      if (raw === '/avatargen' || raw.startsWith('/avatargen ')) {
+        const prompt = raw.startsWith('/avatargen ') ? raw.slice('/avatargen '.length).trim() : ''
+        if (!prompt) {
+          const msg = '/avatargen 后请输入要求，例如：/avatargen 城市猎人风格的美少女'
+          setInput('')
+          setError(msg)
+          liveUi?.sendAssistantStream(msg, true, true)
+          return
+        }
+        if (busyRef.current) return
+        setError(null)
+        setNotice('Real2D 表情集任务已交给 AvatarGen 后台处理，完成后会放进你的邮箱')
+        setInput('')
+        const avatarVision = vision ?? liveUi?.consumePendingVisionAttachment()
+        const avatarAttachments = liveUi?.consumePendingFileAttachments() ?? []
+        const referenceImages = avatarGenReferenceImagesFromLiveInputs(avatarVision, avatarAttachments)
+        try {
+          const job = await enqueueAvatarGenJob(cwd, config, prompt, referenceImages)
+          if (avatarVision || avatarAttachments.length) liveUi?.clearVisionAttachment()
+          const content = await polishAvatarGenQueuedReply(config, prompt, job.id)
+          void subconsciousRef.current?.observeAssistantOutput(content)
+          const next: PersistedMessage[] = [
+            ...messages,
+            { role: 'user', content: raw },
+            { role: 'assistant', content },
+          ]
+          setMessages(next)
+          await saveSession(cwd, next)
+          setNotice(content)
+          setTimeout(() => setNotice(null), 12000)
+          if (liveUi) {
+            liveUi.sendAssistantStream(content, true, true)
+            if (liveUi.hasTts) {
+              const clean = ttsDisplayCleanForLiveUi(content, expressionManifest)
+              liveUi.resetAudio()
+              for (const seg of splitTtsSegments(clean)) {
+                liveUi.enqueueTts(seg)
+              }
+            }
+          }
+        } catch (e: unknown) {
+          const msg = formatChatError(e)
+          setError(msg)
+          liveUi?.sendAssistantStream(msg, true, true)
+          setNotice(null)
+        }
         return
       }
       if (raw === '/video' || raw.startsWith('/video ') || raw === '/seedance' || raw.startsWith('/seedance ')) {

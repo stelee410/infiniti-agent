@@ -11,6 +11,7 @@ export type BuiltinToolName =
   | 'knowledge_graph'
   | 'schedule'
   | 'snap_photo'
+  | 'avatargen_real2d'
   | 'seedance_video'
   | 'read_file'
   | 'glob_files'
@@ -426,6 +427,22 @@ export const BUILTIN_TOOLS: Array<{
         prompt: {
           type: 'string',
           description: '图片内容提示词。用自然语言描述场景、人物、风格、光线、构图等。',
+        },
+      },
+      required: ['prompt'],
+    },
+  },
+  {
+    name: 'avatargen_real2d',
+    description:
+      '异步生成 Real2D 头像表情 PNG 套装，并把完成/失败邮件放进你的邮箱。适合用户要求“用这张头像生成 real2d 表情集、生成 exp01 到 exp06 和 exp_open、做 2D avatar 表情素材”等请求。如果用户当前消息带有拍照图片或上传图片，工具会自动把这些图片作为身份参考图。此工具只支持 AvatarGen GPT-Image2；设置不对时会返回错误，不要改用其它图像模型。',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        prompt: {
+          type: 'string',
+          description: '对 Real2D 表情集的附加要求，例如角色风格、保持透明背景、输出用途等。工具固定生成 exp01.png..exp06.png 与 exp_open.png。',
         },
       },
       required: ['prompt'],

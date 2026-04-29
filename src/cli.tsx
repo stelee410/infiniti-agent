@@ -44,6 +44,7 @@ import { runGenerateAvatar } from './cli/generateAvatar.js'
 import { runSetLiveAgent } from './cli/setLiveAgent.js'
 import { runSnapPhotoJob } from './snap/asyncSnap.js'
 import { runSeedanceVideoJob } from './video/asyncVideo.js'
+import { runAvatarGenJob } from './avatar/asyncAvatarGen.js'
 import { disableUiLogFile, enableUiLogFile, withUiLogFile } from './utils/uiLogFile.js'
 
 const cwd = process.cwd()
@@ -324,6 +325,21 @@ async function main(): Promise<void> {
     }
     try {
       await runSeedanceVideoJob(jobPath)
+    } catch (e) {
+      console.error((e as Error).message)
+      process.exit(2)
+    }
+    return
+  }
+
+  if (argv[0] === 'avatargen-worker') {
+    const jobPath = argv[1]
+    if (!jobPath) {
+      console.error('用法: infiniti-agent avatargen-worker <job.json>')
+      process.exit(2)
+    }
+    try {
+      await runAvatarGenJob(jobPath)
     } catch (e) {
       console.error((e as Error).message)
       process.exit(2)

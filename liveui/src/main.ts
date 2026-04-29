@@ -568,7 +568,7 @@ async function bootstrap(): Promise<void> {
           const delta = bottomGoal - b.bottom
           if (Math.abs(delta) <= 2) return
           real2dAvatar.setVerticalOffset(real2dAvatar.getVerticalOffset() + delta)
-          window.setTimeout(() => scheduleCompactWindowHeight(), 80)
+          window.setTimeout(() => scheduleDynamicWindowFit(), 80)
           if (attempt < 6) {
             scheduleReal2dVerticalPlacement(attempt + 1)
           }
@@ -609,6 +609,24 @@ async function bootstrap(): Promise<void> {
         })
       })
     })
+
+  let syncMinimalWindowBounds = (): void => {}
+  let dynamicWindowFitTimer: number | undefined
+
+  const scheduleDynamicWindowFit = (attempt = 0): void => {
+    if (dynamicWindowFitTimer !== undefined) {
+      window.clearTimeout(dynamicWindowFitTimer)
+      dynamicWindowFitTimer = undefined
+    }
+    dynamicWindowFitTimer = window.setTimeout(() => {
+      dynamicWindowFitTimer = undefined
+      if (minimalMode) {
+        syncMinimalWindowBounds()
+      } else {
+        scheduleCompactWindowHeight(attempt)
+      }
+    }, 0)
+  }
 
   /**
    * 在「当前 layout」下读人物可见 bounds，若头顶留白明显则把窗口高度减掉一截。
@@ -761,6 +779,7 @@ async function bootstrap(): Promise<void> {
       speechBubble?.classList.remove('liveui-bubble-waiting')
       speechBubble?.setAttribute('aria-hidden', 'true')
       bubbleAutoDismissTimer = undefined
+      scheduleDynamicWindowFit()
     }, ms)
   }
 
@@ -798,7 +817,7 @@ async function bootstrap(): Promise<void> {
     speechBubble.classList.add('visible', 'liveui-bubble-waiting')
     speechBubble.setAttribute('aria-hidden', 'false')
     positionBubbleOverFigure()
-    requestAnimationFrame(() => syncMinimalWindowBounds())
+    requestAnimationFrame(() => scheduleDynamicWindowFit())
   }
 
   const runBubbleReadingFrame = (): void => {
@@ -857,7 +876,7 @@ async function bootstrap(): Promise<void> {
     speechBubble.classList.add('visible')
     speechBubble.setAttribute('aria-hidden', 'false')
     positionBubbleOverFigure()
-    if (minimalMode && (typedThisFrame || needMoreFrames)) syncMinimalWindowBounds()
+    if (minimalMode && (typedThisFrame || needMoreFrames)) scheduleDynamicWindowFit()
 
     if (needMoreFrames) {
       typewriterRaf = requestAnimationFrame(runBubbleReadingFrame)
@@ -898,7 +917,7 @@ async function bootstrap(): Promise<void> {
     speechBubble.classList.add('visible')
     speechBubble.setAttribute('aria-hidden', 'false')
     positionBubbleOverFigure()
-    requestAnimationFrame(() => syncMinimalWindowBounds())
+    requestAnimationFrame(() => scheduleDynamicWindowFit())
     ensureTypewriter()
   }
 
@@ -1005,7 +1024,7 @@ async function bootstrap(): Promise<void> {
       real2dPlaceholder.remove()
       app.stage.removeChild(face)
       app.stage.removeChild(mouth)
-      scheduleCompactWindowHeight()
+      scheduleDynamicWindowFit()
       console.debug('[liveui] real2d 已加载', spriteExpressionDirFileUrl)
     } catch (e) {
       real2dPlaceholder.remove()
@@ -1031,7 +1050,7 @@ async function bootstrap(): Promise<void> {
       app.stage.addChild(mouth)
       redrawPlaceholderMouth()
       layoutFigureInStage()
-      scheduleCompactWindowHeight()
+      scheduleDynamicWindowFit()
       wireHover(sp)
       console.debug('[liveui] spriteExpressions PNG 已加载', spriteExpressionDirFileUrl)
     } catch (e) {
@@ -1057,7 +1076,7 @@ async function bootstrap(): Promise<void> {
       liveModelNaturalH = Math.max(nb.height, 1)
       app.stage.addChild(liveModel)
       layoutFigureInStage()
-      scheduleCompactWindowHeight()
+      scheduleDynamicWindowFit()
       wireHover(liveModel)
       void liveModel.motion('Idle', 0).catch(() => {})
       console.debug('[liveui] Live2D Cubism4 模型已加载', modelUrl)
@@ -1070,6 +1089,7 @@ async function bootstrap(): Promise<void> {
       redrawPlaceholderMouth()
       wireHover(face)
       layoutFigureInStage()
+      scheduleDynamicWindowFit()
     }
   } else if (!expressionSprite && !useReal2d) {
     app.stage.addChild(face)
@@ -1078,6 +1098,7 @@ async function bootstrap(): Promise<void> {
     redrawPlaceholderMouth()
     wireHover(face)
     layoutFigureInStage()
+    scheduleDynamicWindowFit()
   }
 
   const currentRendererKind = (): RendererKind => {
@@ -1120,7 +1141,7 @@ async function bootstrap(): Promise<void> {
           const newAspect = spriteNaturalW / spriteNaturalH
           layoutFigureInStage()
           if (Math.abs(newAspect - prevAspect) > 0.02) {
-            scheduleCompactWindowHeight()
+            scheduleDynamicWindowFit()
           }
           if (prev && prev !== tex) prev.destroy(true)
         })
@@ -1176,6 +1197,7 @@ async function bootstrap(): Promise<void> {
       spriteNaturalW = Math.max(tex.width, 1)
       spriteNaturalH = Math.max(tex.height, 1)
       layoutFigureInStage()
+      scheduleDynamicWindowFit()
       return () => {
         if (!expressionSprite || expressionSprite !== sprite) {
           tex.destroy(true)
@@ -1185,6 +1207,7 @@ async function bootstrap(): Promise<void> {
         spriteNaturalW = prevW
         spriteNaturalH = prevH
         layoutFigureInStage()
+        scheduleDynamicWindowFit()
         tex.destroy(true)
       }
     } catch {
@@ -1214,7 +1237,24 @@ async function bootstrap(): Promise<void> {
     }
     layoutFigureInStage()
     positionBubbleOverFigure()
+    scheduleDynamicWindowFit()
   })
+
+  const refreshNormalWindowLayout = (attempt = 0): void => {
+    requestAnimationFrame(() => {
+      app.renderer.resize(window.innerWidth, window.innerHeight)
+      if (real2dAvatar) {
+        applyReal2dStageLayout()
+        scheduleReal2dVerticalPlacement()
+      }
+      layoutFigureInStage()
+      positionBubbleOverFigure()
+      if (attempt >= 1) scheduleDynamicWindowFit()
+      if (attempt < 4) {
+        window.setTimeout(() => refreshNormalWindowLayout(attempt + 1), 90)
+      }
+    })
+  }
 
   const dockEl = document.getElementById('liveui-bottom-dock')
   if (dockEl && typeof ResizeObserver !== 'undefined') {
@@ -1223,13 +1263,17 @@ async function bootstrap(): Promise<void> {
         layoutFigureInStage()
         applyReal2dStageLayout()
         positionBubbleOverFigure()
+        scheduleDynamicWindowFit()
       })
     })
     ro.observe(dockEl)
   }
 
   requestAnimationFrame(() => {
-    requestAnimationFrame(() => layoutFigureInStage())
+    requestAnimationFrame(() => {
+      layoutFigureInStage()
+      scheduleDynamicWindowFit()
+    })
   })
 
   const port = readPort()
@@ -1243,6 +1287,7 @@ async function bootstrap(): Promise<void> {
       document.body.classList.toggle('liveui-config-open', open)
       window.infinitiLiveUi?.setConfigPanelOpen?.(open)
       window.infinitiLiveUi?.setIgnoreMouseEvents?.(!open, { forward: true })
+      requestAnimationFrame(() => scheduleDynamicWindowFit())
     },
   })
 
@@ -1582,7 +1627,7 @@ async function bootstrap(): Promise<void> {
     if (!slashMenuOpenLive) {
       slashMenuEl.hidden = true
       slashMenuEl.setAttribute('aria-hidden', 'true')
-      requestAnimationFrame(() => syncMinimalWindowBounds())
+      requestAnimationFrame(() => scheduleDynamicWindowFit())
       return
     }
     slashMenuEl.hidden = false
@@ -1624,7 +1669,7 @@ async function bootstrap(): Promise<void> {
       row.append(kindEl, labEl, descEl)
       slashListEl.append(row)
     }
-    requestAnimationFrame(() => syncMinimalWindowBounds())
+    requestAnimationFrame(() => scheduleDynamicWindowFit())
   }
 
   let lastConvActivity = Date.now()
@@ -1633,7 +1678,6 @@ async function bootstrap(): Promise<void> {
   let maybeAutoStartAsr = (): void => {}
   let exitVoiceModeForMinimal = (): void => {}
   let forceWindowInteractive = (): void => {}
-  let syncMinimalWindowBounds = (): void => {}
 
   const touchConvActivity = (): void => {
     lastConvActivity = Date.now()
@@ -1967,12 +2011,16 @@ async function bootstrap(): Promise<void> {
   const sendUserCommand = (line: string): void => {
     touchConvActivity()
     if (socket.readyState !== WebSocket.OPEN) return
+    const trimmedStart = line.trimStart()
+    const shouldSendAttachments =
+      attachedFiles.length > 0 &&
+      (!trimmedStart.startsWith('/') || trimmedStart === '/avatargen' || trimmedStart.startsWith('/avatargen '))
     const payload = {
       line,
-      ...(attachedFiles.length && !line.trimStart().startsWith('/') ? { attachments: attachedFiles } : {}),
+      ...(shouldSendAttachments ? { attachments: attachedFiles } : {}),
     }
     socket.send(JSON.stringify({ type: 'USER_INPUT', data: payload }))
-    if ((attachedPhotoVision || attachedFiles.length) && !line.trimStart().startsWith('/')) {
+    if ((attachedPhotoVision || attachedFiles.length) && !trimmedStart.startsWith('/')) {
       clearConfirmedPhotoUi(false)
       attachedFiles = []
       renderAttachments()
@@ -2497,7 +2545,10 @@ async function bootstrap(): Promise<void> {
     } else if (msg.type === 'CONFIG_STATUS') {
       const ok = !!msg.data?.ok
       configPanel.setStatus(ok, typeof msg.data?.message === 'string' ? msg.data.message : '')
-      if (ok) configPanel.close()
+      if (ok) {
+        configPanel.close()
+        requestAnimationFrame(() => scheduleDynamicWindowFit())
+      }
     } else if (msg.type === 'VISION_CAPTURE_RESULT') {
       const requestId = typeof msg.data?.requestId === 'string' ? msg.data.requestId : ''
       if (!requestId || requestId !== activeCameraRequestId) return
@@ -2691,8 +2742,10 @@ async function bootstrap(): Promise<void> {
     document.body.classList.toggle('liveui-minimal-mode', minimalMode)
     updateMinimalBtn()
     updateSpeakerBtn()
-    layoutFigureInStage()
-    positionBubbleOverFigure()
+    if (minimalMode) {
+      layoutFigureInStage()
+      positionBubbleOverFigure()
+    }
     syncMinimalWindowBounds = () => {
       if (!minimalMode) return
       const dock = document.getElementById('liveui-bottom-dock')
@@ -2715,10 +2768,11 @@ async function bootstrap(): Promise<void> {
     requestAnimationFrame(() => {
       if (!minimalMode) {
         window.infinitiLiveUi?.setMinimalModeOpen?.(false)
+        refreshNormalWindowLayout()
         requestAnimationFrame(() => forceWindowInteractive())
         return
       }
-      syncMinimalWindowBounds()
+      scheduleDynamicWindowFit()
     })
     if (!minimalMode && minimalBubbleWaiting) {
       startMinimalBubbleReading()

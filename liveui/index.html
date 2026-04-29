@@ -24,7 +24,8 @@
         display: none !important;
       }
       body.liveui-minimal-mode #liveui-bottom-dock {
-        width: min(96vw, 560px);
+        width: auto;
+        max-width: calc(100vw - 16px);
       }
       body.liveui-minimal-mode #liveui-control-bar {
         padding: 8px;
@@ -35,7 +36,12 @@
         display: block;
       }
       body.liveui-minimal-mode #liveui-composer {
+        width: 220px;
         min-height: 48px;
+      }
+      body.liveui-minimal-mode #liveui-user-line {
+        min-height: 40px;
+        max-height: 72px;
       }
       /* 底部：字幕 + 参考截图的深色控制条（左按钮簇 + 右输入） */
       #liveui-bottom-dock {

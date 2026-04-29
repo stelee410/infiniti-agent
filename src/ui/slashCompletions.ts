@@ -120,6 +120,13 @@ const COMMAND_ITEMS: SlashItem[] = [
     insert: '/snap ',
   },
   {
+    id: '/avatargen',
+    kind: 'command',
+    label: '/avatargen',
+    desc: '用附件头像异步生成 real2d 的 exp01..exp06 与 exp_open，完成后写入邮箱',
+    insert: '/avatargen ',
+  },
+  {
     id: '/video',
     kind: 'command',
     label: '/video',
