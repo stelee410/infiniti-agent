@@ -3,7 +3,7 @@ import { dirname } from 'path'
 import { localSessionPath } from '../paths.js'
 import type { PersistedMessage } from '../llm/persisted.js'
 import type { SessionFileV1 } from '../llm/persisted.js'
-import { truncateToolResults } from '../llm/persisted.js'
+import { truncateToolResults, withMessageTimestamps } from '../llm/persisted.js'
 
 export async function loadSession(cwd: string): Promise<SessionFileV1 | null> {
   const sessionPath = localSessionPath(cwd)
@@ -32,7 +32,7 @@ export async function saveSession(
   const data: SessionFileV1 = {
     version: 1,
     cwd,
-    messages: truncateToolResults(messages),
+    messages: withMessageTimestamps(truncateToolResults(messages)),
   }
   await writeFile(sessionPath, `${JSON.stringify(data, null, 2)}\n`, 'utf8')
 }

@@ -54,12 +54,40 @@ function parseDelta(raw: string): StateDelta | null {
   return parsed
 }
 
+function documentMemoryFingerprint(store: SubconsciousStore): string {
+  return JSON.stringify({
+    fuzzy: store.memory.fuzzy.map((m) => ({
+      id: m.id,
+      text: m.text,
+      confidence: m.confidence,
+      reinforcement: m.reinforcement,
+      lastSeenAt: m.lastSeenAt,
+      validFrom: m.validFrom,
+      validUntil: m.validUntil,
+      topic: m.topic,
+      sources: m.sources,
+    })),
+    longTerm: store.memory.longTerm.map((m) => ({
+      id: m.id,
+      text: m.text,
+      confidence: m.confidence,
+      reinforcement: m.reinforcement,
+      lastSeenAt: m.lastSeenAt,
+      validFrom: m.validFrom,
+      validUntil: m.validUntil,
+      topic: m.topic,
+      sources: m.sources,
+    })),
+  })
+}
+
 export class SubconsciousAgent {
   private store: SubconsciousStore | null = null
   private running = false
   private memoryQueue: Promise<unknown> = Promise.resolve()
   private refineQueue: Promise<unknown> = Promise.resolve()
   private compacting = false
+  private documentMemoryFingerprint: string | null = null
 
   constructor(
     private readonly config: InfinitiConfig,
@@ -70,7 +98,7 @@ export class SubconsciousAgent {
   async start(): Promise<void> {
     if (this.store) return
     this.store = await loadSubconsciousStore(this.cwd)
-    await syncDocumentMemory(this.cwd, this.store).catch((e) => agentDebug('[subconscious-agent] document memory sync failed', e))
+    await this.syncDocumentMemoryIfChanged()
     this.render()
   }
 
@@ -121,9 +149,10 @@ export class SubconsciousAgent {
     if (additions.length === 0) return
     this.store.recent = [...this.store.recent, ...additions].slice(-RECENT_LIMIT)
     this.applyRelationshipWindow()
+    const beforeMemory = this.currentDocumentMemoryFingerprint()
     this.store = consolidateRecentMemory(this.store)
     await saveSubconsciousStore(this.cwd, this.store)
-    await syncDocumentMemory(this.cwd, this.store).catch((e) => agentDebug('[subconscious-agent] document memory sync failed', e))
+    await this.syncDocumentMemoryIfChanged(beforeMemory)
     this.render()
   }
 
@@ -131,19 +160,27 @@ export class SubconsciousAgent {
     await this.start()
     if (!this.store || this.running) return
     this.running = true
+    const started = Date.now()
     try {
+      const beforeMemory = this.currentDocumentMemoryFingerprint()
       this.store.state = applyHeartbeatDecay(this.store.state, now.toISOString())
       this.applyRelationshipWindow()
       this.store = consolidateRecentMemory(this.store)
       this.store = decayFuzzyMemories(this.store, now)
       this.store = compressLongTermMemories(this.store, now)
+      this.store.metadata.lastHeartbeatAt = now.toISOString()
+      this.store.metadata.lastHeartbeatDurationMs = Date.now() - started
       await saveSubconsciousStore(this.cwd, this.store)
-      await syncDocumentMemory(this.cwd, this.store).catch((e) => agentDebug('[subconscious-agent] document memory sync failed', e))
+      await this.syncDocumentMemoryIfChanged(beforeMemory)
       this.render()
       this.enqueueMemoryWork(() => this.scanHistoryForStableFacts(now)).catch((e) => {
         agentDebug('[subconscious-agent] history scan failed', e)
       })
     } finally {
+      if (this.store) {
+        this.store.metadata.lastHeartbeatDurationMs = Date.now() - started
+        await saveSubconsciousStore(this.cwd, this.store).catch((e) => agentDebug('[subconscious-agent] heartbeat metadata save failed', e))
+      }
       this.running = false
     }
   }
@@ -237,19 +274,33 @@ export class SubconsciousAgent {
     const topic = dominantTopic(this.store)
     this.store.metadata.lastHistoryScanAt = now.toISOString()
     this.store.metadata.lastHistoryScanTopic = topic ?? undefined
+    this.store.metadata.historyScanRunning = true
+    delete this.store.metadata.lastHistoryScanError
     await saveSubconsciousStore(this.cwd, this.store)
 
-    let transcript = recentToTranscript(this.store)
-    if (topic) {
-      const hits = await searchSessions(this.cwd, topic, 8).catch((e) => {
-        agentDebug('[subconscious-agent] session search failed', e)
-        return []
-      })
-      if (hits.length) {
-        transcript = `${transcript}\n\n历史检索主题：${topic}\n\n${historyResultsToTranscript(hits)}`
+    try {
+      let transcript = recentToTranscript(this.store)
+      if (topic) {
+        const hits = await searchSessions(this.cwd, topic, 8).catch((e) => {
+          agentDebug('[subconscious-agent] session search failed', e)
+          return []
+        })
+        if (hits.length) {
+          transcript = `${transcript}\n\n历史检索主题：${topic}\n\n${historyResultsToTranscript(hits)}`
+        }
+      }
+      await this.consolidateDurableMemory(`heartbeat:${topic ?? 'recent-dialogue'}`, transcript)
+    } catch (e) {
+      if (this.store) {
+        this.store.metadata.lastHistoryScanError = e instanceof Error ? e.message : String(e)
+      }
+      throw e
+    } finally {
+      if (this.store) {
+        this.store.metadata.historyScanRunning = false
+        await saveSubconsciousStore(this.cwd, this.store).catch((e) => agentDebug('[subconscious-agent] history metadata save failed', e))
       }
     }
-    await this.consolidateDurableMemory(`heartbeat:${topic ?? 'recent-dialogue'}`, transcript)
   }
 
   private async consolidateDurableMemory(source: string, transcript: string): Promise<void> {
@@ -319,7 +370,7 @@ export class SubconsciousAgent {
       }
       this.store.metadata.lastDurableConsolidationAt = new Date().toISOString()
       await saveSubconsciousStore(this.cwd, this.store)
-      await syncDocumentMemory(this.cwd, this.store).catch((e) => agentDebug('[subconscious-agent] document memory sync failed', e))
+      await this.syncDocumentMemoryIfChanged()
     } catch (e) {
       agentDebug('[subconscious-agent] durable consolidation failed', e)
     }
@@ -339,7 +390,26 @@ export class SubconsciousAgent {
     }
     this.store.metadata.lastRetrievedMemoryIds = ids
     await saveSubconsciousStore(this.cwd, this.store)
-    await syncDocumentMemory(this.cwd, this.store).catch((e) => agentDebug('[subconscious-agent] document memory sync failed', e))
+    await this.syncDocumentMemoryIfChanged()
+  }
+
+  private currentDocumentMemoryFingerprint(): string | null {
+    return this.store ? documentMemoryFingerprint(this.store) : null
+  }
+
+  private async syncDocumentMemoryIfChanged(previous?: string | null): Promise<void> {
+    if (!this.store) return
+    const next = documentMemoryFingerprint(this.store)
+    const before = previous ?? this.documentMemoryFingerprint
+    if (before === next && this.store.metadata.lastDocumentMemorySyncAt) return
+    try {
+      await syncDocumentMemory(this.cwd, this.store)
+      this.documentMemoryFingerprint = next
+      this.store.metadata.lastDocumentMemorySyncAt = new Date().toISOString()
+      await saveSubconsciousStore(this.cwd, this.store)
+    } catch (e) {
+      agentDebug('[subconscious-agent] document memory sync failed', e)
+    }
   }
 
   private enqueueMemoryWork<T>(work: () => Promise<T>): Promise<T> {

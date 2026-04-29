@@ -26,19 +26,24 @@ export type UserFileAttachment = {
   text?: string
 }
 
+export type PersistedMessageMeta = {
+  /** ISO timestamp for persistence/analytics only. It is not sent to LLM context. */
+  createdAt?: string
+}
+
 export type PersistedMessage =
-  | { role: 'user'; content: string; vision?: UserVisionAttachment; attachments?: UserFileAttachment[] }
+  | ({ role: 'user'; content: string; vision?: UserVisionAttachment; attachments?: UserFileAttachment[] } & PersistedMessageMeta)
   | {
       role: 'assistant'
       content: string | null
       toolCalls?: ToolCallSpec[]
-    }
+    } & PersistedMessageMeta
   | {
       role: 'tool'
       toolCallId: string
       name: string
       content: string
-    }
+    } & PersistedMessageMeta
 
 export type SessionFileV1 = {
   version: 1
@@ -69,4 +74,8 @@ export function truncateToolResults(
         `\n…（已截断，原始 ${m.content.length} 字符）`,
     }
   })
+}
+
+export function withMessageTimestamps(messages: PersistedMessage[], now = new Date().toISOString()): PersistedMessage[] {
+  return messages.map((m) => m.createdAt ? m : { ...m, createdAt: now })
 }

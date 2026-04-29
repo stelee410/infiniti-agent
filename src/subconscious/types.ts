@@ -97,6 +97,10 @@ export type SubconsciousStore = {
     lastLongTermCompressionAt?: string
     lastDocumentMemorySyncAt?: string
     lastRetrievedMemoryIds?: string[]
+    lastHeartbeatAt?: string
+    lastHeartbeatDurationMs?: number
+    historyScanRunning?: boolean
+    lastHistoryScanError?: string
   }
   state: MetaState
   memory: {

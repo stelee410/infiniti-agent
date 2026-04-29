@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { truncateToolResults } from './persisted.js'
+import { truncateToolResults, withMessageTimestamps } from './persisted.js'
 import type { PersistedMessage } from './persisted.js'
 
 describe('truncateToolResults', () => {
@@ -76,5 +76,17 @@ describe('truncateToolResults', () => {
     const tool = result[0] as Extract<PersistedMessage, { role: 'tool' }>
     expect(tool.toolCallId).toBe('call-xyz')
     expect(tool.name).toBe('http_request')
+  })
+})
+
+describe('withMessageTimestamps', () => {
+  it('adds createdAt to old messages and preserves existing timestamps', () => {
+    const msgs: PersistedMessage[] = [
+      { role: 'user', content: 'hello' },
+      { role: 'assistant', content: 'hi', createdAt: '2026-01-01T00:00:00.000Z' },
+    ]
+    const result = withMessageTimestamps(msgs, '2026-02-01T00:00:00.000Z')
+    expect(result[0]!.createdAt).toBe('2026-02-01T00:00:00.000Z')
+    expect(result[1]!.createdAt).toBe('2026-01-01T00:00:00.000Z')
   })
 })
