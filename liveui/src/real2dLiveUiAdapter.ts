@@ -48,6 +48,7 @@ export class Real2dLiveUiAdapter {
   private runtime: AvatarRuntime | null = null
   private ready = false
   private pendingEmotion: Emotion = 'neutral'
+  private pendingIntensity = 1
   private pendingMouth = 0
   private speakingVisual = false
   private restoreEmotionTimer: ReturnType<typeof window.setTimeout> | null = null
@@ -93,7 +94,7 @@ export class Real2dLiveUiAdapter {
     }
 
     await runtime.loadSpriteSet(files)
-    runtime.update({ emotion: this.visualEmotion(), speaking: this.pendingMouth > 0.02 })
+    runtime.update({ emotion: this.visualEmotion(), intensity: this.pendingIntensity, speaking: this.pendingMouth > 0.02 })
     runtime.setMouthOpen(this.pendingMouth)
     this.opts.container.style.visibility = 'visible'
     this.ready = true
@@ -103,11 +104,14 @@ export class Real2dLiveUiAdapter {
     this.runtime?.resize(width, height)
   }
 
-  setEmotion(raw: string): void {
+  setEmotion(raw: string, intensity?: number): void {
     const emotion = this.normalizeEmotion(raw)
     this.pendingEmotion = emotion
+    if (typeof intensity === 'number' && Number.isFinite(intensity)) {
+      this.pendingIntensity = Math.max(0, Math.min(1.4, intensity))
+    }
     if (!this.ready) return
-    this.runtime?.update({ emotion: this.visualEmotion() })
+    this.runtime?.update({ emotion: this.visualEmotion(), intensity: this.pendingIntensity })
   }
 
   setMouthOpen(value01: number): void {
@@ -119,7 +123,7 @@ export class Real2dLiveUiAdapter {
       this.speakingVisual = nextSpeakingVisual
       if (nextSpeakingVisual) {
         this.clearRestoreEmotionTimer()
-        this.runtime?.update({ emotion: this.visualEmotion() })
+        this.runtime?.update({ emotion: this.visualEmotion(), intensity: this.pendingIntensity })
       } else {
         this.scheduleRestoreEmotion()
       }
@@ -151,7 +155,7 @@ export class Real2dLiveUiAdapter {
     this.restoreEmotionTimer = window.setTimeout(() => {
       this.restoreEmotionTimer = null
       if (!this.ready || this.speakingVisual) return
-      this.runtime?.update({ emotion: this.pendingEmotion })
+      this.runtime?.update({ emotion: this.pendingEmotion, intensity: this.pendingIntensity })
     }, delayMs)
   }
 

@@ -14,11 +14,16 @@ import { localErrorLogPath } from './paths.js'
 import { formatChatError } from './utils/formatError.js'
 import { estimateMessagesTokens } from './llm/estimateTokens.js'
 import { resolvedCompactionSettings } from './llm/compactionSettings.js'
-import { compactSessionMessages } from './llm/compactSession.js'
 import { buildSystemWithMemory } from './prompt/systemBuilder.js'
+import { SubconsciousAgent } from './subconscious/agent.js'
 
-async function buildCliSystem(config: InfinitiConfig, cwd: string): Promise<string> {
-  return buildSystemWithMemory(config, cwd)
+async function buildCliSystem(
+  config: InfinitiConfig,
+  cwd: string,
+  subconscious: SubconsciousAgent,
+  query: string,
+): Promise<string> {
+  return buildSystemWithMemory(config, cwd, subconscious, query)
 }
 
 async function appendCliErrorLog(cwd: string, e: unknown): Promise<void> {
@@ -43,9 +48,11 @@ export async function runCliPrompt(
 
   let exitCode = 0
   const cwd = process.cwd()
+  const subconscious = new SubconsciousAgent(config, cwd)
   let messages: PersistedMessage[] = []
 
   try {
+    await subconscious.start()
     await mcp.start(config)
 
     try {
@@ -63,29 +70,24 @@ export async function runCliPrompt(
       estimateMessagesTokens(messages) >= compSettings.autoThresholdTokens
     ) {
       try {
-        if (messages.length > 0) {
-          await archiveSession(cwd, messages).catch(() => {})
-        }
-        messages = await compactSessionMessages({
-          config,
-          cwd,
+        messages = await subconscious.compactSessionAsync({
           messages,
           minTailMessages: compSettings.minTailMessages,
           maxToolSnippetChars: compSettings.maxToolSnippetChars,
           preCompactHook: compSettings.preCompactHook,
         })
-        await saveSession(cwd, messages)
       } catch (e: unknown) {
         console.error(`[cli] 自动压缩失败，使用原会话继续: ${formatChatError(e)}`)
       }
     }
 
+    await subconscious.observeUserInput(prompt)
     const nextMsgs: PersistedMessage[] = [
       ...messages,
       { role: 'user', content: prompt },
     ]
 
-    const system = await buildCliSystem(config, cwd)
+    const system = await buildCliSystem(config, cwd, subconscious, prompt)
     const { messages: out } = await runToolLoop({
       config,
       system,
@@ -93,6 +95,7 @@ export async function runCliPrompt(
       cwd,
       mcp,
       editHistory,
+      memoryCoordinator: subconscious,
       stream: {
         onStreamReset: () => {
           process.stdout.write('\n')
@@ -104,6 +107,13 @@ export async function runCliPrompt(
       },
     })
     await saveSession(cwd, out)
+    const last = out[out.length - 1]
+    if (last?.role === 'assistant' && last.content) {
+      await subconscious.observeAssistantOutput(last.content)
+    }
+    await subconscious.consolidateFromMessages(out)
+    await subconscious.heartbeat()
+    await subconscious.waitForIdle()
     process.stdout.write('\n')
   } catch (e: unknown) {
     await appendCliErrorLog(cwd, e).catch(() => {

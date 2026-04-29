@@ -84,6 +84,14 @@ export async function loadConfig(cwd?: string): Promise<InfinitiConfig> {
 
   const profiles = parseLlmProfiles(llm.profiles)
   const defaultProfile = typeof llm.default === 'string' ? llm.default.trim() : undefined
+  const metaAgentProfile =
+    typeof llm.metaAgentProfile === 'string' && llm.metaAgentProfile.trim()
+      ? llm.metaAgentProfile.trim()
+      : undefined
+  const subconsciousProfile =
+    typeof llm.subconsciousProfile === 'string' && llm.subconsciousProfile.trim()
+      ? llm.subconsciousProfile.trim()
+      : undefined
 
   let provider: string | undefined
   let baseUrl: string | undefined
@@ -152,6 +160,8 @@ export async function loadConfig(cwd?: string): Promise<InfinitiConfig> {
       apiKey: apiKey.trim(),
       ...(resolvedDisableTools !== undefined ? { disableTools: resolvedDisableTools } : {}),
       ...(defaultProfile ? { default: defaultProfile } : {}),
+      ...(metaAgentProfile ? { metaAgentProfile } : {}),
+      ...(subconsciousProfile ? { subconsciousProfile } : {}),
       ...(profiles ? { profiles } : {}),
     },
     mcp:
@@ -466,6 +476,8 @@ export async function saveConfig(input: SaveConfigInput): Promise<void> {
       model: defaultLlm.model,
       apiKey: defaultLlm.apiKey,
       default: input.defaultProfile,
+      ...(existing?.llm.metaAgentProfile ? { metaAgentProfile: existing.llm.metaAgentProfile } : {}),
+      ...(existing?.llm.subconsciousProfile ? { subconsciousProfile: existing.llm.subconsciousProfile } : {}),
       profiles: input.profiles,
     },
     mcp: existing?.mcp ?? {

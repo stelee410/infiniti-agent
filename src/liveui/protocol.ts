@@ -10,6 +10,7 @@ export type LiveUiActionMessage = {
   type: 'ACTION'
   data: {
     expression?: string
+    intensity?: number
     motion?: string
   }
 }

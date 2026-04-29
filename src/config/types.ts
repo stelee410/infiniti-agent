@@ -210,6 +210,10 @@ export type InfinitiConfig = {
     disableTools?: boolean
     /** 使用新多 profile 格式时，指定默认 profile 名 */
     default?: string
+    /** meta-agent / 工具安全评估使用的 profile 名；未配置时默认尝试 gate */
+    metaAgentProfile?: string
+    /** subconscious-agent / 心理状态引擎使用的 profile 名；未配置时使用主 LLM */
+    subconsciousProfile?: string
     /** 命名 LLM 配置集合 */
     profiles?: Record<string, LlmProfile>
   }

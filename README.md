@@ -198,6 +198,8 @@ your-project/
   "version": 1,
   "llm": {
     "default": "main",
+    "metaAgentProfile": "gate",
+    "subconsciousProfile": "dream",
     "profiles": {
       "main":    { "provider": "anthropic", "baseUrl": "https://api.anthropic.com", "model": "claude-sonnet-4-20250514", "apiKey": "sk-..." },
       "gate":    { "provider": "gemini",    "baseUrl": "https://generativelanguage.googleapis.com/v1beta", "model": "gemini-2.0-flash", "apiKey": "AIza..." },
@@ -212,6 +214,10 @@ your-project/
 | `main`（default） | 主对话模型 |
 | `gate` | 工具安全评估（meta-agent，可用便宜快速的模型） |
 | `compact` | 会话压缩摘要 |
+
+`llm.metaAgentProfile` 可单独指定 meta-agent / 工具安全评估使用哪个 provider profile；未配置时默认尝试 `gate`。如果该 profile 连接或请求失败，会自动回退到当前默认 LLM 再评估。
+
+`llm.subconsciousProfile` 可单独指定 subconscious-agent / 心理状态引擎使用哪个 provider profile；未配置时默认使用当前主 LLM。
 
 旧格式（平铺 provider/model/apiKey）仍完全兼容，运行 `infiniti-agent upgrade` 即可自动升级。
 

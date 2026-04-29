@@ -36,6 +36,11 @@ export type ToolRunContext = {
   snapVision?: LiveUiVisionAttachment
   seedanceImages?: SeedanceReferenceImage[]
   editHistory?: EditHistory
+  memoryCoordinator?: {
+    executeMemoryAction(act: MemoryAction): Promise<Awaited<ReturnType<typeof executeMemoryAction>>>
+    executeProfileAction(act: ProfileAction): Promise<Awaited<ReturnType<typeof executeProfileAction>>>
+    executeKgAction?(act: KgAction): Promise<Awaited<ReturnType<typeof executeKgAction>>>
+  }
 }
 
 function truncate(s: string, max: number): string {
@@ -302,7 +307,7 @@ export async function runBuiltinTool(
               body: String(args.body ?? ''),
               tag: args.tag as MemoryTag | undefined,
             }
-    return JSON.stringify(await executeMemoryAction(ctx.sessionCwd, act))
+    return JSON.stringify(await (ctx.memoryCoordinator?.executeMemoryAction(act) ?? executeMemoryAction(ctx.sessionCwd, act)))
   }
 
   if (name === 'user_profile') {
@@ -328,7 +333,7 @@ export async function runBuiltinTool(
               body: String(args.body ?? ''),
               tag: args.tag as ProfileTag | undefined,
             }
-    return JSON.stringify(await executeProfileAction(ctx.sessionCwd, act))
+    return JSON.stringify(await (ctx.memoryCoordinator?.executeProfileAction(act) ?? executeProfileAction(ctx.sessionCwd, act)))
   }
 
   if (name === 'search_sessions') {
@@ -375,7 +380,7 @@ export async function runBuiltinTool(
                 action: 'timeline',
                 entity: String(args.entity ?? ''),
               }
-    return JSON.stringify(await executeKgAction(ctx.sessionCwd, act))
+    return JSON.stringify(await (ctx.memoryCoordinator?.executeKgAction?.(act) ?? executeKgAction(ctx.sessionCwd, act)))
   }
 
   if (name === 'manage_skill') {

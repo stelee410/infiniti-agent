@@ -11,6 +11,7 @@ import type { PersistedMessage, UserFileAttachment } from './persisted.js'
 import type { SeedanceReferenceImage } from '../video/generateSeedanceVideo.js'
 import type { McpManager } from '../mcp/manager.js'
 import type { EditHistory } from '../session/editHistory.js'
+import type { ToolRunContext } from '../tools/runner.js'
 import {
   CONFIRMABLE_BUILTIN_TOOLS,
   formatToolConfirmDetail,
@@ -146,6 +147,7 @@ export type RunLoopOptions = {
   /** 跳过所有安全评估（--dangerously-skip-permissions） */
   skipPermissions?: boolean
   editHistory?: EditHistory
+  memoryCoordinator?: ToolRunContext['memoryCoordinator']
   onToolDispatch?: (name: string) => void
   /** 外部中断信号（语音打断等场景） */
   signal?: AbortSignal
@@ -208,6 +210,7 @@ export async function runToolLoop(opts: RunLoopOptions): Promise<{
         snapVision: latestUserVision(opts.messages),
         seedanceImages: latestSeedanceReferenceImages(opts.messages),
         editHistory: opts.editHistory,
+        memoryCoordinator: opts.memoryCoordinator,
       })
     }
     return opts.mcp.call(name, argsJson)

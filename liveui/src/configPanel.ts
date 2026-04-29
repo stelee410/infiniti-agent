@@ -192,6 +192,12 @@ function syncFlatLlm(cfg: JsonObj): void {
   const profiles = ensureLlmProfiles(cfg)
   const names = Object.keys(profiles)
   if (!names.includes(cfg.llm.default)) cfg.llm.default = names[0] || 'main'
+  if (cfg.llm.metaAgentProfile && !names.includes(cfg.llm.metaAgentProfile)) {
+    cfg.llm.metaAgentProfile = names.includes('gate') ? 'gate' : cfg.llm.default
+  }
+  if (cfg.llm.subconsciousProfile && !names.includes(cfg.llm.subconsciousProfile)) {
+    delete cfg.llm.subconsciousProfile
+  }
   const p = profiles[cfg.llm.default]
   if (!p) return
   cfg.llm.provider = p.provider
@@ -288,6 +294,34 @@ export function initConfigPanel(opts: ConfigPanelOptions): {
       rerender()
     })
     section.append(field('当前使用的 provider profile', defaultSelect))
+    const fallbackMetaProfile = names.includes('gate') ? 'gate' : cfg.llm.default || names[0] || 'main'
+    const metaAgentProfile = String(
+      cfg.llm.metaAgentProfile && names.includes(cfg.llm.metaAgentProfile)
+        ? cfg.llm.metaAgentProfile
+        : fallbackMetaProfile,
+    )
+    cfg.llm.metaAgentProfile = metaAgentProfile
+    const metaSelect = select(metaAgentProfile, names.map((n) => [n, n]), (v) => {
+      cfg.llm.metaAgentProfile = v
+      rerender()
+    })
+    section.append(field('Meta-agent 使用的 provider profile', metaSelect))
+    const subconsciousProfile = String(
+      cfg.llm.subconsciousProfile && names.includes(cfg.llm.subconsciousProfile)
+        ? cfg.llm.subconsciousProfile
+        : '',
+    )
+    if (!subconsciousProfile) delete cfg.llm.subconsciousProfile
+    const subconsciousOptions: Array<[string, string]> = [
+      ['', '默认主 LLM'],
+      ...names.map((n): [string, string] => [n, n]),
+    ]
+    const subconsciousSelect = select(subconsciousProfile, subconsciousOptions, (v) => {
+      if (v) cfg.llm.subconsciousProfile = v
+      else delete cfg.llm.subconsciousProfile
+      rerender()
+    })
+    section.append(field('Subconscious-agent 使用的 provider profile', subconsciousSelect))
     const list = el('div', { class: 'config-list config-span-2' })
     for (const name of Object.keys(profiles)) {
       const p = profiles[name]
@@ -299,6 +333,8 @@ export function initConfigPanel(opts: ConfigPanelOptions): {
           profiles[next] = profiles[name]
           delete profiles[name]
           if (cfg.llm.default === name) cfg.llm.default = next
+          if (cfg.llm.metaAgentProfile === name) cfg.llm.metaAgentProfile = next
+          if (cfg.llm.subconsciousProfile === name) cfg.llm.subconsciousProfile = next
           rerender()
         })),
         field('Provider', select(String(p.provider || 'openai'), llmProviders.map((x) => [x, x]), (v) => { p.provider = v; syncFlatLlm(cfg) })),
@@ -314,6 +350,8 @@ export function initConfigPanel(opts: ConfigPanelOptions): {
         }
         delete profiles[name]
         if (cfg.llm.default === name) cfg.llm.default = Object.keys(profiles)[0]
+        if (cfg.llm.metaAgentProfile === name) cfg.llm.metaAgentProfile = Object.keys(profiles)[0]
+        if (cfg.llm.subconsciousProfile === name) cfg.llm.subconsciousProfile = Object.keys(profiles)[0]
         syncFlatLlm(cfg)
         rerender()
       })

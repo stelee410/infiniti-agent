@@ -51,6 +51,7 @@ import {
   stripLiveUiKnownEmotionTagsEverywhere,
   stripLiveUiTagsFromMessages,
 } from '../liveui/emotionParse.js'
+import { SubconsciousAgent } from '../subconscious/agent.js'
 
 /**
  * Live 下 TTS 用的「干净正文」：与流式 onTextDelta 一致，先 `processAssistantStreamChunk` 得 `displayText`
@@ -75,6 +76,7 @@ type Props = {
 
 const STREAM_DEBOUNCE_MS = 80
 const SLASH_MENU_MAX_ROWS = 10
+const SUBCONSCIOUS_HEARTBEAT_MS = 60_000
 const LLM_PROVIDERS = new Set(['anthropic', 'openai', 'gemini', 'minimax', 'openrouter'])
 
 function inboxMessageToLiveUiItem(m: InboxMessage) {
@@ -210,6 +212,7 @@ export function ChatApp({
   const busyStartRef = useRef<number>(0)
   const [statusLine, setStatusLine] = useState('')
   const [thinkingSnap, setThinkingSnap] = useState('')
+  const subconsciousRef = useRef<SubconsciousAgent | null>(null)
 
   const slashItems = useMemo(
     () => buildSlashItems(mcp),
@@ -271,10 +274,30 @@ export function ChatApp({
   useEffect(() => {
     if (!liveUi) {
       setLiveUiConnected(false)
+      subconsciousRef.current = null
       return
     }
     return liveUi.onConnectionChange(setLiveUiConnected)
   }, [liveUi])
+
+  useEffect(() => {
+    if (!liveUi) {
+      subconsciousRef.current = null
+      return
+    }
+    const agent = new SubconsciousAgent(config, cwd, liveUi)
+    subconsciousRef.current = agent
+    void agent.start()
+    const id = setInterval(() => {
+      void agent.heartbeat()
+    }, SUBCONSCIOUS_HEARTBEAT_MS)
+    return () => {
+      clearInterval(id)
+      if (subconsciousRef.current === agent) {
+        subconsciousRef.current = null
+      }
+    }
+  }, [config, cwd, liveUi])
 
   useInput(
     (_ch, key) => {
@@ -381,10 +404,10 @@ export function ChatApp({
     }
   }, [cwd, config.liveUi?.spriteExpressions?.dir])
 
-  const buildSystem = useCallback(async (): Promise<string> => {
+  const buildSystem = useCallback(async (query?: string): Promise<string> => {
     void skillsEpoch
     void promptEpoch
-    const base = await buildSystemWithMemory(config, cwd)
+    const base = await buildSystemWithMemory(config, cwd, subconsciousRef.current ?? undefined, query)
     if (!liveUi) return base
     const m = tryReadSpriteExpressionManifestSync(cwd, config.liveUi)
     const nudge = m ? buildLiveUiExpressionNudgeFromManifest(m) : LIVE_UI_ASSISTANT_EXPRESSION_NUDGE
@@ -613,32 +636,41 @@ export function ChatApp({
           setInput('')
           return
         }
-        setBusy(true)
         setCompacting(true)
         setError(null)
-        setNotice('正在压缩会话历史（非流式）…')
-        try {
-          const cs = resolvedCompactionSettings(config)
-          const next = await compactSessionMessages({
-            config,
-            cwd,
-            messages,
-            minTailMessages: cs.minTailMessages,
-            maxToolSnippetChars: cs.maxToolSnippetChars,
-            customInstructions: instr || undefined,
-            preCompactHook: cs.preCompactHook,
+        setNotice('已提交后台压缩；期间记忆写入会排队等待…')
+        const cs = resolvedCompactionSettings(config)
+        const runCompact = subconsciousRef.current
+          ? subconsciousRef.current.compactSessionAsync({
+              messages,
+              minTailMessages: cs.minTailMessages,
+              maxToolSnippetChars: cs.maxToolSnippetChars,
+              customInstructions: instr || undefined,
+              preCompactHook: cs.preCompactHook,
+            })
+          : compactSessionMessages({
+              config,
+              cwd,
+              messages,
+              minTailMessages: cs.minTailMessages,
+              maxToolSnippetChars: cs.maxToolSnippetChars,
+              customInstructions: instr || undefined,
+              preCompactHook: cs.preCompactHook,
+            }).then(async (next) => {
+              await saveSession(cwd, next)
+              return next
+            })
+        void runCompact
+          .then((next) => {
+            setMessages(next)
+            setNotice(`后台压缩完成：保留最近约 ${cs.minTailMessages} 条消息起的上下文`)
+            setTimeout(() => setNotice(null), 5000)
           })
-          setMessages(next)
-          await saveSession(cwd, next)
-          setNotice(`已压缩：保留最近约 ${cs.minTailMessages} 条消息起的上下文`)
-          setTimeout(() => setNotice(null), 5000)
-        } catch (e: unknown) {
-          setError(formatChatError(e))
-          setNotice(null)
-        } finally {
-          setCompacting(false)
-          setBusy(false)
-        }
+          .catch((e: unknown) => {
+            setError(formatChatError(e))
+            setNotice(null)
+          })
+          .finally(() => setCompacting(false))
         setInput('')
         return
       }
@@ -695,33 +727,50 @@ export function ChatApp({
         setCompacting(true)
         setNotice('历史较长，正在自动压缩上下文（非流式）…')
         try {
-          if (baseMessages.length > 0) {
-            await archiveSession(cwd, baseMessages).catch(() => {})
-          }
-          baseMessages = await compactSessionMessages({
-            config,
-            cwd,
-            messages: baseMessages,
-            minTailMessages: cs.minTailMessages,
-            maxToolSnippetChars: cs.maxToolSnippetChars,
-            preCompactHook: cs.preCompactHook,
-          })
-          setMessages(baseMessages)
-          await saveSession(cwd, baseMessages)
-          setNotice('已自动压缩，正在请求模型…')
+          const compactPromise = subconsciousRef.current
+            ? subconsciousRef.current.compactSessionAsync({
+                messages: baseMessages,
+                minTailMessages: cs.minTailMessages,
+                maxToolSnippetChars: cs.maxToolSnippetChars,
+                preCompactHook: cs.preCompactHook,
+              })
+            : (async () => {
+                if (baseMessages.length > 0) await archiveSession(cwd, baseMessages).catch(() => {})
+                const next = await compactSessionMessages({
+                  config,
+                  cwd,
+                  messages: baseMessages,
+                  minTailMessages: cs.minTailMessages,
+                  maxToolSnippetChars: cs.maxToolSnippetChars,
+                  preCompactHook: cs.preCompactHook,
+                })
+                await saveSession(cwd, next)
+                return next
+              })()
+          void compactPromise
+            .then((next) => {
+              setMessages(next)
+              setNotice('已自动后台压缩上下文')
+              setTimeout(() => setNotice(null), 5000)
+            })
+            .catch((e: unknown) => {
+              setError(formatChatError(e))
+              setNotice(null)
+            })
+            .finally(() => setCompacting(false))
+          setNotice('历史较长，已提交后台压缩；本轮继续使用当前上下文…')
         } catch (e: unknown) {
           setError(formatChatError(e))
           setNotice(null)
           setCompacting(false)
           setBusy(false)
           return
-        } finally {
-          setCompacting(false)
         }
       }
 
       const turnVision = vision ?? liveUi?.consumePendingVisionAttachment()
       const turnAttachments = liveUi?.consumePendingFileAttachments() ?? []
+      void subconsciousRef.current?.observeUserInput(userLine)
 
       const nextMsgs: PersistedMessage[] = [
         ...baseMessages,
@@ -735,7 +784,7 @@ export function ChatApp({
       setMessages(nextMsgs)
       setInput('')
       try {
-        const system = await buildSystem()
+        const system = await buildSystem(userLine)
         const { messages: outRaw } = await runToolLoop({
           config,
           system,
@@ -744,6 +793,7 @@ export function ChatApp({
           mcp,
           skipPermissions: dangerouslySkipPermissions,
           editHistory: editHistoryRef.current,
+          memoryCoordinator: subconsciousRef.current ?? undefined,
           signal: ac.signal,
           onToolDispatch: (name) => {
             busySubtextRef.current = `执行工具：${name}…`
@@ -802,12 +852,18 @@ export function ChatApp({
         if (liveUi?.hasTts) {
           const lastMsg = outRaw[outRaw.length - 1]
           if (lastMsg?.role === 'assistant' && typeof lastMsg.content === 'string' && lastMsg.content) {
+            void subconsciousRef.current?.observeAssistantOutput(lastMsg.content)
             const clean = ttsDisplayCleanForLiveUi(lastMsg.content, expressionManifest)
             const next = collectNewTtsSegments(clean, ttsCursorRef.current, { final: true })
             for (const seg of next.segments) {
               liveUi.enqueueTts(seg)
             }
             ttsCursorRef.current = next.cursor
+          }
+        } else {
+          const lastMsg = outRaw[outRaw.length - 1]
+          if (lastMsg?.role === 'assistant' && typeof lastMsg.content === 'string' && lastMsg.content) {
+            void subconsciousRef.current?.observeAssistantOutput(lastMsg.content)
           }
         }
         const displayOut = stripTransientVision(out)

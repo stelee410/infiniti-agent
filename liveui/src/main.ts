@@ -27,6 +27,7 @@ import {
   type SpriteExpressionManifestV1,
 } from '../../src/liveui/spriteExpressionManifestCore.ts'
 import { initConfigPanel } from './configPanel.ts'
+import { adaptExpression, type RendererKind } from './expressionAdapter.ts'
 import { Real2dLiveUiAdapter, type Real2dExpressionSlot } from './real2dLiveUiAdapter.ts'
 
 /** 由 expressions.json 注入，覆盖默认 exp_xx 映射 */
@@ -80,7 +81,7 @@ type SyncParam = {
 
 type ActionMsg = {
   type: 'ACTION'
-  data: { expression?: string; motion?: string }
+  data: { expression?: string; intensity?: number; motion?: string }
 }
 
 type AssistantStreamMsg = {
@@ -925,14 +926,26 @@ async function bootstrap(): Promise<void> {
     layoutFigureInStage()
   }
 
-  const applyLive2dExpression = (em: string): void => {
-    expression = em
+  const currentRendererKind = (): RendererKind => {
+    if (real2dAvatar) return 'real2d'
+    if (expressionSprite) return 'sprite'
+    if (liveModel) return 'live2d'
+    return 'placeholder'
+  }
+
+  const applyLive2dExpression = (em: string, intensity?: number): void => {
+    const adapted = adaptExpression(em, {
+      renderer: currentRendererKind(),
+      intensity,
+      emotionMap: spriteEmotionToIdOverride,
+    })
+    expression = adapted.expression
     if (real2dAvatar) {
-      real2dAvatar.setEmotion(em)
+      real2dAvatar.setEmotion(adapted.expression, adapted.intensity)
       return
     }
     if (expressionSprite && spriteExpressionDirFileUrl) {
-      const base = emotionToExpressionId(em)
+      const base = emotionToExpressionId(adapted.expression)
       const url = spritePngUrl(base)
       void loadSpritePngTexture(url)
         .then((tex) => {
@@ -956,12 +969,12 @@ async function bootstrap(): Promise<void> {
       return
     }
     if (liveModel) {
-      const expId = emotionToExpressionId(em)
+      const expId = emotionToExpressionId(adapted.expression)
       void liveModel.expression(expId).catch(() => {
         void liveModel!.expression(0).catch(() => {})
       })
     } else {
-      applyPlaceholderExpression(em)
+      applyPlaceholderExpression(adapted.expression)
     }
   }
 
@@ -2321,7 +2334,7 @@ async function bootstrap(): Promise<void> {
       resetAudioQueue()
     } else if (msg.type === 'ACTION') {
       const em = msg.data?.expression
-      if (em) applyLive2dExpression(em)
+      if (em) applyLive2dExpression(em, msg.data?.intensity)
       const motion = msg.data?.motion
       if (motion && real2dAvatar) {
         real2dAvatar.triggerMotion(motion)
