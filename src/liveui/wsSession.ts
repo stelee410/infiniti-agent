@@ -68,7 +68,11 @@ export class LiveUiSession {
 
   setTtsEnabled(enabled: boolean): void {
     this.ttsEnabled = enabled
-    if (!enabled) this.resetAudio()
+    if (!enabled) {
+      this.resetAudio()
+      this.mouth.reset()
+      this.sendMouth(0)
+    }
     this.broadcastTtsStatus()
   }
 
@@ -325,8 +329,7 @@ export class LiveUiSession {
           }
           if (t === 'TTS_TOGGLE' && parsed.data && typeof parsed.data === 'object') {
             const enabled = (parsed.data as { enabled?: unknown }).enabled
-            this.ttsEnabled = !!enabled
-            this.broadcastTtsStatus()
+            this.setTtsEnabled(!!enabled)
             return
           }
           if (t === 'INTERRUPT') {
@@ -627,6 +630,10 @@ export class LiveUiSession {
   startMouthPump(): void {
     this.stopMouthPump()
     this.mouthTimer = setInterval(() => {
+      if (!this.ttsEnabled) {
+        this.mouth.reset()
+        return
+      }
       this.mouth.tickIdle()
       this.sendMouth(this.mouth.mouthOpen01)
     }, Math.round(1000 / 30))

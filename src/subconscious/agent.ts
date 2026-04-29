@@ -161,20 +161,20 @@ export class SubconsciousAgent {
   }
 
   async loadMemoryStore(): Promise<Awaited<ReturnType<typeof loadMemoryStore>>> {
-    return this.enqueueMemoryWork(() => loadMemoryStore(this.cwd))
+    return loadMemoryStore(this.cwd)
   }
 
   async loadProfileStore(): Promise<Awaited<ReturnType<typeof loadProfileStore>>> {
-    return this.enqueueMemoryWork(() => loadProfileStore(this.cwd))
+    return loadProfileStore(this.cwd)
   }
 
   async retrieveRelevantMemory(query: string): Promise<string> {
     await this.start()
-    return this.enqueueMemoryWork(async () => {
-      const hits = await retrieveDocumentMemories(this.cwd, query, 6)
-      await this.reinforceRetrievedMemories(hits.map((hit) => hit.id))
-      return documentMemoryHitsToPromptBlock(hits)
+    const hits = await retrieveDocumentMemories(this.cwd, query, 6)
+    void this.enqueueMemoryWork(() => this.reinforceRetrievedMemories(hits.map((hit) => hit.id))).catch((e) => {
+      agentDebug('[subconscious-agent] memory reinforcement failed', e)
     })
+    return documentMemoryHitsToPromptBlock(hits)
   }
 
   compactSessionAsync(opts: {

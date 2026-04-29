@@ -2233,7 +2233,7 @@ async function bootstrap(): Promise<void> {
       return
     }
     if (msg.type === 'SYNC_PARAM' && msg.data?.id === 'ParamMouthOpenY') {
-      if (!ttsActive) {
+      if (ttsEnabled && !ttsActive) {
         setVisualMouth(Math.max(0, Math.min(1, Number(msg.data.value) || 0)))
       }
     } else if (msg.type === 'INBOX_UPDATE') {
@@ -2258,6 +2258,7 @@ async function bootstrap(): Promise<void> {
     } else if (msg.type === 'TTS_STATUS') {
       ttsAvailable = !!msg.data?.available
       if (typeof msg.data?.enabled === 'boolean') ttsEnabled = msg.data.enabled
+      if (!ttsEnabled) setVisualMouth(0)
       updateSpeakerBtn()
     } else if (msg.type === 'ASR_STATUS') {
       asrAvailable = !!msg.data?.available
