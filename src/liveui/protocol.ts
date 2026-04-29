@@ -12,6 +12,23 @@ export type LiveUiActionMessage = {
     expression?: string
     intensity?: number
     motion?: string
+    gaze?: string
+  }
+}
+
+export type LiveUiDebugStateMessage = {
+  type: 'DEBUG_STATE'
+  data: {
+    enabled: boolean
+    emotion?: string
+    emotionIntensity?: number
+    relationship?: {
+      trust: number
+      affinity: number
+      intimacy: number
+      respect: number
+      tension: number
+    }
   }
 }
 
@@ -193,6 +210,7 @@ export type LiveUiInboxSaveResultMessage = {
 export type LiveUiMessage =
   | LiveUiSyncParamMessage
   | LiveUiActionMessage
+  | LiveUiDebugStateMessage
   | LiveUiAssistantStreamMessage
   | LiveUiStatusPillMessage
   | LiveUiAudioChunkMessage
@@ -223,6 +241,11 @@ export function isLiveUiMessage(x: unknown): x is LiveUiMessage {
     const d = (x as { data?: unknown }).data
     if (!d || typeof d !== 'object') return false
     return true
+  }
+  if (o.type === 'DEBUG_STATE') {
+    const d = (x as { data?: unknown }).data
+    if (!d || typeof d !== 'object') return false
+    return typeof (d as { enabled?: unknown }).enabled === 'boolean'
   }
   if (o.type === 'ASSISTANT_STREAM') {
     const d = (x as { data?: unknown }).data

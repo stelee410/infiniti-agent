@@ -42,6 +42,18 @@ import type { LiveUiFileAttachment, LiveUiStatusVariant, LiveUiVisionAttachment 
 import { enqueueSnapPhotoJob } from '../snap/asyncSnap.js'
 import { enqueueSeedanceVideoJob, seedanceReferenceImagesFromLiveInputs } from '../video/asyncVideo.js'
 import { listInboxMessages, markInboxMessageRead, type InboxMessage } from '../inbox/store.js'
+import { looksLikeScheduleRequest, parseScheduleRequest } from '../schedule/parser.js'
+import {
+  addScheduleTask,
+  advanceScheduleTask,
+  dueScheduleTasks,
+  failScheduleTask,
+  formatScheduleTask,
+  loadScheduleStore,
+  removeScheduleTask,
+  saveScheduleStore,
+  type ScheduleTask,
+} from '../schedule/store.js'
 import {
   collectNewTtsSegments,
   splitTtsSegments,
@@ -79,6 +91,12 @@ const STREAM_DEBOUNCE_MS = 80
 const SLASH_MENU_MAX_ROWS = 10
 const SUBCONSCIOUS_HEARTBEAT_MS = 60_000
 const LLM_PROVIDERS = new Set(['anthropic', 'openai', 'gemini', 'minimax', 'openrouter'])
+
+function subconsciousHeartbeatMs(config: InfinitiConfig): number {
+  const ms = config.liveUi?.subconsciousHeartbeatMs
+  if (typeof ms !== 'number' || !Number.isFinite(ms)) return SUBCONSCIOUS_HEARTBEAT_MS
+  return Math.max(5000, Math.min(3600000, Math.round(ms)))
+}
 
 function inboxMessageToLiveUiItem(m: InboxMessage) {
   return {
@@ -199,6 +217,11 @@ export function ChatApp({
   const streamLiveUiRef = useRef(createStreamLiveUiState())
   const ttsCursorRef = useRef(0)
   const [liveUiConnected, setLiveUiConnected] = useState(false)
+  const [debugOverlayEnabled, setDebugOverlayEnabled] = useState(false)
+  const liveUiConnectedRef = useRef(false)
+  const debugOverlayEnabledRef = useRef(false)
+  liveUiConnectedRef.current = liveUiConnected
+  debugOverlayEnabledRef.current = debugOverlayEnabled
   const editHistoryRef = useRef(new EditHistory())
   const [slashIndex, setSlashIndex] = useState(0)
   const busyRef = useRef(false)
@@ -214,6 +237,9 @@ export function ChatApp({
   const [statusLine, setStatusLine] = useState('')
   const [thinkingSnap, setThinkingSnap] = useState('')
   const subconsciousRef = useRef<SubconsciousAgent | null>(null)
+  const scheduleRunningRef = useRef(false)
+  const messagesRef = useRef<PersistedMessage[]>([])
+  messagesRef.current = messages
 
   const slashItems = useMemo(
     () => buildSlashItems(mcp),
@@ -283,17 +309,48 @@ export function ChatApp({
   useEffect(() => {
     const agent = new SubconsciousAgent(config, cwd, liveUi)
     subconsciousRef.current = agent
-    void agent.start()
+    void agent.start().then(() => {
+      if (debugOverlayEnabledRef.current) void agent.setDebugOverlayEnabled(true)
+    })
+    const heartbeatMs = subconsciousHeartbeatMs(config)
     const id = setInterval(() => {
-      void agent.heartbeat()
-    }, SUBCONSCIOUS_HEARTBEAT_MS)
+      void agent
+        .heartbeat(new Date(), {
+          allowProactiveGreeting: Boolean(liveUi && liveUiConnectedRef.current && !busyRef.current),
+        })
+        .then((greeting) => {
+          if (!greeting || !liveUi || busyRef.current) return
+          liveUi.sendAssistantStream(greeting, true, true)
+          if (liveUi.hasTts) {
+            const clean = ttsDisplayCleanForLiveUi(greeting, expressionManifest)
+            liveUi.resetAudio()
+            for (const seg of splitTtsSegments(clean)) {
+              liveUi.enqueueTts(seg)
+            }
+          }
+          setMessages((prev) => {
+            const next: PersistedMessage[] = [...prev, { role: 'assistant', content: greeting }]
+            void saveSession(cwd, next)
+            return next
+          })
+        })
+        .catch((e: unknown) => {
+          if (process.env.INFINITI_AGENT_DEBUG === '1') {
+            setError(formatChatError(e))
+          }
+        })
+    }, heartbeatMs)
     return () => {
       clearInterval(id)
       if (subconsciousRef.current === agent) {
         subconsciousRef.current = null
       }
     }
-  }, [config, cwd, liveUi])
+  }, [config, cwd, expressionManifest, liveUi])
+
+  useEffect(() => {
+    void subconsciousRef.current?.setDebugOverlayEnabled(debugOverlayEnabled)
+  }, [debugOverlayEnabled])
 
   useInput(
     (_ch, key) => {
@@ -410,6 +467,104 @@ export function ChatApp({
     return `${base}\n\n${nudge}`
   }, [config, cwd, skillsEpoch, promptEpoch, liveUi])
 
+  const deliverAssistantText = useCallback(
+    (content: string, opts: { appendToSession?: boolean } = {}) => {
+      if (liveUi) {
+        liveUi.sendAssistantStream(content, true, true)
+        if (liveUi.hasTts) {
+          const clean = ttsDisplayCleanForLiveUi(content, expressionManifest)
+          liveUi.resetAudio()
+          for (const seg of splitTtsSegments(clean)) {
+            liveUi.enqueueTts(seg)
+          }
+        }
+      }
+      if (opts.appendToSession) {
+        setMessages((prev) => {
+          const next: PersistedMessage[] = [...prev, { role: 'assistant', content }]
+          messagesRef.current = next
+          void saveSession(cwd, next)
+          return next
+        })
+      }
+    },
+    [cwd, expressionManifest, liveUi],
+  )
+
+  const runScheduleTask = useCallback(
+    async (task: ScheduleTask): Promise<void> => {
+      const baseMessages = messagesRef.current
+      const scheduledUser: PersistedMessage = {
+        role: 'user',
+        content: `[计划任务 ${task.id}] ${task.prompt}`,
+      }
+      void subconsciousRef.current?.observeUserInput(scheduledUser.content)
+      const system = await buildSystem(task.prompt)
+      const { messages: outRaw } = await runToolLoop({
+        config,
+        system,
+        messages: [...baseMessages, scheduledUser],
+        cwd,
+        mcp,
+        skipPermissions: dangerouslySkipPermissions,
+        editHistory: editHistoryRef.current,
+        memoryCoordinator: subconsciousRef.current ?? undefined,
+      })
+      const out = liveUi ? stripLiveUiTagsFromMessages(outRaw, expressionManifest) : outRaw
+      const displayOut = stripTransientVision(out)
+      setMessages(displayOut)
+      messagesRef.current = displayOut
+      await saveSession(cwd, displayOut)
+      const lastMsg = outRaw[outRaw.length - 1]
+      if (lastMsg?.role === 'assistant' && typeof lastMsg.content === 'string' && lastMsg.content) {
+        void subconsciousRef.current?.observeAssistantOutput(lastMsg.content)
+        deliverAssistantText(lastMsg.content)
+      } else {
+        deliverAssistantText(`计划任务已执行：${task.prompt}`, { appendToSession: true })
+      }
+    },
+    [buildSystem, config, cwd, dangerouslySkipPermissions, deliverAssistantText, expressionManifest, liveUi, mcp],
+  )
+
+  const processDueSchedules = useCallback(async () => {
+    if (!sessionReady) return
+    if (scheduleRunningRef.current || busyRef.current) return
+    scheduleRunningRef.current = true
+    try {
+      let store = await loadScheduleStore(cwd)
+      const due = dueScheduleTasks(store, new Date())
+      for (const task of due) {
+        if (busyRef.current) break
+        try {
+          setNotice(`执行计划任务：${task.prompt}`)
+          await runScheduleTask(task)
+          store = await loadScheduleStore(cwd)
+          store.tasks = store.tasks.map((t) => t.id === task.id ? advanceScheduleTask(t, new Date()) : t)
+          await saveScheduleStore(cwd, store)
+          setNotice(`计划任务完成：${task.prompt}`)
+          setTimeout(() => setNotice(null), 5000)
+        } catch (e: unknown) {
+          const msg = formatChatError(e)
+          store = await loadScheduleStore(cwd)
+          store.tasks = store.tasks.map((t) => t.id === task.id ? failScheduleTask(t, msg, new Date()) : t)
+          await saveScheduleStore(cwd, store)
+          setError(`计划任务失败：${msg}`)
+        }
+      }
+    } finally {
+      scheduleRunningRef.current = false
+    }
+  }, [cwd, runScheduleTask, sessionReady])
+
+  useEffect(() => {
+    const heartbeatMs = subconsciousHeartbeatMs(config)
+    void processDueSchedules()
+    const id = setInterval(() => {
+      void processDueSchedules()
+    }, heartbeatMs)
+    return () => clearInterval(id)
+  }, [config, processDueSchedules])
+
   const reloadAll = useCallback(async () => {
     try {
       const next = await loadConfig(cwd)
@@ -490,6 +645,62 @@ export function ChatApp({
         setInput('')
         return
       }
+      if (raw === '/debug') {
+        if (!liveUi) {
+          setError('/debug 仅在 live 模式可用')
+          setInput('')
+          return
+        }
+        const next = !debugOverlayEnabled
+        setDebugOverlayEnabled(next)
+        void subconsciousRef.current?.setDebugOverlayEnabled(next)
+        setError(null)
+        setNotice(next ? 'LiveUI debug 已开启' : 'LiveUI debug 已关闭')
+        setTimeout(() => setNotice(null), 4000)
+        setInput('')
+        return
+      }
+      if (raw === '/schedule' || raw === '/schedule list') {
+        const store = await loadScheduleStore(cwd)
+        const lines = store.tasks.length
+          ? store.tasks.map(formatScheduleTask).join('\n')
+          : '暂无计划任务'
+        setNotice(lines)
+        setTimeout(() => setNotice(null), 15000)
+        setInput('')
+        return
+      }
+      if (raw.startsWith('/schedule remove ') || raw.startsWith('/schedule rm ')) {
+        const id = raw.replace(/^\/schedule\s+(remove|rm)\s+/i, '').trim()
+        if (!id) {
+          setError('请提供计划任务 id 前缀，例如 /schedule remove sch_2026')
+          setInput('')
+          return
+        }
+        const removed = await removeScheduleTask(cwd, id)
+        if (!removed) setError(`没有找到计划任务: ${id}`)
+        else {
+          setError(null)
+          setNotice(`已删除计划任务：${removed.prompt}`)
+          setTimeout(() => setNotice(null), 5000)
+        }
+        setInput('')
+        return
+      }
+      if (raw.startsWith('/schedule add ') || looksLikeScheduleRequest(raw)) {
+        const parsed = parseScheduleRequest(raw)
+        if (!parsed || !parsed.prompt.trim()) {
+          setError('计划格式暂支持：每天早上8点做某事、每分钟检查某事、每5分钟做某事、/schedule add 明天9点做某事')
+          setInput('')
+          return
+        }
+        const task = await addScheduleTask(cwd, parsed)
+        setError(null)
+        setNotice(`已创建计划任务：${formatScheduleTask(task)}`)
+        setTimeout(() => setNotice(null), 8000)
+        setInput('')
+        return
+      }
       if (raw === '/memory') {
         setError('记忆系统：memory.json（结构化记忆）+ user_profile.json（用户画像）— 在 .infiniti-agent/ 下')
         setInput('')
@@ -533,7 +744,7 @@ export function ChatApp({
       }
       if (raw === '/help') {
         setError(
-          '输入 / 可补全：斜杠命令与全部工具（↑↓ Tab）。命令: /exit /clear /reload /config /memory /inbox /last_email /undo /roll /compact /permission /speak /snap /video — /config 仅 Live 模式打开配置面板；/last_email 打开最近一封邮箱消息；/speak 后接正文仅 TTS 朗读、不写会话；/snap 后接提示词异步生成合照/写实照片；/video 后接提示词异步生成 Seedance 视频，完成后写入你的邮箱。/roll 2 可按 LLM 输出层回滚对话。改文件/bash/HTTP 默认需确认（Y 允许 · A 本次会话始终允许该工具 · N 拒绝）；启动时加 --dangerously-skip-permissions 可跳过所有确认。/permission 查看当前状态。/compact 压缩较早历史。卡死排查：INFINITI_AGENT_DEBUG=1。',
+          '输入 / 可补全：斜杠命令与全部工具（↑↓ Tab）。命令: /exit /clear /reload /config /debug /schedule /memory /inbox /last_email /undo /roll /compact /permission /speak /snap /video — /schedule list 查看计划，/schedule add 每天早上8点做某事 创建计划；也可直接输入“每分钟检查一次邮箱”。/config 仅 Live 模式打开配置面板；/debug 切换 LiveUI 调试叠层；/last_email 打开最近一封邮箱消息；/speak 后接正文仅 TTS 朗读、不写会话；/snap 后接提示词异步生成合照/写实照片；/video 后接提示词异步生成 Seedance 视频，完成后写入你的邮箱。/roll 2 可按 LLM 输出层回滚对话。改文件/bash/HTTP 默认需确认（Y 允许 · A 本次会话始终允许该工具 · N 拒绝）；启动时加 --dangerously-skip-permissions 可跳过所有确认。/permission 查看当前状态。/compact 压缩较早历史。卡死排查：INFINITI_AGENT_DEBUG=1。',
         )
         setInput('')
         return
@@ -557,6 +768,7 @@ export function ChatApp({
         try {
           const job = await enqueueSeedanceVideoJob(cwd, config, prompt, referenceImages)
           const content = await polishVideoQueuedReply(config, prompt, job.id)
+          void subconsciousRef.current?.observeAssistantOutput(content)
           const next: PersistedMessage[] = [
             ...messages,
             { role: 'user', content: raw },
@@ -598,6 +810,7 @@ export function ChatApp({
         try {
           const job = await enqueueSnapPhotoJob(cwd, config, prompt, snapVision)
           const content = await polishSnapQueuedReply(config, prompt, job.id)
+          void subconsciousRef.current?.observeAssistantOutput(content)
           const next: PersistedMessage[] = [
             ...messages,
             { role: 'user', content: raw },
@@ -902,6 +1115,7 @@ export function ChatApp({
       buildSystem,
       config,
       cwd,
+      debugOverlayEnabled,
       exit,
       expressionManifest,
       flushStream,

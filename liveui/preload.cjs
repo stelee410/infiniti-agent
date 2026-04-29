@@ -6,7 +6,7 @@ const renderer = process.env.INFINITI_LIVEUI_RENDERER || ''
 const model3FileUrl = process.env.INFINITI_LIVEUI_MODEL3_FILE_URL || ''
 const spriteExpressionDirFileUrl = process.env.INFINITI_LIVEUI_SPRITE_EXPRESSION_DIR || ''
 
-/** `infiniti-agent live --zoom <n>` 注入；未传或非法则保持 1（不缩放） */
+/** config liveUi.figureZoom 或 `infiniti-agent live --zoom <n>` 注入；未传或非法则保持 1（不缩放） */
 let figureZoom = 1
 {
   const raw = process.env.INFINITI_LIVEUI_FIGURE_ZOOM

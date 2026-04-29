@@ -81,7 +81,17 @@ type SyncParam = {
 
 type ActionMsg = {
   type: 'ACTION'
-  data: { expression?: string; intensity?: number; motion?: string }
+  data: { expression?: string; intensity?: number; motion?: string; gaze?: string }
+}
+
+type DebugStateMsg = {
+  type: 'DEBUG_STATE'
+  data: {
+    enabled?: unknown
+    emotion?: unknown
+    emotionIntensity?: unknown
+    relationship?: unknown
+  }
 }
 
 type AssistantStreamMsg = {
@@ -180,6 +190,7 @@ type ChatAttachment = {
 type Msg =
   | SyncParam
   | ActionMsg
+  | DebugStateMsg
   | AssistantStreamMsg
   | StatusPillMsg
   | AudioChunkMsg
@@ -335,6 +346,8 @@ async function bootstrap(): Promise<void> {
     'speech-bubble-text',
   ) as HTMLElement | null
   const statusPill = document.getElementById('liveui-status-pill')
+  const debugEmotionEl = document.getElementById('liveui-debug-emotion')
+  const debugRelationshipEl = document.getElementById('liveui-debug-relationship')
   const userLineInput = document.getElementById('liveui-user-line') as HTMLTextAreaElement | null
   const inboxRoot = document.getElementById('liveui-inbox')
   const inboxToggle = document.getElementById('liveui-inbox-toggle') as HTMLButtonElement | null
@@ -378,6 +391,37 @@ async function bootstrap(): Promise<void> {
   /** 模型在 scale=1 时的本地包围尺寸，用于缩放计算（勿用 liveModel.width：会含当前 scale，Resize 时会越算越大） */
   let liveModelNaturalW = 400
   let liveModelNaturalH = 600
+  let debugOverlayEnabled = false
+  let debugEmotion = 'neutral'
+  let debugEmotionIntensity = 0
+
+  const formatDebugNumber = (value: unknown): string => {
+    const n = typeof value === 'number' && Number.isFinite(value) ? value : 0
+    return n >= 0 ? `+${n.toFixed(2)}` : n.toFixed(2)
+  }
+
+  const renderDebugOverlay = (relationship?: Record<string, unknown>): void => {
+    if (!debugEmotionEl || !debugRelationshipEl) return
+    debugEmotionEl.hidden = !debugOverlayEnabled
+    debugRelationshipEl.hidden = !debugOverlayEnabled
+    debugEmotionEl.setAttribute('aria-hidden', String(!debugOverlayEnabled))
+    debugRelationshipEl.setAttribute('aria-hidden', String(!debugOverlayEnabled))
+    if (!debugOverlayEnabled) return
+    debugEmotionEl.textContent = `emotion\n${debugEmotion}\n${debugEmotionIntensity.toFixed(2)}`
+    if (relationship) {
+      debugRelationshipEl.replaceChildren(
+        `trust ${formatDebugNumber(relationship.trust)}`,
+        document.createElement('br'),
+        `affinity ${formatDebugNumber(relationship.affinity)}`,
+        document.createElement('br'),
+        `intimacy ${formatDebugNumber(relationship.intimacy)}`,
+        document.createElement('br'),
+        `respect ${formatDebugNumber(relationship.respect)}`,
+        document.createElement('br'),
+        `tension ${formatDebugNumber(relationship.tension)}`,
+      )
+    }
+  }
 
   const layoutFootGapPx = (viewH: number): number =>
     Math.max(0, Math.round(viewH * FIGURE_LAYOUT.footGapScreenFraction))
@@ -412,7 +456,7 @@ async function bootstrap(): Promise<void> {
     )
 
     /**
-     * `infiniti-agent live --zoom <n>` 注入的人物缩放系数。仅作用于 Live2D / 精灵，
+     * config liveUi.figureZoom 或 `infiniti-agent live --zoom <n>` 注入的人物缩放系数。仅作用于虚拟人，
      * 不影响控制条/输入框（它们是独立 DOM）。范围 0.4 ~ 1.5，缺省 1。
      */
     const figureZoom = (() => {
@@ -475,21 +519,24 @@ async function bootstrap(): Promise<void> {
   }
 
   /**
-   * 只做一件事：在「当前 layout」下读人物 getBounds()，若头顶留白明显则把窗口高度减掉一截。
-   * 不调 window.resize、不迭代 shrink；精灵/Live2D 各在加载完成后各调度一次（+ 表情换图宽高比大变时）。
+   * 在「当前 layout」下读人物可见 bounds，若头顶留白明显则把窗口高度减掉一截。
+   * Electron 端保持底边不动，所以底部控制条不会漂走。
    */
-  const scheduleCompactWindowHeight = (): void => {
+  const scheduleCompactWindowHeight = (attempt = 0): void => {
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         const c = window.infinitiLiveUi?.compactWindowHeight
         if (typeof c !== 'function') return
-        const fig = expressionSprite ?? liveModel
-        if (!fig) return
         layoutFigureInStage()
-        const b = fig.getBounds()
+        const pixiFig = expressionSprite ?? liveModel
+        const b = pixiFig?.getBounds() ?? real2dAvatar?.getVisualBounds()
+        if (!b) {
+          if (attempt < 8) window.setTimeout(() => scheduleCompactWindowHeight(attempt + 1), 180)
+          return
+        }
         const bar = document.getElementById('liveui-control-bar')
-        const dockBottom = bar ? Math.ceil(bar.getBoundingClientRect().bottom) : 0
-        const minH = Math.max(360, dockBottom + 8)
+        const barHeight = bar ? Math.ceil(bar.getBoundingClientRect().height) : 120
+        const minH = Math.max(360, barHeight + 220)
         const topGoal = 10
         const shrink = Math.max(0, Math.floor(b.top - topGoal))
         const nextH = Math.max(minH, Math.min(1000, window.innerHeight - shrink))
@@ -810,6 +857,11 @@ async function bootstrap(): Promise<void> {
     new URL(`${expBase}.png`, spriteExpressionDirFileUrl).href
   const real2dExpressionIds = real2dExpressionIdsFromEmotionMap(spriteEmotionToIdOverride)
   const real2dNeutralExpressionId = real2dExpressionIds?.neutral ?? 'exp01'
+  const real2dFigureZoom = (() => {
+    const z = window.infinitiLiveUi?.figureZoom
+    if (typeof z !== 'number' || !Number.isFinite(z)) return 1
+    return Math.max(0.4, Math.min(1.5, z))
+  })()
 
   const loadSpritePngTexture = (url: string): Promise<PIXI.Texture> =>
     new Promise((resolve, reject) => {
@@ -831,7 +883,7 @@ async function bootstrap(): Promise<void> {
       real2dPlaceholder.style.objectFit = 'contain'
       real2dPlaceholder.style.pointerEvents = 'none'
       real2dPlaceholder.style.zIndex = '10'
-      real2dPlaceholder.style.transform = 'scale(0.8)'
+      real2dPlaceholder.style.transform = `scale(${0.8 * real2dFigureZoom})`
       real2dPlaceholder.style.transformOrigin = '50% 72%'
       document.body.appendChild(real2dPlaceholder)
 
@@ -848,6 +900,7 @@ async function bootstrap(): Promise<void> {
         container: stage,
         spriteExpressionDirFileUrl,
         expressionIds: real2dExpressionIds,
+        figureZoom: real2dFigureZoom,
         width: window.innerWidth,
         height: window.innerHeight,
         onError: (e) => console.warn('[liveui] real2d runtime error:', e),
@@ -856,6 +909,7 @@ async function bootstrap(): Promise<void> {
       real2dPlaceholder.remove()
       app.stage.removeChild(face)
       app.stage.removeChild(mouth)
+      scheduleCompactWindowHeight()
       console.debug('[liveui] real2d 已加载', spriteExpressionDirFileUrl)
     } catch (e) {
       real2dPlaceholder.remove()
@@ -944,6 +998,11 @@ async function bootstrap(): Promise<void> {
       emotionMap: spriteEmotionToIdOverride,
     })
     expression = adapted.expression
+    debugEmotion = adapted.expression
+    if (typeof adapted.intensity === 'number' && Number.isFinite(adapted.intensity)) {
+      debugEmotionIntensity = adapted.intensity
+    }
+    renderDebugOverlay()
     if (real2dAvatar) {
       real2dAvatar.setEmotion(adapted.expression, adapted.intensity)
       return
@@ -980,6 +1039,27 @@ async function bootstrap(): Promise<void> {
     } else {
       applyPlaceholderExpression(adapted.expression)
     }
+  }
+
+  const triggerPixiShake = (): void => {
+    const target = liveModel ?? expressionSprite ?? face
+    const startX = target.position.x
+    const startRot = 'rotation' in target ? target.rotation : 0
+    const started = performance.now()
+    const duration = 520
+    const tick = (): void => {
+      const t = Math.min(1, (performance.now() - started) / duration)
+      const env = Math.sin(t * Math.PI)
+      target.position.x = startX + Math.sin(t * Math.PI * 8) * 5 * env
+      if ('rotation' in target) target.rotation = startRot + Math.sin(t * Math.PI * 6) * 0.012 * env
+      if (t < 1) {
+        requestAnimationFrame(tick)
+      } else {
+        target.position.x = startX
+        if ('rotation' in target) target.rotation = startRot
+      }
+    }
+    requestAnimationFrame(tick)
   }
 
   const delay = (ms: number): Promise<void> => new Promise((resolve) => window.setTimeout(resolve, ms))
@@ -2344,9 +2424,27 @@ async function bootstrap(): Promise<void> {
       if (motion && real2dAvatar) {
         real2dAvatar.triggerMotion(motion)
       }
-      if (motion && liveModel) {
-        console.debug('[liveui] motion 指令（可扩展 motion 组映射）:', motion)
+      const gaze = msg.data?.gaze
+      if (gaze && real2dAvatar) {
+        real2dAvatar.setGaze(gaze)
       }
+      if (motion && liveModel) {
+        if (motion === 'shake') triggerPixiShake()
+        else console.debug('[liveui] motion 指令（可扩展 motion 组映射）:', motion)
+      } else if (motion === 'shake' && (expressionSprite || !real2dAvatar)) {
+        triggerPixiShake()
+      }
+    } else if (msg.type === 'DEBUG_STATE') {
+      debugOverlayEnabled = msg.data?.enabled === true
+      if (typeof msg.data?.emotion === 'string') debugEmotion = msg.data.emotion
+      if (typeof msg.data?.emotionIntensity === 'number' && Number.isFinite(msg.data.emotionIntensity)) {
+        debugEmotionIntensity = msg.data.emotionIntensity
+      }
+      const relationship =
+        msg.data?.relationship && typeof msg.data.relationship === 'object'
+          ? msg.data.relationship as Record<string, unknown>
+          : undefined
+      renderDebugOverlay(relationship)
     } else if (msg.type === 'ASSISTANT_STREAM') {
       const fullRaw = typeof msg.data?.fullRaw === 'string' ? msg.data.fullRaw : ''
       if (msg.data?.reset) {

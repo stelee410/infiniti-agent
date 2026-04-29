@@ -31,6 +31,10 @@ export function localInboxDir(cwd: string): string {
   return join(cwd, LOCAL_DIR_NAME, 'inbox')
 }
 
+export function localSchedulesPath(cwd: string): string {
+  return join(cwd, LOCAL_DIR_NAME, 'schedules.json')
+}
+
 export function localJobsDir(cwd: string): string {
   return join(cwd, LOCAL_DIR_NAME, 'jobs')
 }

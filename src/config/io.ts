@@ -256,6 +256,14 @@ function parseLiveUiConfig(raw: unknown): LiveUiConfig | undefined {
     const p = Math.floor(u.port)
     if (p >= 1 && p <= 65535) out.port = p
   }
+  if (typeof u.subconsciousHeartbeatMs === 'number' && Number.isFinite(u.subconsciousHeartbeatMs)) {
+    const ms = Math.round(u.subconsciousHeartbeatMs)
+    if (ms >= 5000 && ms <= 3600000) out.subconsciousHeartbeatMs = ms
+  }
+  if (typeof u.figureZoom === 'number' && Number.isFinite(u.figureZoom)) {
+    const z = u.figureZoom
+    if (z >= 0.4 && z <= 1.5) out.figureZoom = z
+  }
   if (typeof u.ttsAutoEnabled === 'boolean') {
     out.ttsAutoEnabled = u.ttsAutoEnabled
   }

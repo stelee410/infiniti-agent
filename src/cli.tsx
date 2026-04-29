@@ -182,7 +182,7 @@ function restartLiveUiElectron(
     model3FileUrl: useReal2d || useSpriteOnly ? undefined : resolved?.model3FileUrl,
     spriteExpressionDirFileUrl: useReal2d || useSpriteOnly ? spriteResolved?.dirFileUrl : undefined,
     voiceMicJson: buildLiveUiVoiceMicEnvJson(cfg.liveUi, { auto: opts.auto === true }),
-    figureZoom: opts.figureZoom,
+    figureZoom: resolveLiveUiFigureZoom(cfg, opts.figureZoom),
   })
   liveUi.setElectronChild(child)
   if (!child) {
@@ -190,6 +190,15 @@ function restartLiveUiElectron(
   } else {
     console.error(`[liveui] WebSocket ws://127.0.0.1:${liveUi.port} · Electron 已启动`)
   }
+}
+
+function resolveLiveUiFigureZoom(
+  cfg: Awaited<ReturnType<typeof loadConfig>>,
+  override?: number,
+): number | undefined {
+  const z = typeof override === 'number' ? override : cfg.liveUi?.figureZoom
+  if (typeof z !== 'number' || !Number.isFinite(z)) return undefined
+  return Math.max(0.4, Math.min(1.5, z))
 }
 
 async function runChatTui(
@@ -238,7 +247,7 @@ async function runChatTui(
         model3FileUrl: opts.liveUiModel3FileUrl,
         spriteExpressionDirFileUrl: opts.liveUiSpriteExpressionDirFileUrl,
         voiceMicJson: opts.liveUiVoiceMicJson,
-        figureZoom: opts.liveUiFigureZoom,
+        figureZoom: resolveLiveUiFigureZoom(cfg, opts.liveUiFigureZoom),
       })
       liveUi.setElectronChild(child)
       if (!child) {
@@ -534,7 +543,7 @@ async function main(): Promise<void> {
         console.error(`[liveui] 已启用 spriteExpressions（PNG），不使用 Live2D 模型 URL`)
       }
 
-      let figureZoom: number | undefined
+      let cliFigureZoomOverride: number | undefined
       const zoomRaw = cmdOpts.zoom?.trim()
       if (zoomRaw) {
         const z = Number(zoomRaw)
@@ -542,8 +551,10 @@ async function main(): Promise<void> {
           console.error('[live] --zoom 取值需在 0.4 ~ 1.5 之间，例如 0.9 表示 90%。')
           process.exit(2)
         }
-        figureZoom = z
+        cliFigureZoomOverride = z
         console.error(`[liveui] 人物缩放: ${(z * 100).toFixed(0)}%`)
+      } else if (typeof cfg.liveUi?.figureZoom === 'number') {
+        console.error(`[liveui] 人物缩放: ${(cfg.liveUi.figureZoom * 100).toFixed(0)}%`)
       }
 
       const liveUi = new LiveUiSession(port)
@@ -555,7 +566,7 @@ async function main(): Promise<void> {
         liveUiModel3FileUrl: useReal2d || useSpriteOnly ? undefined : resolved?.model3FileUrl,
         liveUiSpriteExpressionDirFileUrl: useReal2d || useSpriteOnly ? spriteResolved?.dirFileUrl : undefined,
         liveUiVoiceMicJson: buildLiveUiVoiceMicEnvJson(cfg.liveUi, { auto: cmdOpts.auto === true }),
-        liveUiFigureZoom: figureZoom,
+        liveUiFigureZoom: cliFigureZoomOverride,
         onConfigReload: async (nextCfg) => {
           if (nextCfg.liveUi?.port && nextCfg.liveUi.port !== liveUi.port) {
             console.warn(
@@ -565,7 +576,7 @@ async function main(): Promise<void> {
           await configureLiveUiEngines(liveUi, nextCfg)
           restartLiveUiElectron(liveUi, nextCfg, {
             auto: cmdOpts.auto === true,
-            figureZoom,
+            figureZoom: cliFigureZoomOverride,
           })
         },
       })

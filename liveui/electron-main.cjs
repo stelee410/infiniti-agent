@@ -151,16 +151,17 @@ function createWindow() {
     } catch { /* window may be destroyed */ }
   })
 
-  /** 仅调高度：由渲染端在首帧布局后请求一次，去掉头顶大块留白（不设复杂循环） */
+  /** 调整高度并保持底边不动：由渲染端在首帧布局后请求，去掉头顶大块留白。 */
   ipcMain.on('liveui-compact-height', (_e, payload) => {
     try {
       if (preConfigBounds) return
       const h = payload && Number.isFinite(payload.height) ? Math.round(payload.height) : 0
       if (h <= 0) return
-      const [, curH] = win.getSize()
+      const cur = win.getBounds()
       const nextH = Math.max(360, Math.min(1000, h))
-      if (nextH === curH) return
-      win.setSize(win.getSize()[0], nextH)
+      if (nextH === cur.height) return
+      const nextY = cur.y + cur.height - nextH
+      win.setBounds({ x: cur.x, y: nextY, width: cur.width, height: nextH })
     } catch { /* window may be destroyed */ }
   })
 

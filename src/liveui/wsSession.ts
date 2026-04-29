@@ -6,6 +6,7 @@ import { extname, isAbsolute } from 'node:path'
 import { WebSocketServer, WebSocket } from 'ws'
 import type {
   LiveUiActionMessage,
+  LiveUiDebugStateMessage,
   LiveUiAssistantStreamMessage,
   LiveUiAudioChunkMessage,
   LiveUiInboxItem,
@@ -484,6 +485,10 @@ export class LiveUiSession {
 
   sendAction(data: LiveUiActionMessage['data']): void {
     this.broadcast({ type: 'ACTION', data })
+  }
+
+  sendDebugState(data: LiveUiDebugStateMessage['data']): void {
+    this.broadcast({ type: 'DEBUG_STATE', data })
   }
 
   /** 将模型原始流发给渲染进程（含 [Happy] 等标签），由前端解析表情与气泡正文。 */

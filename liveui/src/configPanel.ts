@@ -192,6 +192,8 @@ function ensureDefaultConfigNodes(cfg: JsonObj, cwd: string): void {
   cfg.compaction ??= { autoThresholdTokens: 30000 }
   cfg.liveUi ??= {}
   cfg.liveUi.port ??= 8080
+  cfg.liveUi.subconsciousHeartbeatMs ??= 60000
+  cfg.liveUi.figureZoom ??= 1
   cfg.liveUi.ttsAutoEnabled ??= true
   cfg.liveUi.asrAutoEnabled ??= false
   cfg.liveUi.asrMode ??= 'manual'
@@ -440,6 +442,14 @@ export function initConfigPanel(opts: ConfigPanelOptions): {
     const section = el('section', { class: 'config-section config-section--active' })
     const grid = el('div', { class: 'config-grid' })
     grid.append(
+      field('Heartbeat 间隔(ms)', input(num(l.subconsciousHeartbeatMs, '60000'), (v) => {
+        const n = Number(v)
+        if (Number.isFinite(n)) l.subconsciousHeartbeatMs = Math.round(n)
+      }, 'number')),
+      field('形象缩放比例', input(num(l.figureZoom, '1'), (v) => {
+        const n = Number(v)
+        if (Number.isFinite(n)) l.figureZoom = n
+      }, 'number')),
       field('TTS 自动', select(l.ttsAutoEnabled === false ? 'false' : 'true', [['true', '开启'], ['false', '关闭']], (v) => { l.ttsAutoEnabled = v === 'true' })),
       field('ASR 自动', select(l.asrAutoEnabled ? 'true' : 'false', [['false', '关闭'], ['true', '开启']], (v) => { l.asrAutoEnabled = v === 'true' })),
       field('ASR 模式', select(text(l.asrMode || 'manual'), [['manual', '手动识别'], ['auto', '自动识别']], (v) => { l.asrMode = v })),

@@ -2,7 +2,7 @@ import './real2d/layers/styles.css'
 
 import { AvatarRuntime } from './real2d/runtime/AvatarRuntime.ts'
 import { TALK_KEY } from './real2d/engines/SpriteRenderer.ts'
-import type { Emotion, Motion } from './real2d/types/index.ts'
+import type { Emotion, Gaze, Motion } from './real2d/types/index.ts'
 
 export type Real2dExpressionSlot =
   | 'neutral'
@@ -20,6 +20,7 @@ export type Real2dLiveUiAdapterOptions = {
   container: HTMLElement
   spriteExpressionDirFileUrl: string
   expressionIds?: Partial<Record<Real2dExpressionSlot, string>>
+  figureZoom?: number
   width: number
   height: number
   onError?: (error: unknown) => void
@@ -58,7 +59,11 @@ export class Real2dLiveUiAdapter {
   async init(): Promise<void> {
     this.opts.container.classList.add('liveui-real2d-stage')
     this.opts.container.style.background = 'transparent'
-    this.opts.container.style.transform = 'scale(0.8)'
+    const figureZoom =
+      typeof this.opts.figureZoom === 'number' && Number.isFinite(this.opts.figureZoom)
+        ? Math.max(0.4, Math.min(1.5, this.opts.figureZoom))
+        : 1
+    this.opts.container.style.transform = `scale(${0.8 * figureZoom})`
     this.opts.container.style.transformOrigin = '50% 72%'
     this.opts.container.style.visibility = 'hidden'
 
@@ -104,6 +109,42 @@ export class Real2dLiveUiAdapter {
     this.runtime?.resize(width, height)
   }
 
+  getVisualBounds(): DOMRect | null {
+    const canvas = this.opts.container.querySelector('canvas.avr-avatar') as HTMLCanvasElement | null
+    if (!canvas) return null
+    const ctx = canvas.getContext('2d', { willReadFrequently: true })
+    if (!ctx || canvas.width <= 0 || canvas.height <= 0) return null
+    try {
+      const step = Math.max(2, Math.floor(Math.min(canvas.width, canvas.height) / 220))
+      const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data
+      let minX = canvas.width
+      let minY = canvas.height
+      let maxX = -1
+      let maxY = -1
+      for (let y = 0; y < canvas.height; y += step) {
+        for (let x = 0; x < canvas.width; x += step) {
+          if (data[(y * canvas.width + x) * 4 + 3] <= 8) continue
+          if (x < minX) minX = x
+          if (y < minY) minY = y
+          if (x > maxX) maxX = x
+          if (y > maxY) maxY = y
+        }
+      }
+      if (maxX < minX || maxY < minY) return null
+      const rect = canvas.getBoundingClientRect()
+      const scaleX = rect.width / canvas.width
+      const scaleY = rect.height / canvas.height
+      return new DOMRect(
+        rect.left + minX * scaleX,
+        rect.top + minY * scaleY,
+        Math.max(1, (maxX - minX + step) * scaleX),
+        Math.max(1, (maxY - minY + step) * scaleY),
+      )
+    } catch {
+      return null
+    }
+  }
+
   setEmotion(raw: string, intensity?: number): void {
     const emotion = this.normalizeEmotion(raw)
     this.pendingEmotion = emotion
@@ -135,6 +176,12 @@ export class Real2dLiveUiAdapter {
     this.pendingMouth = 0
     if (!this.ready) return
     this.runtime?.setMouthOpen(0)
+  }
+
+  setGaze(raw: string): void {
+    const gaze = this.normalizeGaze(raw)
+    if (!gaze || !this.ready) return
+    this.runtime?.update({ gaze })
   }
 
   triggerMotion(raw: string): void {
@@ -187,6 +234,14 @@ export class Real2dLiveUiAdapter {
   private normalizeMotion(raw: string): Motion | null {
     const m = raw.toLowerCase().trim()
     if (m === 'nod' || m === 'shake' || m === 'bounce' || m === 'idle') return m
+    return null
+  }
+
+  private normalizeGaze(raw: string): Gaze | null {
+    const g = raw.toLowerCase().trim()
+    if (g === 'center' || g === 'left' || g === 'right' || g === 'up' || g === 'down' || g === 'close') {
+      return g
+    }
     return null
   }
 }

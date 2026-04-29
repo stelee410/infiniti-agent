@@ -23,7 +23,7 @@ import {
 import { consolidateRecentMemory } from './memoryConsolidator.js'
 import { SUBCONSCIOUS_DELTA_SYSTEM } from './prompts.js'
 import { loadSubconsciousStore, saveSubconsciousStore } from './state.js'
-import type { StateDelta, SubconsciousStore } from './types.js'
+import type { MetaState, StateDelta, SubconsciousStore } from './types.js'
 import {
   DURABLE_CONSOLIDATION_SYSTEM,
   dominantTopic,
@@ -45,6 +45,8 @@ import {
 } from './memoryLifecycle.js'
 
 const RECENT_LIMIT = 20
+const PROACTIVE_IDLE_HEARTBEATS = 10
+const PROACTIVE_MIN_INTERVAL_MS = 30 * 60 * 1000
 
 function parseDelta(raw: string): StateDelta | null {
   const match = raw.match(/\{[\s\S]*\}/)
@@ -88,6 +90,9 @@ export class SubconsciousAgent {
   private refineQueue: Promise<unknown> = Promise.resolve()
   private compacting = false
   private documentMemoryFingerprint: string | null = null
+  private debugOverlayEnabled = false
+  private idleHeartbeatCount = 0
+  private lastProactiveGreetingAt = 0
 
   constructor(
     private readonly config: InfinitiConfig,
@@ -102,9 +107,21 @@ export class SubconsciousAgent {
     this.render()
   }
 
+  async setDebugOverlayEnabled(enabled: boolean): Promise<void> {
+    this.debugOverlayEnabled = enabled
+    await this.start()
+    this.sendDebugState(enabled)
+  }
+
+  getDebugSnapshot(): LiveUiDebugSnapshot | null {
+    if (!this.store) return null
+    return debugSnapshotFromMetaState(this.store.state)
+  }
+
   async observeUserInput(input: string): Promise<void> {
     await this.start()
     if (!this.store) return
+    this.idleHeartbeatCount = 0
     const analysis = analyzeInput(input)
     const delta = {}
     this.store.recent = [
@@ -156,11 +173,15 @@ export class SubconsciousAgent {
     this.render()
   }
 
-  async heartbeat(now = new Date()): Promise<void> {
+  async heartbeat(
+    now = new Date(),
+    opts: { allowProactiveGreeting?: boolean } = {},
+  ): Promise<string | null> {
     await this.start()
-    if (!this.store || this.running) return
+    if (!this.store || this.running) return null
     this.running = true
     const started = Date.now()
+    let proactiveGreeting: string | null = null
     try {
       const beforeMemory = this.currentDocumentMemoryFingerprint()
       this.store.state = applyHeartbeatDecay(this.store.state, now.toISOString())
@@ -172,7 +193,9 @@ export class SubconsciousAgent {
       this.store.metadata.lastHeartbeatDurationMs = Date.now() - started
       await saveSubconsciousStore(this.cwd, this.store)
       await this.syncDocumentMemoryIfChanged(beforeMemory)
-      this.render()
+      this.idleHeartbeatCount += 1
+      this.render({ heartbeatMicroAction: true })
+      proactiveGreeting = await this.maybeCreateProactiveGreeting(now, opts.allowProactiveGreeting === true)
       this.enqueueMemoryWork(() => this.scanHistoryForStableFacts(now)).catch((e) => {
         agentDebug('[subconscious-agent] history scan failed', e)
       })
@@ -183,6 +206,7 @@ export class SubconsciousAgent {
       }
       this.running = false
     }
+    return proactiveGreeting
   }
 
   async executeMemoryAction(act: MemoryAction): Promise<Awaited<ReturnType<typeof executeMemoryAction>>> {
@@ -439,13 +463,99 @@ export class SubconsciousAgent {
     this.store.state = applyUpdate(this.store.state, delta)
   }
 
-  private render(): void {
+  private render(opts: { heartbeatMicroAction?: boolean } = {}): void {
     if (!this.liveUi || !this.store) return
     const command = planBehavior(this.store.state)
+    const microAction = opts.heartbeatMicroAction ? this.heartbeatMicroAction() : {}
     this.liveUi.sendAction({
       expression: command.expression.name,
       intensity: command.expression.intensity,
       ...(command.gesture ? { motion: command.gesture } : {}),
+      ...microAction,
     })
+    if (this.debugOverlayEnabled) {
+      this.sendDebugState(true)
+    }
+  }
+
+  private sendDebugState(enabled: boolean): void {
+    if (!this.liveUi) return
+    if (!enabled || !this.store) {
+      this.liveUi.sendDebugState({ enabled: false })
+      return
+    }
+    this.liveUi.sendDebugState({ enabled: true, ...debugSnapshotFromMetaState(this.store.state) })
+  }
+
+  private heartbeatMicroAction(): { motion?: string; gaze?: string } {
+    const r = Math.random()
+    if (r < 0.55) {
+      const gaze = ['left', 'right', 'up', 'down', 'center'][Math.floor(Math.random() * 5)]
+      return { gaze }
+    }
+    if (r < 0.8) {
+      return { motion: Math.random() < 0.5 ? 'shake' : 'nod' }
+    }
+    return {}
+  }
+
+  private async maybeCreateProactiveGreeting(now: Date, allowed: boolean): Promise<string | null> {
+    if (!allowed || !this.liveUi || !this.store) return null
+    if (this.idleHeartbeatCount <= PROACTIVE_IDLE_HEARTBEATS) return null
+    if (now.getTime() - this.lastProactiveGreetingAt < PROACTIVE_MIN_INTERVAL_MS) return null
+    const recent = this.store.recent
+      .slice(-8)
+      .map((r) => `${r.source === 'user' ? '用户' : 'Agent'}: ${r.text}`)
+      .join('\n')
+    const s = this.store.state
+    const profile = this.config.llm.subconsciousProfile?.trim() || undefined
+    try {
+      const text = await oneShotTextCompletion({
+        config: this.config,
+        profile,
+        maxOutTokens: 260,
+        system:
+          '你是 subconscious-agent 的主动陪伴模块。只在用户长时间没有互动时，为主 Agent 生成一句非常短的中文招呼。要求：自然、克制、不打扰；不要解释原因；不要提 heartbeat；可以带一个 LiveUI 表情标签，如 [Happy] 或 [Thinking]；最多 35 个中文字符。',
+        user:
+          `当前关系指数：trust=${s.trust.toFixed(2)}, affinity=${s.affinity.toFixed(2)}, intimacy=${s.intimacy.toFixed(2)}, respect=${s.respect.toFixed(2)}, tension=${s.tension.toFixed(2)}。\n` +
+          `当前情绪：${s.emotion} ${s.emotionIntensity.toFixed(2)}。\n` +
+          `最近对话：\n${recent || '暂无'}\n\n请生成一句主动招呼。`,
+      })
+      const greeting = text.replace(/\s+/g, ' ').trim()
+      if (!greeting) return null
+      this.idleHeartbeatCount = 0
+      this.lastProactiveGreetingAt = now.getTime()
+      await this.observeAssistantOutput(greeting)
+      return greeting
+    } catch (e) {
+      agentDebug('[subconscious-agent] proactive greeting skipped', e)
+      return null
+    }
+  }
+}
+
+type LiveUiDebugSnapshot = {
+  emotion: string
+  emotionIntensity: number
+  relationship: {
+    trust: number
+    affinity: number
+    intimacy: number
+    respect: number
+    tension: number
+  }
+}
+
+function debugSnapshotFromMetaState(state: MetaState): LiveUiDebugSnapshot {
+  return {
+    emotion: state.emotion,
+    emotionIntensity: state.emotionIntensity,
+    relationship: {
+      trust: state.trust,
+      affinity: state.affinity,
+      intimacy: state.intimacy,
+      respect: state.respect,
+      tension: state.tension,
+    },
   }
 }

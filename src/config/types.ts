@@ -52,6 +52,8 @@ export type CompactionConfig = {
  * ```json
  * "liveUi": {
  *   "port": 8080,
+ *   "subconsciousHeartbeatMs": 60000,
+ *   "figureZoom": 1,
  *   "live2dModelsDir": "./live2d-models",
  *   "live2dModelDict": "./model_dict.json",
  *   "live2dModelName": "mao_pro"
@@ -138,6 +140,10 @@ export type SeedanceVideoConfig = {
 export type LiveUiConfig = {
   /** WebSocket 端口；`infiniti-agent live` 未传 `--port` 时使用 */
   port?: number
+  /** subconscious-agent heartbeat 间隔（毫秒）；默认 60000。 */
+  subconsciousHeartbeatMs?: number
+  /** LiveUI 人物显示缩放（0.4 ~ 1.5）；`live --zoom` 可临时覆盖。 */
+  figureZoom?: number
   /** 角色渲染方式；未设置时保持旧逻辑：spriteExpressions.dir 优先，否则 Live2D。 */
   renderer?: 'live2d' | 'sprite' | 'real2d'
   /** LiveUI 启动后是否自动开启 TTS 播放；默认 true。 */
