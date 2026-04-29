@@ -48,6 +48,8 @@ function spriteUrl(base: string, id: string): string {
 export class Real2dLiveUiAdapter {
   private runtime: AvatarRuntime | null = null
   private ready = false
+  private figureZoom = 1
+  private verticalOffsetPx = 0
   private pendingEmotion: Emotion = 'neutral'
   private pendingIntensity = 1
   private pendingMouth = 0
@@ -63,7 +65,8 @@ export class Real2dLiveUiAdapter {
       typeof this.opts.figureZoom === 'number' && Number.isFinite(this.opts.figureZoom)
         ? Math.max(0.4, Math.min(1.5, this.opts.figureZoom))
         : 1
-    this.opts.container.style.transform = `scale(${0.8 * figureZoom})`
+    this.figureZoom = figureZoom
+    this.applyContainerTransform()
     this.opts.container.style.transformOrigin = '50% 72%'
     this.opts.container.style.visibility = 'hidden'
 
@@ -101,12 +104,25 @@ export class Real2dLiveUiAdapter {
     await runtime.loadSpriteSet(files)
     runtime.update({ emotion: this.visualEmotion(), intensity: this.pendingIntensity, speaking: this.pendingMouth > 0.02 })
     runtime.setMouthOpen(this.pendingMouth)
-    this.opts.container.style.visibility = 'visible'
     this.ready = true
   }
 
   resize(width: number, height: number): void {
     this.runtime?.resize(width, height)
+  }
+
+  setVisible(visible: boolean): void {
+    this.opts.container.style.visibility = visible ? 'visible' : 'hidden'
+  }
+
+  setVerticalOffset(offsetPx: number): void {
+    if (!Number.isFinite(offsetPx)) return
+    this.verticalOffsetPx = Math.round(offsetPx)
+    this.applyContainerTransform()
+  }
+
+  getVerticalOffset(): number {
+    return this.verticalOffsetPx
   }
 
   getVisualBounds(): DOMRect | null {
@@ -143,6 +159,10 @@ export class Real2dLiveUiAdapter {
     } catch {
       return null
     }
+  }
+
+  private applyContainerTransform(): void {
+    this.opts.container.style.transform = `translateY(${this.verticalOffsetPx}px) scale(${this.figureZoom})`
   }
 
   setEmotion(raw: string, intensity?: number): void {

@@ -243,10 +243,11 @@ export class SpriteRenderer implements Renderer {
     const cssW = this.canvasW / this.dpr;
     const cssH = this.canvasH / this.dpr;
     const ref = this.set.neutral;
+    const refVisible = ref.visibleBounds ?? { left: 0, top: 0, width: ref.imageW, height: ref.imageH };
 
-    const refScale = Math.min(cssW / ref.imageW, cssH / ref.imageH);
-    const refOX = (cssW - ref.imageW * refScale) / 2;
-    const refOY = (cssH - ref.imageH * refScale) / 2;
+    const refScale = Math.min(cssW / refVisible.width, cssH / refVisible.height);
+    const refOX = (cssW - refVisible.width * refScale) / 2 - refVisible.left * refScale;
+    const refOY = cssH - refVisible.height * refScale - refVisible.top * refScale;
     const refFC = ref.headPose.faceCenter;
     const canvasFaceX = refFC.x * refScale + refOX;
     const canvasFaceY = refFC.y * refScale + refOY;

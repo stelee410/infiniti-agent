@@ -391,6 +391,9 @@ async function bootstrap(): Promise<void> {
   /** 模型在 scale=1 时的本地包围尺寸，用于缩放计算（勿用 liveModel.width：会含当前 scale，Resize 时会越算越大） */
   let liveModelNaturalW = 400
   let liveModelNaturalH = 600
+  let real2dLayoutHeight = 0
+  let real2dLayoutWidth = 0
+  let real2dPlacementTimer: ReturnType<typeof window.setTimeout> | null = null
   let debugOverlayEnabled = false
   let debugEmotion = 'neutral'
   let debugEmotionIntensity = 0
@@ -425,6 +428,34 @@ async function bootstrap(): Promise<void> {
 
   const layoutFootGapPx = (viewH: number): number =>
     Math.max(0, Math.round(viewH * FIGURE_LAYOUT.footGapScreenFraction))
+
+  const real2dStageHeight = (): number => {
+    const controlBar = document.getElementById('liveui-control-bar')
+    const barTop = controlBar?.getBoundingClientRect().top
+    if (typeof barTop === 'number' && Number.isFinite(barTop) && barTop > 0) {
+      return Math.max(260, Math.floor(barTop))
+    }
+    return window.innerHeight
+  }
+
+  const applyReal2dStageLayout = (resizeRuntime = true): void => {
+    const stage = document.getElementById('liveui-real2d-stage') as HTMLElement | null
+    if (!stage) return
+    const nextWidth = window.innerWidth
+    const nextHeight = real2dStageHeight()
+    stage.style.left = '0'
+    stage.style.right = '0'
+    stage.style.top = '0'
+    stage.style.bottom = 'auto'
+    stage.style.width = '100vw'
+    stage.style.height = `${nextHeight}px`
+    const changed = nextWidth !== real2dLayoutWidth || nextHeight !== real2dLayoutHeight
+    real2dLayoutWidth = nextWidth
+    real2dLayoutHeight = nextHeight
+    if (resizeRuntime && changed) {
+      real2dAvatar?.resize(real2dLayoutWidth, real2dLayoutHeight)
+    }
+  }
 
   /**
    * 人物始终站在控制条（输入框）上方；气泡独立浮层，不影响人物位置。
@@ -518,6 +549,67 @@ async function bootstrap(): Promise<void> {
     }
   }
 
+  const scheduleReal2dVerticalPlacement = (attempt = 0): void => {
+    if (!real2dAvatar) return
+    if (real2dPlacementTimer) {
+      window.clearTimeout(real2dPlacementTimer)
+      real2dPlacementTimer = null
+    }
+    real2dPlacementTimer = window.setTimeout(() => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          if (!real2dAvatar) return
+          const b = real2dAvatar.getVisualBounds()
+          if (!b) {
+            if (attempt < 8) scheduleReal2dVerticalPlacement(attempt + 1)
+            return
+          }
+          const bottomGoal = real2dStageHeight() + 6
+          const delta = bottomGoal - b.bottom
+          if (Math.abs(delta) <= 2) return
+          real2dAvatar.setVerticalOffset(real2dAvatar.getVerticalOffset() + delta)
+          window.setTimeout(() => scheduleCompactWindowHeight(), 80)
+          if (attempt < 6) {
+            scheduleReal2dVerticalPlacement(attempt + 1)
+          }
+        })
+      })
+    }, attempt === 0 ? 0 : 120)
+  }
+
+  const settleReal2dVerticalPlacement = (attempt = 0): Promise<boolean> =>
+    new Promise((resolve) => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          if (!real2dAvatar) {
+            resolve(false)
+            return
+          }
+          const b = real2dAvatar.getVisualBounds()
+          if (!b) {
+            if (attempt < 8) {
+              window.setTimeout(() => {
+                void settleReal2dVerticalPlacement(attempt + 1).then(resolve)
+              }, 120)
+              return
+            }
+            resolve(false)
+            return
+          }
+          const bottomGoal = real2dStageHeight() + 6
+          const delta = bottomGoal - b.bottom
+          if (Math.abs(delta) <= 2 || attempt >= 6) {
+            resolve(true)
+            return
+          }
+          real2dAvatar.setVerticalOffset(real2dAvatar.getVerticalOffset() + delta)
+          window.setTimeout(() => {
+            void settleReal2dVerticalPlacement(attempt + 1).then(resolve)
+          }, 80)
+        })
+      })
+    })
+
   /**
    * 在「当前 layout」下读人物可见 bounds，若头顶留白明显则把窗口高度减掉一截。
    * Electron 端保持底边不动，所以底部控制条不会漂走。
@@ -543,6 +635,9 @@ async function bootstrap(): Promise<void> {
         if (Math.abs(nextH - window.innerHeight) < 10) return
         try {
           c(nextH)
+          if (attempt < 6) {
+            window.setTimeout(() => scheduleCompactWindowHeight(attempt + 1), 220)
+          }
         } catch {
           /* main 不可用 */
         }
@@ -883,29 +978,30 @@ async function bootstrap(): Promise<void> {
       real2dPlaceholder.style.objectFit = 'contain'
       real2dPlaceholder.style.pointerEvents = 'none'
       real2dPlaceholder.style.zIndex = '10'
-      real2dPlaceholder.style.transform = `scale(${0.8 * real2dFigureZoom})`
+      real2dPlaceholder.style.visibility = 'hidden'
+      real2dPlaceholder.style.transform = `scale(${real2dFigureZoom})`
       real2dPlaceholder.style.transformOrigin = '50% 72%'
       document.body.appendChild(real2dPlaceholder)
 
       const stage = document.createElement('div')
       stage.id = 'liveui-real2d-stage'
       stage.style.position = 'fixed'
-      stage.style.inset = '0'
-      stage.style.width = '100vw'
-      stage.style.height = '100vh'
       stage.style.pointerEvents = 'none'
       stage.style.zIndex = '11'
       document.body.appendChild(stage)
+      applyReal2dStageLayout(false)
       real2dAvatar = new Real2dLiveUiAdapter({
         container: stage,
         spriteExpressionDirFileUrl,
         expressionIds: real2dExpressionIds,
         figureZoom: real2dFigureZoom,
-        width: window.innerWidth,
-        height: window.innerHeight,
+        width: real2dLayoutWidth,
+        height: real2dLayoutHeight,
         onError: (e) => console.warn('[liveui] real2d runtime error:', e),
       })
       await real2dAvatar.init()
+      await settleReal2dVerticalPlacement()
+      real2dAvatar.setVisible(true)
       real2dPlaceholder.remove()
       app.stage.removeChild(face)
       app.stage.removeChild(mouth)
@@ -1112,7 +1208,10 @@ async function bootstrap(): Promise<void> {
 
   window.addEventListener('resize', () => {
     app.renderer.resize(window.innerWidth, window.innerHeight)
-    real2dAvatar?.resize(window.innerWidth, window.innerHeight)
+    if (real2dAvatar) {
+      applyReal2dStageLayout()
+      scheduleReal2dVerticalPlacement()
+    }
     layoutFigureInStage()
     positionBubbleOverFigure()
   })
@@ -1122,6 +1221,7 @@ async function bootstrap(): Promise<void> {
     const ro = new ResizeObserver(() => {
       requestAnimationFrame(() => {
         layoutFigureInStage()
+        applyReal2dStageLayout()
         positionBubbleOverFigure()
       })
     })
