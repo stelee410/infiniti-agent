@@ -1,6 +1,7 @@
 import { readdir, readFile, writeFile, mkdir } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { extname, join, resolve } from 'node:path'
+import OpenAI, { toFile } from 'openai'
 import type { InfinitiConfig } from '../config/types.js'
 import { resolveLlmProfile } from '../config/types.js'
 import { getInfinitiConfigPath, loadConfig } from '../config/io.js'
@@ -13,8 +14,10 @@ import {
 } from '../liveui/spriteExpressionManifest.js'
 
 const DEFAULT_OPENROUTER = 'https://openrouter.ai/api/v1'
+const DEFAULT_OPENAI_IMAGE_BASE_URL = 'https://api.openai.com/v1'
 /** OpenRouter：Nano Banana Pro（Gemini 3 Pro Image Preview），强于 2.5 Flash Image */
 const DEFAULT_IMAGE_MODEL = 'google/gemini-3-pro-image-preview'
+const DEFAULT_GPT_IMAGE_MODEL = 'gpt-image-2'
 
 function mimeForPath(p: string): string {
   const e = extname(p).toLowerCase()
@@ -78,34 +81,111 @@ function pickFirstNonEmpty(...vals: Array<string | undefined | null>): string {
   return ''
 }
 
-function resolveAvatarGenAuth(cfg: InfinitiConfig): { baseUrl: string; apiKey: string; model: string; aspectRatio?: string; imageSize?: string } {
+function dataUrlToBuffer(dataUrl: string): Buffer | null {
+  const m = dataUrl.trim().match(/^data:[^;]+;base64,(.+)$/is)
+  return m ? Buffer.from(m[1]!, 'base64') : null
+}
+
+type AvatarGenAuth = {
+  provider: 'gemini' | 'chatgpt-image'
+  baseUrl: string
+  apiKey: string
+  model: string
+  aspectRatio?: string
+  imageSize?: string
+}
+
+function resolveAvatarGenAuth(cfg: InfinitiConfig): AvatarGenAuth {
   const ag = cfg.avatarGen
+  const provider = ag?.provider ?? (ag?.model?.trim().startsWith('gpt-image-') ? 'chatgpt-image' : 'gemini')
   const prof = resolveLlmProfile(cfg)
-  const apiKey = pickFirstNonEmpty(
-    ag?.apiKey,
-    process.env.INFINITI_OPENROUTER_API_KEY,
-    process.env.OPENROUTER_API_KEY,
-    prof.apiKey,
-    cfg.llm.apiKey,
-  )
+  const apiKey = provider === 'chatgpt-image'
+    ? pickFirstNonEmpty(
+      ag?.apiKey,
+      process.env.INFINITI_OPENAI_IMAGE_API_KEY,
+      process.env.OPENAI_API_KEY,
+      prof.provider === 'openai' ? prof.apiKey : undefined,
+      cfg.llm.provider === 'openai' ? cfg.llm.apiKey : undefined,
+    )
+    : pickFirstNonEmpty(
+      ag?.apiKey,
+      process.env.INFINITI_OPENROUTER_API_KEY,
+      process.env.OPENROUTER_API_KEY,
+      prof.apiKey,
+      cfg.llm.apiKey,
+    )
   if (!apiKey) {
     throw new Error(
-      '缺少 OpenRouter API Key（会出现 Missing Authentication header）。请任选其一：\n' +
-        '  1) 在 .infiniti-agent/config.json 增加 "avatarGen": { "apiKey": "sk-or-v1-..." }\n' +
-        '  2) 保证 llm 默认 profile 的 apiKey 为 OpenRouter 的 sk-or-v1-…\n' +
-        '  3) 环境变量 INFINITI_OPENROUTER_API_KEY 或 OPENROUTER_API_KEY',
+      provider === 'chatgpt-image'
+        ? '缺少 OpenAI 图像 API Key：请在 avatarGen.apiKey、INFINITI_OPENAI_IMAGE_API_KEY 或 OPENAI_API_KEY 中配置'
+        : '缺少 OpenRouter API Key（会出现 Missing Authentication header）。请任选其一：\n' +
+          '  1) 在 .infiniti-agent/config.json 增加 "avatarGen": { "apiKey": "sk-or-v1-..." }\n' +
+          '  2) 保证 llm 默认 profile 的 apiKey 为 OpenRouter 的 sk-or-v1-…\n' +
+          '  3) 环境变量 INFINITI_OPENROUTER_API_KEY 或 OPENROUTER_API_KEY',
     )
   }
-  const baseUrl = (ag?.baseUrl ?? DEFAULT_OPENROUTER).trim()
+  const baseUrl = (ag?.baseUrl ?? (provider === 'chatgpt-image' ? DEFAULT_OPENAI_IMAGE_BASE_URL : DEFAULT_OPENROUTER)).trim()
   const envModel = process.env.INFINITI_AVATAR_GEN_MODEL?.trim()
-  const model = pickFirstNonEmpty(ag?.model, envModel, DEFAULT_IMAGE_MODEL)
+  const model = pickFirstNonEmpty(ag?.model, envModel, provider === 'chatgpt-image' ? DEFAULT_GPT_IMAGE_MODEL : DEFAULT_IMAGE_MODEL)
   return {
+    provider,
     baseUrl,
     apiKey,
     model,
     ...(ag?.aspectRatio?.trim() ? { aspectRatio: ag.aspectRatio.trim() } : {}),
     ...(ag?.imageSize?.trim() ? { imageSize: ag.imageSize.trim() } : {}),
   }
+}
+
+async function generateAvatarImageBuffer(
+  auth: AvatarGenAuth,
+  prompt: string,
+  referenceImages: Array<{ mimeType: string; base64: string }>,
+): Promise<Buffer> {
+  if (auth.provider !== 'chatgpt-image') {
+    return await openRouterGenerateImageBuffer({
+      baseUrl: auth.baseUrl,
+      apiKey: auth.apiKey,
+      model: auth.model,
+      prompt,
+      referenceImages,
+      modalities: ['image', 'text'],
+      aspectRatio: auth.aspectRatio ?? '2:3',
+      ...(auth.imageSize ? { imageSize: auth.imageSize } : {}),
+    })
+  }
+
+  const client = new OpenAI({ apiKey: auth.apiKey, baseURL: auth.baseUrl, timeout: 120_000 })
+  const common = {
+    model: auth.model,
+    prompt,
+    n: 1,
+    size: auth.imageSize ?? '1024x1536',
+    output_format: 'png',
+  }
+  const resp = referenceImages.length
+    ? await client.images.edit({
+      ...common,
+      image: await Promise.all(
+        referenceImages.map((r, idx) =>
+          toFile(Buffer.from(r.base64, 'base64'), `avatar-ref-${idx}.${r.mimeType.split('/')[1] ?? 'png'}`, { type: r.mimeType }),
+        ),
+      ),
+      input_fidelity: 'high',
+    } as never)
+    : await client.images.generate(common as never)
+
+  const first = (resp as { data?: Array<{ b64_json?: string; url?: string }> }).data?.[0]
+  if (!first) throw new Error('OpenAI 图像响应为空')
+  if (first.b64_json) return Buffer.from(first.b64_json, 'base64')
+  if (first.url) {
+    const dataUrl = dataUrlToBuffer(first.url)
+    if (dataUrl) return dataUrl
+    const res = await fetch(first.url)
+    if (!res.ok) throw new Error(`OpenAI 图像 URL 下载失败: HTTP ${res.status}`)
+    return Buffer.from(await res.arrayBuffer())
+  }
+  throw new Error('OpenAI 图像响应没有 b64_json 或 url')
 }
 
 /** 各 exp 的绘画面部描述（英文，便于图像模型理解） */
@@ -200,16 +280,7 @@ export async function runGenerateAvatar(cwd: string, opts: GenerateAvatarOptions
       specBlock
 
     const halfBuf = await withElapsedProgress(`${auth.model} 生成半身像`, () =>
-      openRouterGenerateImageBuffer({
-        baseUrl: auth.baseUrl,
-        apiKey: auth.apiKey,
-        model: auth.model,
-        prompt: halfPrompt,
-        referenceImages: refs,
-        modalities: ['image', 'text'],
-        aspectRatio: auth.aspectRatio ?? '2:3',
-        ...(auth.imageSize ? { imageSize: auth.imageSize } : {}),
-      }),
+      generateAvatarImageBuffer(auth, halfPrompt, refs),
     )
     await writeFile(halfBodyPath, halfBuf)
     console.error(`[generate_avatar] 已写入 ${halfBodyPath}`)
@@ -242,17 +313,7 @@ export async function runGenerateAvatar(cwd: string, opts: GenerateAvatarOptions
 
     const buf = await withElapsedProgress(
       `${auth.model} 表情 ${ent.id} (${ent.label ?? ent.emotions[0]})`,
-      () =>
-        openRouterGenerateImageBuffer({
-          baseUrl: auth.baseUrl,
-          apiKey: auth.apiKey,
-          model: auth.model,
-          prompt,
-          referenceImages: halfRef,
-          modalities: ['image', 'text'],
-          aspectRatio: auth.aspectRatio ?? '2:3',
-          ...(auth.imageSize ? { imageSize: auth.imageSize } : {}),
-        }),
+      () => generateAvatarImageBuffer(auth, prompt, halfRef),
     )
     const dest = join(outRoot, `${ent.id}.png`)
     await writeFile(dest, buf)

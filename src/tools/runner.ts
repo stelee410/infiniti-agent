@@ -5,6 +5,7 @@ import { executeProfileAction, type ProfileAction, type ProfileTag } from '../me
 import { searchSessions, type SearchResult } from '../session/archive.js'
 import { executeSkillAction, type SkillAction } from '../skills/manager.js'
 import { executeKgAction, type KgAction } from '../memory/knowledgeGraph.js'
+import { addScheduleTask, formatScheduleTask, loadScheduleStore, nextDailyRun, removeScheduleTask, type ScheduleKind } from '../schedule/store.js'
 import type { InfinitiConfig } from '../config/types.js'
 import { enqueueSnapPhotoJob } from '../snap/asyncSnap.js'
 import { enqueueSeedanceVideoJob } from '../video/asyncVideo.js'
@@ -381,6 +382,69 @@ export async function runBuiltinTool(
                 entity: String(args.entity ?? ''),
               }
     return JSON.stringify(await (ctx.memoryCoordinator?.executeKgAction?.(act) ?? executeKgAction(ctx.sessionCwd, act)))
+  }
+
+  if (name === 'schedule') {
+    const action = String(args.action ?? '')
+    if (!['create', 'list', 'remove'].includes(action)) {
+      return JSON.stringify({ ok: false, error: 'action 须为 create/list/remove' })
+    }
+    if (action === 'list') {
+      const store = await loadScheduleStore(ctx.sessionCwd)
+      return JSON.stringify({
+        ok: true,
+        count: store.tasks.length,
+        tasks: store.tasks,
+        display: store.tasks.length ? store.tasks.map(formatScheduleTask).join('\n') : '暂无计划任务',
+      })
+    }
+    if (action === 'remove') {
+      const id = String(args.id ?? '').trim()
+      if (!id) return JSON.stringify({ ok: false, error: 'id 不能为空' })
+      const removed = await removeScheduleTask(ctx.sessionCwd, id)
+      return JSON.stringify(removed
+        ? { ok: true, removed, message: `已删除计划任务：${removed.prompt}` }
+        : { ok: false, error: `没有找到计划任务: ${id}` })
+    }
+
+    const kindRaw = String(args.kind ?? '')
+    const prompt = String(args.prompt ?? '').trim()
+    if (!['once', 'daily', 'interval'].includes(kindRaw)) {
+      return JSON.stringify({ ok: false, error: 'kind 须为 once/daily/interval' })
+    }
+    const kind = kindRaw as ScheduleKind
+    if (!prompt) {
+      return JSON.stringify({ ok: false, error: 'prompt 不能为空' })
+    }
+    if (kind === 'once') {
+      const nextRunAt = new Date(String(args.next_run_at ?? ''))
+      if (!Number.isFinite(nextRunAt.getTime())) {
+        return JSON.stringify({ ok: false, error: 'once 任务需要合法 next_run_at ISO 时间' })
+      }
+      const task = await addScheduleTask(ctx.sessionCwd, { kind, prompt, nextRunAt })
+      return JSON.stringify({ ok: true, task, display: formatScheduleTask(task) })
+    }
+    if (kind === 'daily') {
+      const timeOfDay = String(args.time_of_day ?? '').trim()
+      if (!/^\d{1,2}:\d{2}$/.test(timeOfDay)) {
+        return JSON.stringify({ ok: false, error: 'daily 任务需要 time_of_day，格式 HH:mm' })
+      }
+      const task = await addScheduleTask(ctx.sessionCwd, {
+        kind,
+        prompt,
+        timeOfDay,
+        nextRunAt: nextDailyRun(timeOfDay, new Date()),
+      })
+      return JSON.stringify({ ok: true, task, display: formatScheduleTask(task) })
+    }
+    const intervalMs = typeof args.interval_ms === 'number' ? Math.floor(args.interval_ms) : 0
+    if (!Number.isFinite(intervalMs) || intervalMs < 1000) {
+      return JSON.stringify({ ok: false, error: 'interval 任务需要 interval_ms >= 1000' })
+    }
+    const explicitNext = args.next_run_at != null ? new Date(String(args.next_run_at)) : null
+    const nextRunAt = explicitNext && Number.isFinite(explicitNext.getTime()) ? explicitNext : new Date(Date.now() + intervalMs)
+    const task = await addScheduleTask(ctx.sessionCwd, { kind, prompt, intervalMs, nextRunAt })
+    return JSON.stringify({ ok: true, task, display: formatScheduleTask(task) })
   }
 
   if (name === 'manage_skill') {

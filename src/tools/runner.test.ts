@@ -5,6 +5,7 @@ import { tmpdir } from 'os'
 import { runBuiltinTool, type ToolRunContext } from './runner.js'
 import { loadMemoryStore } from '../memory/structured.js'
 import { loadProfileStore } from '../memory/userProfile.js'
+import { loadScheduleStore } from '../schedule/store.js'
 import type { InfinitiConfig } from '../config/types.js'
 
 const testConfig: InfinitiConfig = {
@@ -233,6 +234,53 @@ describe('update_memory legacy tool', () => {
     const parsed = JSON.parse(result)
     expect(parsed.ok).toBe(true)
     expect(parsed.message).toContain('memory')
+  })
+})
+
+describe('schedule tool dispatch', () => {
+  it('creates a one-off schedule task from structured LLM args', async () => {
+    const result = await runBuiltinTool(
+      'schedule',
+      JSON.stringify({
+        action: 'create',
+        kind: 'once',
+        prompt: '好好休息',
+        next_run_at: '2026-04-29T23:00:00+08:00',
+      }),
+      ctx,
+    )
+    const parsed = JSON.parse(result)
+    expect(parsed.ok).toBe(true)
+
+    const store = await loadScheduleStore(cwd)
+    expect(store.tasks).toHaveLength(1)
+    expect(store.tasks[0]!.prompt).toBe('好好休息')
+    expect(store.tasks[0]!.kind).toBe('once')
+  })
+
+  it('lists and removes schedule tasks', async () => {
+    const created = JSON.parse(await runBuiltinTool(
+      'schedule',
+      JSON.stringify({
+        action: 'create',
+        kind: 'daily',
+        prompt: 'read Hacker News',
+        time_of_day: '08:30',
+      }),
+      ctx,
+    ))
+    expect(created.ok).toBe(true)
+
+    const listed = JSON.parse(await runBuiltinTool('schedule', JSON.stringify({ action: 'list' }), ctx))
+    expect(listed.ok).toBe(true)
+    expect(listed.count).toBe(1)
+
+    const removed = JSON.parse(await runBuiltinTool(
+      'schedule',
+      JSON.stringify({ action: 'remove', id: created.task.id.slice(0, 12) }),
+      ctx,
+    ))
+    expect(removed.ok).toBe(true)
   })
 })
 

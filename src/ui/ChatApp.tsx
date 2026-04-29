@@ -42,7 +42,7 @@ import type { LiveUiFileAttachment, LiveUiStatusVariant, LiveUiVisionAttachment 
 import { enqueueSnapPhotoJob } from '../snap/asyncSnap.js'
 import { enqueueSeedanceVideoJob, seedanceReferenceImagesFromLiveInputs } from '../video/asyncVideo.js'
 import { listInboxMessages, markInboxMessageRead, type InboxMessage } from '../inbox/store.js'
-import { looksLikeScheduleRequest, parseScheduleRequest } from '../schedule/parser.js'
+import { parseScheduleRequest } from '../schedule/parser.js'
 import {
   addScheduleTask,
   advanceScheduleTask,
@@ -491,6 +491,25 @@ export function ChatApp({
     [cwd, expressionManifest, liveUi],
   )
 
+  const deliverLocalCommandExchange = useCallback(
+    (userLine: string, assistantText: string) => {
+      deliverAssistantText(assistantText)
+      void subconsciousRef.current?.observeUserInput(userLine)
+      void subconsciousRef.current?.observeAssistantOutput(assistantText)
+      setMessages((prev) => {
+        const next: PersistedMessage[] = [
+          ...prev,
+          { role: 'user', content: userLine },
+          { role: 'assistant', content: assistantText },
+        ]
+        messagesRef.current = next
+        void saveSession(cwd, next)
+        return next
+      })
+    },
+    [cwd, deliverAssistantText],
+  )
+
   const runScheduleTask = useCallback(
     async (task: ScheduleTask): Promise<void> => {
       const baseMessages = messagesRef.current
@@ -663,10 +682,10 @@ export function ChatApp({
       if (raw === '/schedule' || raw === '/schedule list') {
         const store = await loadScheduleStore(cwd)
         const lines = store.tasks.length
-          ? store.tasks.map(formatScheduleTask).join('\n')
+          ? `当前计划任务：\n${store.tasks.map(formatScheduleTask).join('\n')}`
           : '暂无计划任务'
-        setNotice(lines)
-        setTimeout(() => setNotice(null), 15000)
+        setError(null)
+        deliverLocalCommandExchange(raw, lines)
         setInput('')
         return
       }
@@ -678,16 +697,16 @@ export function ChatApp({
           return
         }
         const removed = await removeScheduleTask(cwd, id)
-        if (!removed) setError(`没有找到计划任务: ${id}`)
-        else {
+        if (!removed) {
+          setError(`没有找到计划任务: ${id}`)
+        } else {
           setError(null)
-          setNotice(`已删除计划任务：${removed.prompt}`)
-          setTimeout(() => setNotice(null), 5000)
+          deliverLocalCommandExchange(raw, `已删除计划任务：${removed.prompt}`)
         }
         setInput('')
         return
       }
-      if (raw.startsWith('/schedule add ') || looksLikeScheduleRequest(raw)) {
+      if (raw.startsWith('/schedule add ')) {
         const parsed = parseScheduleRequest(raw)
         if (!parsed || !parsed.prompt.trim()) {
           setError('计划格式暂支持：每天早上8点做某事、每分钟检查某事、每5分钟做某事、/schedule add 明天9点做某事')
@@ -696,8 +715,7 @@ export function ChatApp({
         }
         const task = await addScheduleTask(cwd, parsed)
         setError(null)
-        setNotice(`已创建计划任务：${formatScheduleTask(task)}`)
-        setTimeout(() => setNotice(null), 8000)
+        deliverLocalCommandExchange(raw, `已创建计划任务：${formatScheduleTask(task)}`)
         setInput('')
         return
       }
@@ -744,7 +762,7 @@ export function ChatApp({
       }
       if (raw === '/help') {
         setError(
-          '输入 / 可补全：斜杠命令与全部工具（↑↓ Tab）。命令: /exit /clear /reload /config /debug /schedule /memory /inbox /last_email /undo /roll /compact /permission /speak /snap /video — /schedule list 查看计划，/schedule add 每天早上8点做某事 创建计划；也可直接输入“每分钟检查一次邮箱”。/config 仅 Live 模式打开配置面板；/debug 切换 LiveUI 调试叠层；/last_email 打开最近一封邮箱消息；/speak 后接正文仅 TTS 朗读、不写会话；/snap 后接提示词异步生成合照/写实照片；/video 后接提示词异步生成 Seedance 视频，完成后写入你的邮箱。/roll 2 可按 LLM 输出层回滚对话。改文件/bash/HTTP 默认需确认（Y 允许 · A 本次会话始终允许该工具 · N 拒绝）；启动时加 --dangerously-skip-permissions 可跳过所有确认。/permission 查看当前状态。/compact 压缩较早历史。卡死排查：INFINITI_AGENT_DEBUG=1。',
+          '输入 / 可补全：斜杠命令与全部工具（↑↓ Tab）。命令: /exit /clear /reload /config /debug /schedule /memory /inbox /last_email /undo /roll /compact /permission /speak /snap /video — /schedule list 查看计划，/schedule add 每天早上8点做某事 创建计划；自然语言提醒/定时会由模型调用 schedule 工具。/config 仅 Live 模式打开配置面板；/debug 切换 LiveUI 调试叠层；/last_email 打开最近一封邮箱消息；/speak 后接正文仅 TTS 朗读、不写会话；/snap 后接提示词异步生成合照/写实照片；/video 后接提示词异步生成 Seedance 视频，完成后写入你的邮箱。/roll 2 可按 LLM 输出层回滚对话。改文件/bash/HTTP 默认需确认（Y 允许 · A 本次会话始终允许该工具 · N 拒绝）；启动时加 --dangerously-skip-permissions 可跳过所有确认。/permission 查看当前状态。/compact 压缩较早历史。卡死排查：INFINITI_AGENT_DEBUG=1。',
         )
         setInput('')
         return

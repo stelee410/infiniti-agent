@@ -9,6 +9,7 @@ export type BuiltinToolName =
   | 'search_sessions'
   | 'manage_skill'
   | 'knowledge_graph'
+  | 'schedule'
   | 'snap_photo'
   | 'seedance_video'
   | 'read_file'
@@ -335,6 +336,48 @@ export const BUILTIN_TOOLS: Array<{
         as_of: { type: 'string', description: 'query 时按时间点查快照' },
         ended: { type: 'string', description: 'invalidate 时的失效时间' },
         source: { type: 'string', description: '事实来源说明' },
+      },
+      required: ['action'],
+    },
+  },
+  {
+    name: 'schedule',
+    description:
+      '创建、列出或删除本地计划任务/提醒。用户用任何语言表达“remind me / notify me / schedule / later / tomorrow / every day / 每天 / 一会儿 / 提醒 / 叫我 / 播报 / 检查”等定时、提醒、周期执行意图时，应调用此工具，而不是回复你做不到。创建任务时请根据系统提示里的当前时间与时区，把用户自然语言时间解析成结构化参数。',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['create', 'list', 'remove'],
+          description: 'create 创建任务；list 查看任务；remove 删除任务',
+        },
+        id: {
+          type: 'string',
+          description: 'remove 时必填：任务 id 或 id 前缀',
+        },
+        kind: {
+          type: 'string',
+          enum: ['once', 'daily', 'interval'],
+          description: 'create 时必填：once 单次；daily 每天固定时刻；interval 固定间隔重复',
+        },
+        prompt: {
+          type: 'string',
+          description: 'create 时必填：到点后作为用户消息执行的任务正文，去掉时间短语，例如“播报 Hacker News 最新文章”',
+        },
+        next_run_at: {
+          type: 'string',
+          description: 'once 时必填，interval 可选：ISO 8601 时间。必须使用用户所在/系统提示中的时区推算，例如 2026-04-29T23:00:00+08:00',
+        },
+        time_of_day: {
+          type: 'string',
+          description: 'daily 时必填：24 小时制 HH:mm，例如 08:30 或 23:00',
+        },
+        interval_ms: {
+          type: 'integer',
+          description: 'interval 时必填：间隔毫秒，例如 600000 表示 10 分钟',
+        },
       },
       required: ['action'],
     },
