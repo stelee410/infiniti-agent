@@ -343,15 +343,15 @@ export const BUILTIN_TOOLS: Array<{
   {
     name: 'schedule',
     description:
-      '创建、列出或删除本地计划任务/提醒。用户用任何语言表达“remind me / notify me / schedule / later / tomorrow / every day / 每天 / 一会儿 / 提醒 / 叫我 / 播报 / 检查”等定时、提醒、周期执行意图时，应调用此工具，而不是回复你做不到。创建任务时请根据系统提示里的当前时间与时区，把用户自然语言时间解析成结构化参数。',
+      '创建、列出、删除或清理本地计划任务/提醒。用户用任何语言表达“remind me / notify me / schedule / later / tomorrow / every day / 每天 / 一会儿 / 提醒 / 叫我 / 播报 / 检查”等定时、提醒、周期执行意图时，应调用此工具，而不是回复你做不到。创建任务时请根据系统提示里的当前时间与时区，把用户自然语言时间解析成结构化参数。',
     parameters: {
       type: 'object',
       additionalProperties: false,
       properties: {
         action: {
           type: 'string',
-          enum: ['create', 'list', 'remove'],
-          description: 'create 创建任务；list 查看任务；remove 删除任务',
+          enum: ['create', 'list', 'remove', 'clear'],
+          description: 'create 创建任务；list 查看任务；remove 删除指定任务；clear 清理未来不再执行的任务（已 disabled 的一次性历史任务）',
         },
         id: {
           type: 'string',

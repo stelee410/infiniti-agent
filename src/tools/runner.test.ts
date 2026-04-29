@@ -5,7 +5,7 @@ import { tmpdir } from 'os'
 import { runBuiltinTool, type ToolRunContext } from './runner.js'
 import { loadMemoryStore } from '../memory/structured.js'
 import { loadProfileStore } from '../memory/userProfile.js'
-import { loadScheduleStore } from '../schedule/store.js'
+import { loadScheduleStore, saveScheduleStore } from '../schedule/store.js'
 import type { InfinitiConfig } from '../config/types.js'
 
 const testConfig: InfinitiConfig = {
@@ -281,6 +281,28 @@ describe('schedule tool dispatch', () => {
       ctx,
     ))
     expect(removed.ok).toBe(true)
+  })
+
+  it('clears completed schedule tasks', async () => {
+    const created = JSON.parse(await runBuiltinTool(
+      'schedule',
+      JSON.stringify({
+        action: 'create',
+        kind: 'once',
+        prompt: 'single run',
+        next_run_at: '2026-04-29T23:00:00+08:00',
+      }),
+      ctx,
+    ))
+    expect(created.ok).toBe(true)
+
+    const store = await loadScheduleStore(cwd)
+    store.tasks[0]!.enabled = false
+    await saveScheduleStore(cwd, store)
+
+    const cleared = JSON.parse(await runBuiltinTool('schedule', JSON.stringify({ action: 'clear' }), ctx))
+    expect(cleared.ok).toBe(true)
+    expect(cleared.removedCount).toBe(1)
   })
 })
 

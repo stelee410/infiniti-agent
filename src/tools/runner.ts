@@ -5,7 +5,15 @@ import { executeProfileAction, type ProfileAction, type ProfileTag } from '../me
 import { searchSessions, type SearchResult } from '../session/archive.js'
 import { executeSkillAction, type SkillAction } from '../skills/manager.js'
 import { executeKgAction, type KgAction } from '../memory/knowledgeGraph.js'
-import { addScheduleTask, formatScheduleTask, loadScheduleStore, nextDailyRun, removeScheduleTask, type ScheduleKind } from '../schedule/store.js'
+import {
+  addScheduleTask,
+  clearCompletedScheduleTasks,
+  formatScheduleTask,
+  loadScheduleStore,
+  nextDailyRun,
+  removeScheduleTask,
+  type ScheduleKind,
+} from '../schedule/store.js'
 import type { InfinitiConfig } from '../config/types.js'
 import { enqueueSnapPhotoJob } from '../snap/asyncSnap.js'
 import { enqueueSeedanceVideoJob } from '../video/asyncVideo.js'
@@ -386,8 +394,8 @@ export async function runBuiltinTool(
 
   if (name === 'schedule') {
     const action = String(args.action ?? '')
-    if (!['create', 'list', 'remove'].includes(action)) {
-      return JSON.stringify({ ok: false, error: 'action 须为 create/list/remove' })
+    if (!['create', 'list', 'remove', 'clear'].includes(action)) {
+      return JSON.stringify({ ok: false, error: 'action 须为 create/list/remove/clear' })
     }
     if (action === 'list') {
       const store = await loadScheduleStore(ctx.sessionCwd)
@@ -395,7 +403,7 @@ export async function runBuiltinTool(
         ok: true,
         count: store.tasks.length,
         tasks: store.tasks,
-        display: store.tasks.length ? store.tasks.map(formatScheduleTask).join('\n') : '暂无计划任务',
+        display: store.tasks.length ? store.tasks.map((task) => formatScheduleTask(task)).join('\n') : '暂无计划任务',
       })
     }
     if (action === 'remove') {
@@ -405,6 +413,18 @@ export async function runBuiltinTool(
       return JSON.stringify(removed
         ? { ok: true, removed, message: `已删除计划任务：${removed.prompt}` }
         : { ok: false, error: `没有找到计划任务: ${id}` })
+    }
+    if (action === 'clear') {
+      const result = await clearCompletedScheduleTasks(ctx.sessionCwd)
+      return JSON.stringify({
+        ok: true,
+        removed: result.removed,
+        removedCount: result.removed.length,
+        remaining: result.remaining,
+        message: result.removed.length
+          ? `已清理 ${result.removed.length} 个未来不再执行的计划任务`
+          : '没有需要清理的计划任务',
+      })
     }
 
     const kindRaw = String(args.kind ?? '')

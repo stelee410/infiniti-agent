@@ -46,6 +46,7 @@ import { parseScheduleRequest } from '../schedule/parser.js'
 import {
   addScheduleTask,
   advanceScheduleTask,
+  clearCompletedScheduleTasks,
   dueScheduleTasks,
   failScheduleTask,
   formatScheduleTask,
@@ -682,10 +683,22 @@ export function ChatApp({
       if (raw === '/schedule' || raw === '/schedule list') {
         const store = await loadScheduleStore(cwd)
         const lines = store.tasks.length
-          ? `当前计划任务：\n${store.tasks.map(formatScheduleTask).join('\n')}`
+          ? `当前计划任务：\n${store.tasks.map((task) => formatScheduleTask(task)).join('\n')}`
           : '暂无计划任务'
         setError(null)
         deliverLocalCommandExchange(raw, lines)
+        setInput('')
+        return
+      }
+      if (raw === '/schedule clear') {
+        const result = await clearCompletedScheduleTasks(cwd)
+        setError(null)
+        deliverLocalCommandExchange(
+          raw,
+          result.removed.length
+            ? `已清理 ${result.removed.length} 个未来不再执行的计划任务，剩余 ${result.remaining} 个。`
+            : '没有需要清理的计划任务。',
+        )
         setInput('')
         return
       }
