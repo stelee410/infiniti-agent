@@ -84,6 +84,14 @@ export async function loadConfig(cwd?: string): Promise<InfinitiConfig> {
 
   const profiles = parseLlmProfiles(llm.profiles)
   const defaultProfile = typeof llm.default === 'string' ? llm.default.trim() : undefined
+  const metaAgentProfile =
+    typeof llm.metaAgentProfile === 'string' && llm.metaAgentProfile.trim()
+      ? llm.metaAgentProfile.trim()
+      : undefined
+  const subconsciousProfile =
+    typeof llm.subconsciousProfile === 'string' && llm.subconsciousProfile.trim()
+      ? llm.subconsciousProfile.trim()
+      : undefined
 
   let provider: string | undefined
   let baseUrl: string | undefined
@@ -152,6 +160,8 @@ export async function loadConfig(cwd?: string): Promise<InfinitiConfig> {
       apiKey: apiKey.trim(),
       ...(resolvedDisableTools !== undefined ? { disableTools: resolvedDisableTools } : {}),
       ...(defaultProfile ? { default: defaultProfile } : {}),
+      ...(metaAgentProfile ? { metaAgentProfile } : {}),
+      ...(subconsciousProfile ? { subconsciousProfile } : {}),
       ...(profiles ? { profiles } : {}),
     },
     mcp:
@@ -245,6 +255,14 @@ function parseLiveUiConfig(raw: unknown): LiveUiConfig | undefined {
   if (typeof u.port === 'number' && Number.isFinite(u.port)) {
     const p = Math.floor(u.port)
     if (p >= 1 && p <= 65535) out.port = p
+  }
+  if (typeof u.subconsciousHeartbeatMs === 'number' && Number.isFinite(u.subconsciousHeartbeatMs)) {
+    const ms = Math.round(u.subconsciousHeartbeatMs)
+    if (ms >= 5000 && ms <= 3600000) out.subconsciousHeartbeatMs = ms
+  }
+  if (typeof u.figureZoom === 'number' && Number.isFinite(u.figureZoom)) {
+    const z = u.figureZoom
+    if (z >= 0.4 && z <= 1.5) out.figureZoom = z
   }
   if (typeof u.ttsAutoEnabled === 'boolean') {
     out.ttsAutoEnabled = u.ttsAutoEnabled
@@ -404,6 +422,32 @@ function parseTtsConfig(raw: unknown): TtsConfig | undefined {
     if (typeof t.voiceId === 'string' && t.voiceId.trim()) out.voiceId = t.voiceId.trim()
     return out
   }
+  if (t.provider === 'mimo') {
+    if (typeof t.apiKey !== 'string' || !t.apiKey.trim()) return undefined
+    if (typeof t.baseUrl !== 'string' || !t.baseUrl.trim()) return undefined
+    if (typeof t.model !== 'string' || !t.model.trim()) return undefined
+    const out: TtsConfig = {
+      provider: 'mimo',
+      apiKey: t.apiKey.trim(),
+      baseUrl: t.baseUrl.trim(),
+      model: t.model.trim(),
+    }
+    if (typeof t.voiceId === 'string' && t.voiceId.trim()) out.voiceId = t.voiceId.trim()
+    if (typeof t.referenceAudioPath === 'string' && t.referenceAudioPath.trim()) {
+      out.referenceAudioPath = t.referenceAudioPath.trim()
+    }
+    if (typeof t.referenceAudioBase64 === 'string' && t.referenceAudioBase64.trim()) {
+      out.referenceAudioBase64 = t.referenceAudioBase64.trim()
+    }
+    if (typeof t.controlInstruction === 'string' && t.controlInstruction.trim()) {
+      out.controlInstruction = t.controlInstruction.trim()
+    }
+    if (t.format === 'wav' || t.format === 'mp3') out.format = t.format
+    if (typeof t.timeoutMs === 'number' && t.timeoutMs >= 5000 && Number.isFinite(t.timeoutMs)) {
+      out.timeoutMs = Math.floor(t.timeoutMs)
+    }
+    return out
+  }
   return undefined
 }
 
@@ -466,6 +510,8 @@ export async function saveConfig(input: SaveConfigInput): Promise<void> {
       model: defaultLlm.model,
       apiKey: defaultLlm.apiKey,
       default: input.defaultProfile,
+      ...(existing?.llm.metaAgentProfile ? { metaAgentProfile: existing.llm.metaAgentProfile } : {}),
+      ...(existing?.llm.subconsciousProfile ? { subconsciousProfile: existing.llm.subconsciousProfile } : {}),
       profiles: input.profiles,
     },
     mcp: existing?.mcp ?? {

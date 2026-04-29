@@ -28,6 +28,7 @@ export interface IdentityProfile {
   imageBitmap: ImageBitmap;
   imageW: number;
   imageH: number;
+  visibleBounds: ImageBounds;
   landmarks: Point[];
   meshVerts: Point[];
   meshLandmarkIdx: number[];
@@ -45,6 +46,13 @@ export interface IdentityProfile {
   headPose: HeadPose;
   // Raw 4×4 head transform from MediaPipe (kept for diagnostics & future 3D use).
   headMatrix: Float32Array | null;
+}
+
+export interface ImageBounds {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
 }
 
 export interface HeadPose {
@@ -135,9 +143,10 @@ export class IdentityEngine {
       headMatrix = new Float32Array(matrices[0].data);
     }
 
+    const visibleBounds = measureVisibleBounds(img, w, h);
     const bitmap = await createImageBitmap(img);
 
-    return this.buildProfile(landmarks, bitmap, w, h, headMatrix);
+    return this.buildProfile(landmarks, bitmap, w, h, visibleBounds, headMatrix);
   }
 
   private buildProfile(
@@ -145,6 +154,7 @@ export class IdentityEngine {
     bitmap: ImageBitmap,
     w: number,
     h: number,
+    visibleBounds: ImageBounds,
     headMatrix: Float32Array | null,
   ): IdentityProfile {
     const subset = buildSubsetIndices();
@@ -255,6 +265,7 @@ export class IdentityEngine {
       imageBitmap: bitmap,
       imageW: w,
       imageH: h,
+      visibleBounds,
       landmarks,
       meshVerts,
       meshLandmarkIdx,
@@ -298,6 +309,42 @@ export class IdentityEngine {
       bottom: MOUTH_BOTTOM,
       center,
     };
+  }
+}
+
+function measureVisibleBounds(img: HTMLImageElement, w: number, h: number): ImageBounds {
+  try {
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    if (!ctx) throw new Error("2D context unavailable");
+    ctx.clearRect(0, 0, w, h);
+    ctx.drawImage(img, 0, 0, w, h);
+    const step = Math.max(1, Math.floor(Math.min(w, h) / 640));
+    const data = ctx.getImageData(0, 0, w, h).data;
+    let minX = w;
+    let minY = h;
+    let maxX = -1;
+    let maxY = -1;
+    for (let y = 0; y < h; y += step) {
+      for (let x = 0; x < w; x += step) {
+        if (data[(y * w + x) * 4 + 3] <= 8) continue;
+        if (x < minX) minX = x;
+        if (y < minY) minY = y;
+        if (x > maxX) maxX = x;
+        if (y > maxY) maxY = y;
+      }
+    }
+    if (maxX < minX || maxY < minY) throw new Error("no visible pixels");
+    return {
+      left: minX,
+      top: minY,
+      width: Math.max(1, maxX - minX + step),
+      height: Math.max(1, maxY - minY + step),
+    };
+  } catch {
+    return { left: 0, top: 0, width: w, height: h };
   }
 }
 

@@ -243,10 +243,11 @@ export class SpriteRenderer implements Renderer {
     const cssW = this.canvasW / this.dpr;
     const cssH = this.canvasH / this.dpr;
     const ref = this.set.neutral;
+    const refVisible = ref.visibleBounds ?? { left: 0, top: 0, width: ref.imageW, height: ref.imageH };
 
-    const refScale = Math.min(cssW / ref.imageW, cssH / ref.imageH);
-    const refOX = (cssW - ref.imageW * refScale) / 2;
-    const refOY = (cssH - ref.imageH * refScale) / 2;
+    const refScale = Math.min(cssW / refVisible.width, cssH / refVisible.height);
+    const refOX = (cssW - refVisible.width * refScale) / 2 - refVisible.left * refScale;
+    const refOY = cssH - refVisible.height * refScale - refVisible.top * refScale;
     const refFC = ref.headPose.faceCenter;
     const canvasFaceX = refFC.x * refScale + refOX;
     const canvasFaceY = refFC.y * refScale + refOY;
@@ -456,18 +457,12 @@ export class SpriteRenderer implements Renderer {
 
   private updateLipsync(dt: number): void {
     if (this.audioDriven) {
-      // Threshold-shaped envelope follower. Lerping the overlay alpha
-      // directly from the RMS curve (a) caps it at typical RMS peaks
-      // (~0.4-0.8 for speech) so exp_open never reaches full opacity,
-      // and (b) makes alpha pulse with every syllable, which reads as
-      // ghost / flicker. Instead we treat audio as a voice-activity
-      // gate: above the floor → speakingFade rises to 1 (overlay fully
-      // visible), below → falls to 0. Asymmetric time constants (fast
-      // attack, slow release) keep brief consonant gaps from causing
-      // the overlay to dip. The warp side keeps using raw amplitude
-      // for continuous lip-size variation (in MotionEngine).
-      const target = this.audioAmplitude > 0.05 ? 1 : 0;
-      const tc = target > this.speakingFade ? 40 : 300;
+      const floor = 0.035;
+      const full = 0.18;
+      const target = this.audioAmplitude <= floor
+        ? 0
+        : Math.max(0, Math.min(1, (this.audioAmplitude - floor) / (full - floor)));
+      const tc = target > this.speakingFade ? 24 : 64;
       this.speakingFade += (target - this.speakingFade) * Math.min(1, dt / tc);
     } else {
       const target = this.speaking ? 1 : 0;

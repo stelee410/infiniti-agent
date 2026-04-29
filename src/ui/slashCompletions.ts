@@ -57,6 +57,20 @@ const COMMAND_ITEMS: SlashItem[] = [
     insert: '/config ',
   },
   {
+    id: '/debug',
+    kind: 'command',
+    label: '/debug',
+    desc: '切换 LiveUI 调试叠层：左侧情绪，右侧五维关系指数',
+    insert: '/debug ',
+  },
+  {
+    id: '/schedule',
+    kind: 'command',
+    label: '/schedule',
+    desc: '管理计划任务：list / add / remove；由 heartbeat 驱动执行',
+    insert: '/schedule ',
+  },
+  {
     id: '/reload-skills',
     kind: 'command',
     label: '/reload-skills',
@@ -125,6 +139,13 @@ const COMMAND_ITEMS: SlashItem[] = [
     label: '/undo',
     desc: '撤销最近一次 write_file/str_replace（内存栈）',
     insert: '/undo ',
+  },
+  {
+    id: '/roll',
+    kind: 'command',
+    label: '/roll',
+    desc: '按 LLM 输出层回滚当前聊天；可加数字，例如 /roll 2',
+    insert: '/roll ',
   },
   {
     id: '/permission',

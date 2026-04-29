@@ -1,6 +1,8 @@
 {
   "liveUi": {
     "port": 8080,
+    "subconsciousHeartbeatMs": 60000,
+    "figureZoom": 1,
     "renderer": "live2d",
     "live2dModelsDir": "./live2d-models",
     "live2dModelDict": "./model_dict.json",

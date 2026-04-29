@@ -6,6 +6,7 @@ import { extname, isAbsolute } from 'node:path'
 import { WebSocketServer, WebSocket } from 'ws'
 import type {
   LiveUiActionMessage,
+  LiveUiDebugStateMessage,
   LiveUiAssistantStreamMessage,
   LiveUiAudioChunkMessage,
   LiveUiInboxItem,
@@ -68,7 +69,11 @@ export class LiveUiSession {
 
   setTtsEnabled(enabled: boolean): void {
     this.ttsEnabled = enabled
-    if (!enabled) this.resetAudio()
+    if (!enabled) {
+      this.resetAudio()
+      this.mouth.reset()
+      this.sendMouth(0)
+    }
     this.broadcastTtsStatus()
   }
 
@@ -325,8 +330,7 @@ export class LiveUiSession {
           }
           if (t === 'TTS_TOGGLE' && parsed.data && typeof parsed.data === 'object') {
             const enabled = (parsed.data as { enabled?: unknown }).enabled
-            this.ttsEnabled = !!enabled
-            this.broadcastTtsStatus()
+            this.setTtsEnabled(!!enabled)
             return
           }
           if (t === 'INTERRUPT') {
@@ -483,6 +487,10 @@ export class LiveUiSession {
     this.broadcast({ type: 'ACTION', data })
   }
 
+  sendDebugState(data: LiveUiDebugStateMessage['data']): void {
+    this.broadcast({ type: 'DEBUG_STATE', data })
+  }
+
   /** 将模型原始流发给渲染进程（含 [Happy] 等标签），由前端解析表情与气泡正文。 */
   sendAssistantStream(fullRaw: string, reset = false, done = false): void {
     const data: LiveUiAssistantStreamMessage['data'] = { fullRaw, reset, done }
@@ -627,6 +635,10 @@ export class LiveUiSession {
   startMouthPump(): void {
     this.stopMouthPump()
     this.mouthTimer = setInterval(() => {
+      if (!this.ttsEnabled) {
+        this.mouth.reset()
+        return
+      }
       this.mouth.tickIdle()
       this.sendMouth(this.mouth.mouthOpen01)
     }, Math.round(1000 / 30))

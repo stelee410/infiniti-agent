@@ -117,19 +117,18 @@ async function llmEvaluate(
 ): Promise<GateDecision> {
   const context = summarizeMessages(messages)
   const userPrompt = `工具：${toolName}\n详情：${toolDetail.slice(0, 800)}\n\n对话：\n${context}`
+  const primaryProfile = config.llm.metaAgentProfile?.trim() || 'gate'
 
-  agentDebug('[meta-agent] llm-evaluate', toolName)
-
-  try {
+  async function callGate(profile: string | undefined): Promise<GateDecision> {
     const raw = await oneShotTextCompletion({
       config,
       system: GATE_SYSTEM,
       user: userPrompt,
       maxOutTokens: 256,
-      profile: 'gate',
+      profile,
     })
 
-    agentDebug('[meta-agent] llm raw:', JSON.stringify(raw.slice(0, 300)))
+    agentDebug('[meta-agent] llm raw:', profile ?? 'default', JSON.stringify(raw.slice(0, 300)))
 
     const jsonMatch = raw.match(/\{[^}]*"decision"\s*:\s*"[^"]+?"[^}]*\}/)
     if (!jsonMatch) {
@@ -144,9 +143,24 @@ async function llmEvaluate(
     if (decision === 'deny') return { decision: 'deny', reason: reason || '安全评估拒绝' }
     if (decision === 'ask') return { decision: 'ask', reason: reason || '需要确认' }
     return { decision: 'approve' }
+  }
+
+  agentDebug('[meta-agent] llm-evaluate', toolName, 'profile', primaryProfile)
+
+  try {
+    return await callGate(primaryProfile)
   } catch (e) {
-    agentDebug('[meta-agent] llm failed, defaulting approve', e)
-    return { decision: 'approve' }
+    agentDebug('[meta-agent] primary llm failed, falling back to default', primaryProfile, e)
+  }
+
+  try {
+    return await callGate(undefined)
+  } catch (e) {
+    agentDebug('[meta-agent] fallback llm failed, asking human', e)
+    return {
+      decision: 'ask',
+      reason: 'meta-agent 与主 LLM 安全评估均失败，需要用户确认',
+    }
   }
 }
 

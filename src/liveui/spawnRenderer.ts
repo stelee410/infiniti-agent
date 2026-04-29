@@ -30,7 +30,7 @@ export type LiveUiElectronSpawnOptions = {
   /** JSON：`{ speechRmsThreshold, silenceEndMs, suppressInterruptDuringTts }` */
   voiceMicJson?: string
   /**
-   * 人物显示缩放系数（0.4 ~ 1.5）。仅作用于 Live2D / 精灵图本身，不影响控制条 / 输入框尺寸。
+   * 人物显示缩放系数（0.4 ~ 1.5）。仅作用于虚拟人本身，不影响控制条 / 输入框尺寸。
    * 通过 `INFINITI_LIVEUI_FIGURE_ZOOM` 注入渲染进程，由 `figureLayoutConfig` 处乘到 widthFraction 上。
    */
   figureZoom?: number

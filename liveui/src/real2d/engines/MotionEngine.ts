@@ -22,6 +22,7 @@ interface BobState {
   t: number;
   dur: number; // 0 = no bob
   kind: "nod" | "shake" | "bounce" | null;
+  speechPresence: number;
 }
 
 export class MotionEngine {
@@ -32,7 +33,7 @@ export class MotionEngine {
     dur: 140,
   };
   private mouth: MouthState = { phase: 0, speed: 0.012, open: 0 };
-  private bob: BobState = { t: 0, dur: 0, kind: null };
+  private bob: BobState = { t: 0, dur: 0, kind: null, speechPresence: 0 };
 
   // Public toggles
   public speaking = false;
@@ -96,10 +97,11 @@ export class MotionEngine {
   private applyMouth(params: ExpressionParams, dt: number): void {
     const m = this.mouth;
     if (this.audioAmplitude !== null) {
-      // Audio-driven open. 0.75 cap so peaks don't gape; the smoothed
-      // target eases toward amp on the audio sampling cadence.
-      const target = clamp(this.audioAmplitude * 0.75, 0, 0.85);
-      m.open += (target - m.open) * Math.min(1, dt / 80);
+      const floor = 0.025;
+      const amp = this.audioAmplitude <= floor ? 0 : (this.audioAmplitude - floor) / (1 - floor);
+      const target = clamp(amp * 0.82, 0, 0.85);
+      const tc = target > m.open ? 32 : 48;
+      m.open += (target - m.open) * Math.min(1, dt / tc);
     } else if (this.speaking) {
       m.phase += dt;
       // Two-frequency flap so it doesn't look mechanical.
@@ -116,6 +118,22 @@ export class MotionEngine {
   private applyBob(params: ExpressionParams, dt: number, now: number): void {
     // Idle breathing — subtle vertical sway.
     params.headBobY += Math.sin(now * 0.0018) * 0.6;
+
+    const speakingNow = this.audioAmplitude !== null ? this.mouth.open > 0.025 : this.speaking;
+    const speechTarget = speakingNow ? 1 : 0;
+    const speechTc = speechTarget > this.bob.speechPresence ? 120 : 260;
+    this.bob.speechPresence += (speechTarget - this.bob.speechPresence) * Math.min(1, dt / speechTc);
+    if (this.bob.speechPresence > 0.01) {
+      const p = this.bob.speechPresence;
+      params.headTilt += (
+        Math.sin(now * 0.0037) * 0.0032 +
+        Math.sin(now * 0.0061 + 1.7) * 0.0014
+      ) * p;
+      params.headBobY += (
+        Math.sin(now * 0.0049 + 0.8) * 0.28 +
+        this.mouth.open * 0.16
+      ) * p;
+    }
 
     if (!this.bob.kind || this.bob.dur === 0) return;
     this.bob.t += dt;

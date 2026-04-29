@@ -64,6 +64,38 @@
       body.liveui-inbox-open #speech-bubble {
         display: none !important;
       }
+      .liveui-debug-edge {
+        position: fixed;
+        z-index: 260;
+        top: 50%;
+        transform: translateY(-50%);
+        box-sizing: border-box;
+        max-width: 42vw;
+        white-space: pre-line;
+        pointer-events: none;
+        color: #fff;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+        font-size: 15px;
+        font-weight: 800;
+        line-height: 1.35;
+        letter-spacing: 0;
+        -webkit-text-stroke: 3px rgba(0, 0, 0, 0.95);
+        paint-order: stroke fill;
+        text-shadow:
+          0 1px 0 #000,
+          1px 0 0 #000,
+          0 -1px 0 #000,
+          -1px 0 0 #000,
+          0 3px 10px rgba(0, 0, 0, 0.75);
+      }
+      #liveui-debug-emotion {
+        left: 10px;
+        text-align: left;
+      }
+      #liveui-debug-relationship {
+        right: 10px;
+        text-align: right;
+      }
       /* 气泡：脱离底部 dock，半透明叠在人物身上 */
       #speech-bubble {
         position: fixed;
@@ -1190,6 +1222,8 @@
     <div id="speech-bubble" aria-hidden="true">
       <div id="speech-bubble-text" class="liveui-md-root"></div>
     </div>
+    <div id="liveui-debug-emotion" class="liveui-debug-edge" hidden aria-hidden="true"></div>
+    <div id="liveui-debug-relationship" class="liveui-debug-edge" hidden aria-hidden="true"></div>
     <div id="liveui-camera-countdown" hidden aria-hidden="true">
       <svg id="liveui-camera-countdown-icon" viewBox="0 0 24 24" aria-hidden="true">
         <path fill="currentColor" d="M9.25 4 7.6 6H4.75A2.75 2.75 0 0 0 2 8.75v8.5A2.75 2.75 0 0 0 4.75 20h14.5A2.75 2.75 0 0 0 22 17.25v-8.5A2.75 2.75 0 0 0 19.25 6H16.4l-1.65-2h-5.5zM12 9a4 4 0 1 1 0 8 4 4 0 0 1 0-8zm0 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm6.5-2.2a.8.8 0 1 1 0 1.6.8.8 0 0 1 0-1.6z"/>

@@ -27,7 +27,8 @@ import {
   type SpriteExpressionManifestV1,
 } from '../../src/liveui/spriteExpressionManifestCore.ts'
 import { initConfigPanel } from './configPanel.ts'
-import { Real2dLiveUiAdapter } from './real2dLiveUiAdapter.ts'
+import { adaptExpression, type RendererKind } from './expressionAdapter.ts'
+import { Real2dLiveUiAdapter, type Real2dExpressionSlot } from './real2dLiveUiAdapter.ts'
 
 /** 由 expressions.json 注入，覆盖默认 exp_xx 映射 */
 let spriteEmotionToIdOverride: Record<string, string> | null = null
@@ -80,7 +81,17 @@ type SyncParam = {
 
 type ActionMsg = {
   type: 'ACTION'
-  data: { expression?: string; motion?: string }
+  data: { expression?: string; intensity?: number; motion?: string; gaze?: string }
+}
+
+type DebugStateMsg = {
+  type: 'DEBUG_STATE'
+  data: {
+    enabled?: unknown
+    emotion?: unknown
+    emotionIntensity?: unknown
+    relationship?: unknown
+  }
 }
 
 type AssistantStreamMsg = {
@@ -179,6 +190,7 @@ type ChatAttachment = {
 type Msg =
   | SyncParam
   | ActionMsg
+  | DebugStateMsg
   | AssistantStreamMsg
   | StatusPillMsg
   | AudioChunkMsg
@@ -255,6 +267,38 @@ function emotionToExpressionId(em: string): string {
   return map[e] ?? 'exp_01'
 }
 
+function firstMappedExpressionId(map: Record<string, string>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const id = map[key]?.trim()
+    if (id) return id
+  }
+  return undefined
+}
+
+function real2dExpressionIdsFromEmotionMap(
+  map: Record<string, string> | null,
+): Partial<Record<Real2dExpressionSlot, string>> | undefined {
+  if (!map) return undefined
+  const out: Partial<Record<Real2dExpressionSlot, string>> = {}
+  const slots: Array<[Real2dExpressionSlot, string[]]> = [
+    ['neutral', ['neutral', 'calm']],
+    ['happy', ['happy', 'joy']],
+    ['sad', ['sad', 'sadness', 'fear', 'frown', 'unhappy']],
+    ['angry', ['angry', 'anger']],
+    ['surprised', ['surprised', 'surprise']],
+    ['eyes_closed', ['eyes_closed', 'eyesclosed', 'blink', 'closed']],
+    ['exp_a', ['exp_a', 'mouth_a', 'viseme_a']],
+    ['exp_ee', ['exp_ee', 'mouth_ee', 'viseme_ee']],
+    ['exp_o', ['exp_o', 'mouth_o', 'viseme_o']],
+    ['exp_open', ['exp_open', 'talk', 'talking', 'speaking']],
+  ]
+  for (const [slot, keys] of slots) {
+    const id = firstMappedExpressionId(map, keys)
+    if (id) out[slot] = id
+  }
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
 /**
  * 从 model3.json 的 Groups 中提取 LipSync 参数名列表。
  * 不同模型可能用 ParamMouthOpenY / ParamA / 其他名字。
@@ -302,6 +346,8 @@ async function bootstrap(): Promise<void> {
     'speech-bubble-text',
   ) as HTMLElement | null
   const statusPill = document.getElementById('liveui-status-pill')
+  const debugEmotionEl = document.getElementById('liveui-debug-emotion')
+  const debugRelationshipEl = document.getElementById('liveui-debug-relationship')
   const userLineInput = document.getElementById('liveui-user-line') as HTMLTextAreaElement | null
   const inboxRoot = document.getElementById('liveui-inbox')
   const inboxToggle = document.getElementById('liveui-inbox-toggle') as HTMLButtonElement | null
@@ -345,9 +391,71 @@ async function bootstrap(): Promise<void> {
   /** 模型在 scale=1 时的本地包围尺寸，用于缩放计算（勿用 liveModel.width：会含当前 scale，Resize 时会越算越大） */
   let liveModelNaturalW = 400
   let liveModelNaturalH = 600
+  let real2dLayoutHeight = 0
+  let real2dLayoutWidth = 0
+  let real2dPlacementTimer: ReturnType<typeof window.setTimeout> | null = null
+  let debugOverlayEnabled = false
+  let debugEmotion = 'neutral'
+  let debugEmotionIntensity = 0
+
+  const formatDebugNumber = (value: unknown): string => {
+    const n = typeof value === 'number' && Number.isFinite(value) ? value : 0
+    return n >= 0 ? `+${n.toFixed(2)}` : n.toFixed(2)
+  }
+
+  const renderDebugOverlay = (relationship?: Record<string, unknown>): void => {
+    if (!debugEmotionEl || !debugRelationshipEl) return
+    debugEmotionEl.hidden = !debugOverlayEnabled
+    debugRelationshipEl.hidden = !debugOverlayEnabled
+    debugEmotionEl.setAttribute('aria-hidden', String(!debugOverlayEnabled))
+    debugRelationshipEl.setAttribute('aria-hidden', String(!debugOverlayEnabled))
+    if (!debugOverlayEnabled) return
+    debugEmotionEl.textContent = `emotion\n${debugEmotion}\n${debugEmotionIntensity.toFixed(2)}`
+    if (relationship) {
+      debugRelationshipEl.replaceChildren(
+        `trust ${formatDebugNumber(relationship.trust)}`,
+        document.createElement('br'),
+        `affinity ${formatDebugNumber(relationship.affinity)}`,
+        document.createElement('br'),
+        `intimacy ${formatDebugNumber(relationship.intimacy)}`,
+        document.createElement('br'),
+        `respect ${formatDebugNumber(relationship.respect)}`,
+        document.createElement('br'),
+        `tension ${formatDebugNumber(relationship.tension)}`,
+      )
+    }
+  }
 
   const layoutFootGapPx = (viewH: number): number =>
     Math.max(0, Math.round(viewH * FIGURE_LAYOUT.footGapScreenFraction))
+
+  const real2dStageHeight = (): number => {
+    const controlBar = document.getElementById('liveui-control-bar')
+    const barTop = controlBar?.getBoundingClientRect().top
+    if (typeof barTop === 'number' && Number.isFinite(barTop) && barTop > 0) {
+      return Math.max(260, Math.floor(barTop))
+    }
+    return window.innerHeight
+  }
+
+  const applyReal2dStageLayout = (resizeRuntime = true): void => {
+    const stage = document.getElementById('liveui-real2d-stage') as HTMLElement | null
+    if (!stage) return
+    const nextWidth = window.innerWidth
+    const nextHeight = real2dStageHeight()
+    stage.style.left = '0'
+    stage.style.right = '0'
+    stage.style.top = '0'
+    stage.style.bottom = 'auto'
+    stage.style.width = '100vw'
+    stage.style.height = `${nextHeight}px`
+    const changed = nextWidth !== real2dLayoutWidth || nextHeight !== real2dLayoutHeight
+    real2dLayoutWidth = nextWidth
+    real2dLayoutHeight = nextHeight
+    if (resizeRuntime && changed) {
+      real2dAvatar?.resize(real2dLayoutWidth, real2dLayoutHeight)
+    }
+  }
 
   /**
    * 人物始终站在控制条（输入框）上方；气泡独立浮层，不影响人物位置。
@@ -379,7 +487,7 @@ async function bootstrap(): Promise<void> {
     )
 
     /**
-     * `infiniti-agent live --zoom <n>` 注入的人物缩放系数。仅作用于 Live2D / 精灵，
+     * config liveUi.figureZoom 或 `infiniti-agent live --zoom <n>` 注入的人物缩放系数。仅作用于虚拟人，
      * 不影响控制条/输入框（它们是独立 DOM）。范围 0.4 ~ 1.5，缺省 1。
      */
     const figureZoom = (() => {
@@ -441,28 +549,95 @@ async function bootstrap(): Promise<void> {
     }
   }
 
+  const scheduleReal2dVerticalPlacement = (attempt = 0): void => {
+    if (!real2dAvatar) return
+    if (real2dPlacementTimer) {
+      window.clearTimeout(real2dPlacementTimer)
+      real2dPlacementTimer = null
+    }
+    real2dPlacementTimer = window.setTimeout(() => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          if (!real2dAvatar) return
+          const b = real2dAvatar.getVisualBounds()
+          if (!b) {
+            if (attempt < 8) scheduleReal2dVerticalPlacement(attempt + 1)
+            return
+          }
+          const bottomGoal = real2dStageHeight() + 6
+          const delta = bottomGoal - b.bottom
+          if (Math.abs(delta) <= 2) return
+          real2dAvatar.setVerticalOffset(real2dAvatar.getVerticalOffset() + delta)
+          window.setTimeout(() => scheduleCompactWindowHeight(), 80)
+          if (attempt < 6) {
+            scheduleReal2dVerticalPlacement(attempt + 1)
+          }
+        })
+      })
+    }, attempt === 0 ? 0 : 120)
+  }
+
+  const settleReal2dVerticalPlacement = (attempt = 0): Promise<boolean> =>
+    new Promise((resolve) => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          if (!real2dAvatar) {
+            resolve(false)
+            return
+          }
+          const b = real2dAvatar.getVisualBounds()
+          if (!b) {
+            if (attempt < 8) {
+              window.setTimeout(() => {
+                void settleReal2dVerticalPlacement(attempt + 1).then(resolve)
+              }, 120)
+              return
+            }
+            resolve(false)
+            return
+          }
+          const bottomGoal = real2dStageHeight() + 6
+          const delta = bottomGoal - b.bottom
+          if (Math.abs(delta) <= 2 || attempt >= 6) {
+            resolve(true)
+            return
+          }
+          real2dAvatar.setVerticalOffset(real2dAvatar.getVerticalOffset() + delta)
+          window.setTimeout(() => {
+            void settleReal2dVerticalPlacement(attempt + 1).then(resolve)
+          }, 80)
+        })
+      })
+    })
+
   /**
-   * 只做一件事：在「当前 layout」下读人物 getBounds()，若头顶留白明显则把窗口高度减掉一截。
-   * 不调 window.resize、不迭代 shrink；精灵/Live2D 各在加载完成后各调度一次（+ 表情换图宽高比大变时）。
+   * 在「当前 layout」下读人物可见 bounds，若头顶留白明显则把窗口高度减掉一截。
+   * Electron 端保持底边不动，所以底部控制条不会漂走。
    */
-  const scheduleCompactWindowHeight = (): void => {
+  const scheduleCompactWindowHeight = (attempt = 0): void => {
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         const c = window.infinitiLiveUi?.compactWindowHeight
         if (typeof c !== 'function') return
-        const fig = expressionSprite ?? liveModel
-        if (!fig) return
         layoutFigureInStage()
-        const b = fig.getBounds()
+        const pixiFig = expressionSprite ?? liveModel
+        const b = pixiFig?.getBounds() ?? real2dAvatar?.getVisualBounds()
+        if (!b) {
+          if (attempt < 8) window.setTimeout(() => scheduleCompactWindowHeight(attempt + 1), 180)
+          return
+        }
         const bar = document.getElementById('liveui-control-bar')
-        const dockBottom = bar ? Math.ceil(bar.getBoundingClientRect().bottom) : 0
-        const minH = Math.max(360, dockBottom + 8)
+        const barHeight = bar ? Math.ceil(bar.getBoundingClientRect().height) : 120
+        const minH = Math.max(360, barHeight + 220)
         const topGoal = 10
         const shrink = Math.max(0, Math.floor(b.top - topGoal))
         const nextH = Math.max(minH, Math.min(1000, window.innerHeight - shrink))
         if (Math.abs(nextH - window.innerHeight) < 10) return
         try {
           c(nextH)
+          if (attempt < 6) {
+            window.setTimeout(() => scheduleCompactWindowHeight(attempt + 1), 220)
+          }
         } catch {
           /* main 不可用 */
         }
@@ -504,7 +679,11 @@ async function bootstrap(): Promise<void> {
   const setVisualMouth = (open01: number): void => {
     const open = Math.max(0, Math.min(1, open01))
     mouthOpen = open
-    real2dAvatar?.setMouthOpen(open)
+    if (ttsEnabled) {
+      real2dAvatar?.setMouthOpen(open)
+    } else if (open <= 0.001) {
+      real2dAvatar?.clearMouthOpen()
+    }
     if (liveModel) {
       setMouthFromModel(liveModel, open)
     } else {
@@ -771,6 +950,13 @@ async function bootstrap(): Promise<void> {
 
   const spritePngUrl = (expBase: string): string =>
     new URL(`${expBase}.png`, spriteExpressionDirFileUrl).href
+  const real2dExpressionIds = real2dExpressionIdsFromEmotionMap(spriteEmotionToIdOverride)
+  const real2dNeutralExpressionId = real2dExpressionIds?.neutral ?? 'exp01'
+  const real2dFigureZoom = (() => {
+    const z = window.infinitiLiveUi?.figureZoom
+    if (typeof z !== 'number' || !Number.isFinite(z)) return 1
+    return Math.max(0.4, Math.min(1.5, z))
+  })()
 
   const loadSpritePngTexture = (url: string): Promise<PIXI.Texture> =>
     new Promise((resolve, reject) => {
@@ -783,7 +969,7 @@ async function bootstrap(): Promise<void> {
   if (useReal2d) {
     const real2dPlaceholder = document.createElement('img')
     try {
-      real2dPlaceholder.src = spritePngUrl('exp01')
+      real2dPlaceholder.src = spritePngUrl(real2dNeutralExpressionId)
       real2dPlaceholder.alt = ''
       real2dPlaceholder.style.position = 'fixed'
       real2dPlaceholder.style.inset = '0'
@@ -792,30 +978,34 @@ async function bootstrap(): Promise<void> {
       real2dPlaceholder.style.objectFit = 'contain'
       real2dPlaceholder.style.pointerEvents = 'none'
       real2dPlaceholder.style.zIndex = '10'
-      real2dPlaceholder.style.transform = 'scale(0.8)'
+      real2dPlaceholder.style.visibility = 'hidden'
+      real2dPlaceholder.style.transform = `scale(${real2dFigureZoom})`
       real2dPlaceholder.style.transformOrigin = '50% 72%'
       document.body.appendChild(real2dPlaceholder)
 
       const stage = document.createElement('div')
       stage.id = 'liveui-real2d-stage'
       stage.style.position = 'fixed'
-      stage.style.inset = '0'
-      stage.style.width = '100vw'
-      stage.style.height = '100vh'
       stage.style.pointerEvents = 'none'
       stage.style.zIndex = '11'
       document.body.appendChild(stage)
+      applyReal2dStageLayout(false)
       real2dAvatar = new Real2dLiveUiAdapter({
         container: stage,
         spriteExpressionDirFileUrl,
-        width: window.innerWidth,
-        height: window.innerHeight,
+        expressionIds: real2dExpressionIds,
+        figureZoom: real2dFigureZoom,
+        width: real2dLayoutWidth,
+        height: real2dLayoutHeight,
         onError: (e) => console.warn('[liveui] real2d runtime error:', e),
       })
       await real2dAvatar.init()
+      await settleReal2dVerticalPlacement()
+      real2dAvatar.setVisible(true)
       real2dPlaceholder.remove()
       app.stage.removeChild(face)
       app.stage.removeChild(mouth)
+      scheduleCompactWindowHeight()
       console.debug('[liveui] real2d 已加载', spriteExpressionDirFileUrl)
     } catch (e) {
       real2dPlaceholder.remove()
@@ -890,14 +1080,31 @@ async function bootstrap(): Promise<void> {
     layoutFigureInStage()
   }
 
-  const applyLive2dExpression = (em: string): void => {
-    expression = em
+  const currentRendererKind = (): RendererKind => {
+    if (real2dAvatar) return 'real2d'
+    if (expressionSprite) return 'sprite'
+    if (liveModel) return 'live2d'
+    return 'placeholder'
+  }
+
+  const applyLive2dExpression = (em: string, intensity?: number): void => {
+    const adapted = adaptExpression(em, {
+      renderer: currentRendererKind(),
+      intensity,
+      emotionMap: spriteEmotionToIdOverride,
+    })
+    expression = adapted.expression
+    debugEmotion = adapted.expression
+    if (typeof adapted.intensity === 'number' && Number.isFinite(adapted.intensity)) {
+      debugEmotionIntensity = adapted.intensity
+    }
+    renderDebugOverlay()
     if (real2dAvatar) {
-      real2dAvatar.setEmotion(em)
+      real2dAvatar.setEmotion(adapted.expression, adapted.intensity)
       return
     }
     if (expressionSprite && spriteExpressionDirFileUrl) {
-      const base = emotionToExpressionId(em)
+      const base = emotionToExpressionId(adapted.expression)
       const url = spritePngUrl(base)
       void loadSpritePngTexture(url)
         .then((tex) => {
@@ -921,13 +1128,34 @@ async function bootstrap(): Promise<void> {
       return
     }
     if (liveModel) {
-      const expId = emotionToExpressionId(em)
+      const expId = emotionToExpressionId(adapted.expression)
       void liveModel.expression(expId).catch(() => {
         void liveModel!.expression(0).catch(() => {})
       })
     } else {
-      applyPlaceholderExpression(em)
+      applyPlaceholderExpression(adapted.expression)
     }
+  }
+
+  const triggerPixiShake = (): void => {
+    const target = liveModel ?? expressionSprite ?? face
+    const startX = target.position.x
+    const startRot = 'rotation' in target ? target.rotation : 0
+    const started = performance.now()
+    const duration = 520
+    const tick = (): void => {
+      const t = Math.min(1, (performance.now() - started) / duration)
+      const env = Math.sin(t * Math.PI)
+      target.position.x = startX + Math.sin(t * Math.PI * 8) * 5 * env
+      if ('rotation' in target) target.rotation = startRot + Math.sin(t * Math.PI * 6) * 0.012 * env
+      if (t < 1) {
+        requestAnimationFrame(tick)
+      } else {
+        target.position.x = startX
+        if ('rotation' in target) target.rotation = startRot
+      }
+    }
+    requestAnimationFrame(tick)
   }
 
   const delay = (ms: number): Promise<void> => new Promise((resolve) => window.setTimeout(resolve, ms))
@@ -980,7 +1208,10 @@ async function bootstrap(): Promise<void> {
 
   window.addEventListener('resize', () => {
     app.renderer.resize(window.innerWidth, window.innerHeight)
-    real2dAvatar?.resize(window.innerWidth, window.innerHeight)
+    if (real2dAvatar) {
+      applyReal2dStageLayout()
+      scheduleReal2dVerticalPlacement()
+    }
     layoutFigureInStage()
     positionBubbleOverFigure()
   })
@@ -990,6 +1221,7 @@ async function bootstrap(): Promise<void> {
     const ro = new ResizeObserver(() => {
       requestAnimationFrame(() => {
         layoutFigureInStage()
+        applyReal2dStageLayout()
         positionBubbleOverFigure()
       })
     })
@@ -1816,7 +2048,8 @@ async function bootstrap(): Promise<void> {
   let audioMouthRaf: number | undefined
   let audioSource: AudioBufferSourceNode | null = null
   let audioAnalyser: AnalyserNode | null = null
-  const audioAnalyserData = new Uint8Array(256)
+  const TTS_MOUTH_ANALYSER_FFT_SIZE = 256
+  const audioAnalyserData = new Uint8Array(TTS_MOUTH_ANALYSER_FFT_SIZE / 2)
   let ttsActive = false
 
   /** PCM 流式：按 AudioContext 时间线首尾相接，避免多块 BufferSource 链式播放的缝隙与裂音 */
@@ -1849,7 +2082,7 @@ async function bootstrap(): Promise<void> {
   const ensureTtsPcmAnalyser = (ctx: AudioContext): AnalyserNode => {
     if (!ttsPcmAnalyser || ttsPcmAnalyser.context !== ctx) {
       ttsPcmAnalyser = ctx.createAnalyser()
-      ttsPcmAnalyser.fftSize = 512
+      ttsPcmAnalyser.fftSize = TTS_MOUTH_ANALYSER_FFT_SIZE
       ttsPcmAnalyser.connect(ctx.destination)
     }
     return ttsPcmAnalyser
@@ -2089,7 +2322,7 @@ async function bootstrap(): Promise<void> {
         const src = ctx.createBufferSource()
         src.buffer = decoded
         const analyser = ctx.createAnalyser()
-        analyser.fftSize = 512
+        analyser.fftSize = TTS_MOUTH_ANALYSER_FFT_SIZE
         src.connect(analyser)
         analyser.connect(ctx.destination)
         audioSource = src
@@ -2184,7 +2417,7 @@ async function bootstrap(): Promise<void> {
       return
     }
     if (msg.type === 'SYNC_PARAM' && msg.data?.id === 'ParamMouthOpenY') {
-      if (!ttsActive) {
+      if (ttsEnabled && !ttsActive) {
         setVisualMouth(Math.max(0, Math.min(1, Number(msg.data.value) || 0)))
       }
     } else if (msg.type === 'INBOX_UPDATE') {
@@ -2209,6 +2442,7 @@ async function bootstrap(): Promise<void> {
     } else if (msg.type === 'TTS_STATUS') {
       ttsAvailable = !!msg.data?.available
       if (typeof msg.data?.enabled === 'boolean') ttsEnabled = msg.data.enabled
+      if (!ttsEnabled) setVisualMouth(0)
       updateSpeakerBtn()
     } else if (msg.type === 'ASR_STATUS') {
       asrAvailable = !!msg.data?.available
@@ -2285,14 +2519,32 @@ async function bootstrap(): Promise<void> {
       resetAudioQueue()
     } else if (msg.type === 'ACTION') {
       const em = msg.data?.expression
-      if (em) applyLive2dExpression(em)
+      if (em) applyLive2dExpression(em, msg.data?.intensity)
       const motion = msg.data?.motion
       if (motion && real2dAvatar) {
         real2dAvatar.triggerMotion(motion)
       }
-      if (motion && liveModel) {
-        console.debug('[liveui] motion 指令（可扩展 motion 组映射）:', motion)
+      const gaze = msg.data?.gaze
+      if (gaze && real2dAvatar) {
+        real2dAvatar.setGaze(gaze)
       }
+      if (motion && liveModel) {
+        if (motion === 'shake') triggerPixiShake()
+        else console.debug('[liveui] motion 指令（可扩展 motion 组映射）:', motion)
+      } else if (motion === 'shake' && (expressionSprite || !real2dAvatar)) {
+        triggerPixiShake()
+      }
+    } else if (msg.type === 'DEBUG_STATE') {
+      debugOverlayEnabled = msg.data?.enabled === true
+      if (typeof msg.data?.emotion === 'string') debugEmotion = msg.data.emotion
+      if (typeof msg.data?.emotionIntensity === 'number' && Number.isFinite(msg.data.emotionIntensity)) {
+        debugEmotionIntensity = msg.data.emotionIntensity
+      }
+      const relationship =
+        msg.data?.relationship && typeof msg.data.relationship === 'object'
+          ? msg.data.relationship as Record<string, unknown>
+          : undefined
+      renderDebugOverlay(relationship)
     } else if (msg.type === 'ASSISTANT_STREAM') {
       const fullRaw = typeof msg.data?.fullRaw === 'string' ? msg.data.fullRaw : ''
       if (msg.data?.reset) {
@@ -2406,7 +2658,7 @@ async function bootstrap(): Promise<void> {
     const on = !minimalMode && ttsEnabled && ttsAvailable
     speakerBtn.setAttribute('aria-pressed', String(on))
     speakerBtn.title = !ttsAvailable
-      ? '语音回复：未配置 TTS（config.tts：minimax、moss_tts_nano 或 voxcpm）'
+      ? '语音回复：未配置 TTS（config.tts：mimo、minimax、moss_tts_nano、voxcpm 或 whisper）'
       : minimalMode
         ? '语音回复：极简模式中暂停'
       : on

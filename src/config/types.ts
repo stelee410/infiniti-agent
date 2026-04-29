@@ -52,6 +52,8 @@ export type CompactionConfig = {
  * ```json
  * "liveUi": {
  *   "port": 8080,
+ *   "subconsciousHeartbeatMs": 60000,
+ *   "figureZoom": 1,
  *   "live2dModelsDir": "./live2d-models",
  *   "live2dModelDict": "./model_dict.json",
  *   "live2dModelName": "mao_pro"
@@ -138,6 +140,10 @@ export type SeedanceVideoConfig = {
 export type LiveUiConfig = {
   /** WebSocket 端口；`infiniti-agent live` 未传 `--port` 时使用 */
   port?: number
+  /** subconscious-agent heartbeat 间隔（毫秒）；默认 60000。 */
+  subconsciousHeartbeatMs?: number
+  /** LiveUI 人物显示缩放（0.4 ~ 1.5）；`live --zoom` 可临时覆盖。 */
+  figureZoom?: number
   /** 角色渲染方式；未设置时保持旧逻辑：spriteExpressions.dir 优先，否则 Live2D。 */
   renderer?: 'live2d' | 'sprite' | 'real2d'
   /** LiveUI 启动后是否自动开启 TTS 播放；默认 true。 */
@@ -210,6 +216,10 @@ export type InfinitiConfig = {
     disableTools?: boolean
     /** 使用新多 profile 格式时，指定默认 profile 名 */
     default?: string
+    /** meta-agent / 工具安全评估使用的 profile 名；未配置时默认尝试 gate */
+    metaAgentProfile?: string
+    /** subconscious-agent / 心理状态引擎使用的 profile 名；未配置时使用主 LLM */
+    subconsciousProfile?: string
     /** 命名 LLM 配置集合 */
     profiles?: Record<string, LlmProfile>
   }
@@ -327,7 +337,29 @@ export type WhisperTtsConfig = {
   voiceId?: string
 }
 
-export type TtsConfig = MinimaxTtsConfig | MossTtsNanoConfig | VoxcpmTtsConfig | WhisperTtsConfig
+/** Xiaomi MiMo chat-completions audio TTS. */
+export type MimoTtsConfig = {
+  provider: 'mimo'
+  apiKey: string
+  /** OpenAI-compatible base URL, e.g. https://token-plan-cn.xiaomimimo.com/v1 */
+  baseUrl: string
+  /** e.g. mimo-v2.5-tts, mimo-v2.5-tts-voiceclone, mimo-v2-tts */
+  model: string
+  /** Built-in voice for non-clone models. */
+  voiceId?: string
+  /** VoiceClone reference audio path. Required for mimo-v2.5-tts-voiceclone. */
+  referenceAudioPath?: string
+  /** VoiceClone reference audio as raw base64 or data:audio/...;base64,... */
+  referenceAudioBase64?: string
+  /** Style/control prompt sent as the user message. */
+  controlInstruction?: string
+  /** Output format; pcm/pcm16 are also supported by MiMo, but LiveUI currently consumes wav/mp3 best. */
+  format?: 'wav' | 'mp3'
+  /** Single utterance timeout in milliseconds. */
+  timeoutMs?: number
+}
+
+export type TtsConfig = MinimaxTtsConfig | MossTtsNanoConfig | VoxcpmTtsConfig | WhisperTtsConfig | MimoTtsConfig
 
 /** 云端 Whisper ASR 配置（OpenAI-compatible）。 */
 export type WhisperAsrConfig = {

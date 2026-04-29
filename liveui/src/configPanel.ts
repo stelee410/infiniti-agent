@@ -16,7 +16,8 @@ const tabs = [
 ] as const
 
 const llmProviders = ['anthropic', 'openai', 'gemini', 'minimax', 'openrouter']
-const ttsProviders = ['', 'voxcpm', 'moss_tts_nano', 'minimax', 'whisper']
+const ttsProviders = ['', 'mimo', 'voxcpm', 'moss_tts_nano', 'minimax', 'whisper']
+const mimoTtsModels = ['mimo-v2.5-tts-voiceclone', 'mimo-v2.5-tts-voicedesign', 'mimo-v2.5-tts', 'mimo-v2-tts']
 
 function cloneConfig(v: unknown): JsonObj {
   try {
@@ -40,6 +41,69 @@ function lines(v: unknown): string {
 
 function splitLines(v: string): string[] {
   return v.split(/[\n,]/).map((x) => x.trim()).filter(Boolean)
+}
+
+function findMimoApiKey(cfg: JsonObj): string {
+  const ttsKey = text(cfg.tts?.apiKey)
+  if (ttsKey) return ttsKey
+  const llm = cfg.llm
+  const profiles = llm?.profiles && typeof llm.profiles === 'object' ? llm.profiles as Record<string, JsonObj> : {}
+  for (const p of Object.values(profiles)) {
+    if (text(p.baseUrl).includes('xiaomimimo.com') && text(p.apiKey)) return text(p.apiKey)
+  }
+  if (text(llm?.baseUrl).includes('xiaomimimo.com')) return text(llm?.apiKey)
+  return ''
+}
+
+function defaultTtsConfig(provider: string, cfg: JsonObj): JsonObj | undefined {
+  if (!provider) return undefined
+  const current = cfg.tts && typeof cfg.tts === 'object' ? cfg.tts as JsonObj : {}
+  if (provider === 'mimo') {
+    return {
+      provider,
+      baseUrl: text(current.baseUrl) || 'https://token-plan-cn.xiaomimimo.com/v1',
+      model: text(current.model) || 'mimo-v2.5-tts-voiceclone',
+      apiKey: text(current.apiKey) || findMimoApiKey(cfg),
+      referenceAudioPath: text(current.referenceAudioPath) || '.infiniti-agent/assets/mimo-voiceclone-reference.wav',
+      format: text(current.format) || 'wav',
+      controlInstruction: text(current.controlInstruction) || '自然、清晰、语速适中。',
+      timeoutMs: typeof current.timeoutMs === 'number' ? current.timeoutMs : 120000,
+    }
+  }
+  if (provider === 'voxcpm') {
+    return {
+      provider,
+      baseUrl: text(current.baseUrl) || 'http://127.0.0.1:8810',
+      controlInstruction: text(current.controlInstruction) || '年轻女性，温柔自然，语速适中',
+      cfgValue: typeof current.cfgValue === 'number' ? current.cfgValue : 2,
+      inferenceTimesteps: typeof current.inferenceTimesteps === 'number' ? current.inferenceTimesteps : 20,
+      normalize: typeof current.normalize === 'boolean' ? current.normalize : true,
+      denoise: typeof current.denoise === 'boolean' ? current.denoise : true,
+      timeoutMs: typeof current.timeoutMs === 'number' ? current.timeoutMs : 300000,
+    }
+  }
+  if (provider === 'moss_tts_nano') {
+    return { provider, baseUrl: text(current.baseUrl) || 'http://127.0.0.1:18083' }
+  }
+  if (provider === 'minimax') {
+    return {
+      provider,
+      apiKey: text(current.apiKey),
+      groupId: text(current.groupId),
+      model: text(current.model) || 'speech-02-turbo',
+      voiceId: text(current.voiceId) || 'female-shaonv',
+    }
+  }
+  if (provider === 'whisper') {
+    return {
+      provider,
+      baseUrl: text(current.baseUrl),
+      apiKey: text(current.apiKey),
+      model: text(current.model),
+      voiceId: text(current.voiceId),
+    }
+  }
+  return { provider }
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(
@@ -128,6 +192,8 @@ function ensureDefaultConfigNodes(cfg: JsonObj, cwd: string): void {
   cfg.compaction ??= { autoThresholdTokens: 30000 }
   cfg.liveUi ??= {}
   cfg.liveUi.port ??= 8080
+  cfg.liveUi.subconsciousHeartbeatMs ??= 60000
+  cfg.liveUi.figureZoom ??= 1
   cfg.liveUi.ttsAutoEnabled ??= true
   cfg.liveUi.asrAutoEnabled ??= false
   cfg.liveUi.asrMode ??= 'manual'
@@ -137,17 +203,6 @@ function ensureDefaultConfigNodes(cfg: JsonObj, cwd: string): void {
   cfg.liveUi.voiceMicSpeechRmsThreshold ??= 0.03
   cfg.liveUi.voiceMicSilenceEndMs ??= 1500
   cfg.liveUi.voiceMicSuppressInterruptDuringTts ??= true
-
-  cfg.tts ??= {
-    provider: 'voxcpm',
-    baseUrl: 'http://127.0.0.1:8810',
-    controlInstruction: '年轻女性，温柔自然，语速适中',
-    cfgValue: 2,
-    inferenceTimesteps: 20,
-    normalize: true,
-    denoise: true,
-    timeoutMs: 300000,
-  }
 
   const modelsDir = inferSharedModelsDir(cwd)
   const senseVoiceDir = `${modelsDir}/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17`
@@ -192,6 +247,12 @@ function syncFlatLlm(cfg: JsonObj): void {
   const profiles = ensureLlmProfiles(cfg)
   const names = Object.keys(profiles)
   if (!names.includes(cfg.llm.default)) cfg.llm.default = names[0] || 'main'
+  if (cfg.llm.metaAgentProfile && !names.includes(cfg.llm.metaAgentProfile)) {
+    cfg.llm.metaAgentProfile = names.includes('gate') ? 'gate' : cfg.llm.default
+  }
+  if (cfg.llm.subconsciousProfile && !names.includes(cfg.llm.subconsciousProfile)) {
+    delete cfg.llm.subconsciousProfile
+  }
   const p = profiles[cfg.llm.default]
   if (!p) return
   cfg.llm.provider = p.provider
@@ -288,6 +349,34 @@ export function initConfigPanel(opts: ConfigPanelOptions): {
       rerender()
     })
     section.append(field('当前使用的 provider profile', defaultSelect))
+    const fallbackMetaProfile = names.includes('gate') ? 'gate' : cfg.llm.default || names[0] || 'main'
+    const metaAgentProfile = String(
+      cfg.llm.metaAgentProfile && names.includes(cfg.llm.metaAgentProfile)
+        ? cfg.llm.metaAgentProfile
+        : fallbackMetaProfile,
+    )
+    cfg.llm.metaAgentProfile = metaAgentProfile
+    const metaSelect = select(metaAgentProfile, names.map((n) => [n, n]), (v) => {
+      cfg.llm.metaAgentProfile = v
+      rerender()
+    })
+    section.append(field('Meta-agent 使用的 provider profile', metaSelect))
+    const subconsciousProfile = String(
+      cfg.llm.subconsciousProfile && names.includes(cfg.llm.subconsciousProfile)
+        ? cfg.llm.subconsciousProfile
+        : '',
+    )
+    if (!subconsciousProfile) delete cfg.llm.subconsciousProfile
+    const subconsciousOptions: Array<[string, string]> = [
+      ['', '默认主 LLM'],
+      ...names.map((n): [string, string] => [n, n]),
+    ]
+    const subconsciousSelect = select(subconsciousProfile, subconsciousOptions, (v) => {
+      if (v) cfg.llm.subconsciousProfile = v
+      else delete cfg.llm.subconsciousProfile
+      rerender()
+    })
+    section.append(field('Subconscious-agent 使用的 provider profile', subconsciousSelect))
     const list = el('div', { class: 'config-list config-span-2' })
     for (const name of Object.keys(profiles)) {
       const p = profiles[name]
@@ -299,6 +388,8 @@ export function initConfigPanel(opts: ConfigPanelOptions): {
           profiles[next] = profiles[name]
           delete profiles[name]
           if (cfg.llm.default === name) cfg.llm.default = next
+          if (cfg.llm.metaAgentProfile === name) cfg.llm.metaAgentProfile = next
+          if (cfg.llm.subconsciousProfile === name) cfg.llm.subconsciousProfile = next
           rerender()
         })),
         field('Provider', select(String(p.provider || 'openai'), llmProviders.map((x) => [x, x]), (v) => { p.provider = v; syncFlatLlm(cfg) })),
@@ -314,6 +405,8 @@ export function initConfigPanel(opts: ConfigPanelOptions): {
         }
         delete profiles[name]
         if (cfg.llm.default === name) cfg.llm.default = Object.keys(profiles)[0]
+        if (cfg.llm.metaAgentProfile === name) cfg.llm.metaAgentProfile = Object.keys(profiles)[0]
+        if (cfg.llm.subconsciousProfile === name) cfg.llm.subconsciousProfile = Object.keys(profiles)[0]
         syncFlatLlm(cfg)
         rerender()
       })
@@ -349,6 +442,14 @@ export function initConfigPanel(opts: ConfigPanelOptions): {
     const section = el('section', { class: 'config-section config-section--active' })
     const grid = el('div', { class: 'config-grid' })
     grid.append(
+      field('Heartbeat 间隔(ms)', input(num(l.subconsciousHeartbeatMs, '60000'), (v) => {
+        const n = Number(v)
+        if (Number.isFinite(n)) l.subconsciousHeartbeatMs = Math.round(n)
+      }, 'number')),
+      field('形象缩放比例', input(num(l.figureZoom, '1'), (v) => {
+        const n = Number(v)
+        if (Number.isFinite(n)) l.figureZoom = n
+      }, 'number')),
       field('TTS 自动', select(l.ttsAutoEnabled === false ? 'false' : 'true', [['true', '开启'], ['false', '关闭']], (v) => { l.ttsAutoEnabled = v === 'true' })),
       field('ASR 自动', select(l.asrAutoEnabled ? 'true' : 'false', [['false', '关闭'], ['true', '开启']], (v) => { l.asrAutoEnabled = v === 'true' })),
       field('ASR 模式', select(text(l.asrMode || 'manual'), [['manual', '手动识别'], ['auto', '自动识别']], (v) => { l.asrMode = v })),
@@ -365,7 +466,7 @@ export function initConfigPanel(opts: ConfigPanelOptions): {
       grid.append(pathField('spriteExpressions 目录', text(l.spriteExpressions.dir), 'directory', (v) => { l.spriteExpressions.dir = v }))
       grid.append(pathField('expressions.json（可选）', text(l.spriteExpressions.manifest), 'file', (v) => { l.spriteExpressions.manifest = v }))
       if (mode === 'real2d') {
-        grid.append(field('real2d 说明', el('div', { class: 'config-help' }, '目录需包含 exp01.png 到 exp06.png；exp_open.png 可选，用于说话口型。')))
+        grid.append(field('real2d 说明', el('div', { class: 'config-help' }, '默认读取 exp01.png 到 exp06.png；expressions.json 可覆盖 real2d 表情槽位；exp_open.png 可选，用于说话口型。')))
       }
     } else {
       grid.append(pathField('Live2D model3.json', text(l.live2dModel3Json), 'file', (v) => { l.live2dModel3Json = v }))
@@ -382,7 +483,7 @@ export function initConfigPanel(opts: ConfigPanelOptions): {
     const section = el('section', { class: 'config-section config-section--active' })
     const grid = el('div', { class: 'config-grid' })
     grid.append(field('Provider', select(provider, ttsProviders.map((x) => [x, x || '未启用']), (v) => {
-      cfg.tts = v ? { provider: v } : undefined
+      cfg.tts = defaultTtsConfig(v, cfg)
       rerender()
     })))
     if (provider === 'minimax') {
@@ -402,6 +503,23 @@ export function initConfigPanel(opts: ConfigPanelOptions): {
         field('Voice ID', input(text(t.voiceId), (v) => { t.voiceId = v })),
         field('刷新声音列表', button('刷新/显示常用声音', () => setStatus(true, '常用声音: alloy, verse, aria, coral, sage'))),
       )
+    } else if (provider === 'mimo') {
+      grid.append(
+        field('Base URL', input(text(t.baseUrl || 'https://token-plan-cn.xiaomimimo.com/v1'), (v) => { t.baseUrl = v })),
+        field('API Key', input(text(t.apiKey), (v) => { t.apiKey = v }, 'password')),
+        field('Model', select(text(t.model || 'mimo-v2.5-tts-voiceclone'), mimoTtsModels.map((x) => [x, x]), (v) => { t.model = v; rerender() })),
+        field('Format', select(text(t.format || 'wav'), [['wav', 'wav'], ['mp3', 'mp3']], (v) => { t.format = v })),
+        field('Control Instruction', input(text(t.controlInstruction || '自然、清晰、语速适中。'), (v) => { t.controlInstruction = v })),
+        field('Timeout ms', input(num(t.timeoutMs, '120000'), (v) => { t.timeoutMs = Number(v) }, 'number')),
+      )
+      if (text(t.model || 'mimo-v2.5-tts-voiceclone') === 'mimo-v2.5-tts-voiceclone') {
+        grid.append(
+          pathField('Reference Audio', text(t.referenceAudioPath), 'file', (v) => { t.referenceAudioPath = v }),
+          field('Reference Audio Base64', input(text(t.referenceAudioBase64), (v) => { t.referenceAudioBase64 = v }), true),
+        )
+      } else if (text(t.model) !== 'mimo-v2.5-tts-voicedesign') {
+        grid.append(field('Voice ID', input(text(t.voiceId || 'mimo_default'), (v) => { t.voiceId = v })))
+      }
     } else if (provider === 'moss_tts_nano') {
       grid.append(
         field('Base URL', input(text(t.baseUrl || 'http://127.0.0.1:18083'), (v) => { t.baseUrl = v })),

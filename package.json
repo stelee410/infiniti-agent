@@ -67,7 +67,6 @@
     "react": "^19.2.5",
     "sharp": "^0.34.5",
     "sherpa-onnx-node": "^1.12.38",
-    "sqlite-vec": "^0.1.9",
     "ws": "^8.18.0"
   },
   "devDependencies": {
@@ -80,6 +79,6 @@
     "vitest": "^4.1.4"
   },
   "optionalDependencies": {
-    "electron": "^33.2.0"
+    "electron": "^41.3.0"
   }
 }
