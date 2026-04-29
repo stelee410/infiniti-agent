@@ -127,6 +127,13 @@ const COMMAND_ITEMS: SlashItem[] = [
     insert: '/undo ',
   },
   {
+    id: '/roll',
+    kind: 'command',
+    label: '/roll',
+    desc: '按 LLM 输出层回滚当前聊天；可加数字，例如 /roll 2',
+    insert: '/roll ',
+  },
+  {
     id: '/permission',
     kind: 'command',
     label: '/permission',

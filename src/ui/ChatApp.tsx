@@ -24,6 +24,7 @@ import type { PersistedMessage } from '../llm/persisted.js'
 import { oneShotTextCompletion } from '../llm/oneShotCompletion.js'
 import { saveSession, loadSession } from '../session/file.js'
 import { archiveSession } from '../session/archive.js'
+import { rollMessages } from '../session/roll.js'
 import { localInboxDir, localSkillsDir } from '../paths.js'
 import type { McpManager } from '../mcp/manager.js'
 import { loadConfig, saveProjectConfig } from '../config/io.js'
@@ -537,7 +538,7 @@ export function ChatApp({
       }
       if (raw === '/help') {
         setError(
-          '输入 / 可补全：斜杠命令与全部工具（↑↓ Tab）。命令: /exit /clear /reload /config /memory /inbox /last_email /undo /compact /permission /speak /snap /video — /config 仅 Live 模式打开配置面板；/last_email 打开最近一封邮箱消息；/speak 后接正文仅 TTS 朗读、不写会话；/snap 后接提示词异步生成合照/写实照片；/video 后接提示词异步生成 Seedance 视频，完成后写入你的邮箱。改文件/bash/HTTP 默认需确认（Y 允许 · A 本次会话始终允许该工具 · N 拒绝）；启动时加 --dangerously-skip-permissions 可跳过所有确认。/permission 查看当前状态。/compact 压缩较早历史。卡死排查：INFINITI_AGENT_DEBUG=1。',
+          '输入 / 可补全：斜杠命令与全部工具（↑↓ Tab）。命令: /exit /clear /reload /config /memory /inbox /last_email /undo /roll /compact /permission /speak /snap /video — /config 仅 Live 模式打开配置面板；/last_email 打开最近一封邮箱消息；/speak 后接正文仅 TTS 朗读、不写会话；/snap 后接提示词异步生成合照/写实照片；/video 后接提示词异步生成 Seedance 视频，完成后写入你的邮箱。/roll 2 可按 LLM 输出层回滚对话。改文件/bash/HTTP 默认需确认（Y 允许 · A 本次会话始终允许该工具 · N 拒绝）；启动时加 --dangerously-skip-permissions 可跳过所有确认。/permission 查看当前状态。/compact 压缩较早历史。卡死排查：INFINITI_AGENT_DEBUG=1。',
         )
         setInput('')
         return
@@ -704,6 +705,28 @@ export function ChatApp({
         } catch (e: unknown) {
           setError(formatChatError(e))
         }
+        setInput('')
+        return
+      }
+      if (raw === '/roll' || raw.startsWith('/roll ')) {
+        const arg = raw.startsWith('/roll ') ? raw.slice('/roll '.length).trim() : ''
+        const layers = arg ? Number(arg) : 1
+        if (!Number.isInteger(layers) || layers < 1) {
+          setError('/roll 后请输入正整数，例如 /roll 2')
+          setInput('')
+          return
+        }
+        const res = rollMessages(messages, layers)
+        if (res.layers === 0) {
+          setError('没有可回滚的 LLM 输出层')
+          setInput('')
+          return
+        }
+        setMessages(res.messages)
+        await saveSession(cwd, res.messages)
+        setError(null)
+        setNotice(`已回滚 ${res.layers} 层，删除 ${res.removed} 条消息`)
+        setTimeout(() => setNotice(null), 5000)
         setInput('')
         return
       }

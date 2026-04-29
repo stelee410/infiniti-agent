@@ -537,7 +537,11 @@ async function bootstrap(): Promise<void> {
   const setVisualMouth = (open01: number): void => {
     const open = Math.max(0, Math.min(1, open01))
     mouthOpen = open
-    real2dAvatar?.setMouthOpen(open)
+    if (ttsEnabled) {
+      real2dAvatar?.setMouthOpen(open)
+    } else if (open <= 0.001) {
+      real2dAvatar?.clearMouthOpen()
+    }
     if (liveModel) {
       setMouthFromModel(liveModel, open)
     } else {
@@ -2456,7 +2460,7 @@ async function bootstrap(): Promise<void> {
     const on = !minimalMode && ttsEnabled && ttsAvailable
     speakerBtn.setAttribute('aria-pressed', String(on))
     speakerBtn.title = !ttsAvailable
-      ? '语音回复：未配置 TTS（config.tts：minimax、moss_tts_nano 或 voxcpm）'
+      ? '语音回复：未配置 TTS（config.tts：mimo、minimax、moss_tts_nano、voxcpm 或 whisper）'
       : minimalMode
         ? '语音回复：极简模式中暂停'
       : on

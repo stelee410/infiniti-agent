@@ -1,5 +1,6 @@
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import Database from 'better-sqlite3'
 import { localAgentDir } from '../paths.js'
 import type { SubconsciousMemoryEntry, SubconsciousStore } from '../subconscious/types.js'
 
@@ -46,6 +47,7 @@ export function documentMemoryDir(cwd: string): string {
 export async function syncDocumentMemory(cwd: string, store: SubconsciousStore): Promise<void> {
   const dir = documentMemoryDir(cwd)
   await mkdir(dir, { recursive: true })
+  const parsedEntries: ParsedDocEntry[] = []
   const docs: Array<{ name: string; entries: Array<{ kind: 'longTerm' | 'fuzzy'; entry: SubconsciousMemoryEntry }> }> = [
     { name: 'long-term.md', entries: store.memory.longTerm.map((entry) => ({ kind: 'longTerm' as const, entry })) },
     { name: 'fuzzy.md', entries: store.memory.fuzzy.map((entry) => ({ kind: 'fuzzy' as const, entry })) },
@@ -54,17 +56,21 @@ export async function syncDocumentMemory(cwd: string, store: SubconsciousStore):
   for (const doc of docs) {
     const body = renderDocument(doc.name, doc.entries)
     await writeFile(join(dir, doc.name), body, 'utf8')
+    parsedEntries.push(...parseDocument(doc.name, body))
     for (const item of doc.entries) {
       index.entries.push(toIndexEntry(doc.name, item.kind, item.entry))
     }
   }
   await writeFile(join(dir, 'index.json'), JSON.stringify(index, null, 2) + '\n', 'utf8')
+  rebuildDocumentMemoryFts(dir, parsedEntries)
 }
 
 export async function retrieveDocumentMemories(cwd: string, query: string, limit = 6): Promise<DocumentMemoryHit[]> {
   const terms = extractSearchTerms(query)
   if (terms.length === 0) return []
   const entries = await loadDocumentEntries(cwd)
+  const fts = searchDocumentMemoryFts(documentMemoryDir(cwd), terms, limit)
+  if (fts.length > 0) return fts
   const exact = rankEntries(entries, terms, false)
   const ranked = exact.length > 0 ? exact : rankEntries(entries, expandTerms(terms, entries), true)
   return ranked.slice(0, limit)
@@ -160,6 +166,121 @@ function parseDocument(file: string, raw: string): ParsedDocEntry[] {
     })
   }
   return entries
+}
+
+function rebuildDocumentMemoryFts(dir: string, entries: ParsedDocEntry[]): void {
+  const db = openDocumentMemoryDb(dir)
+  try {
+    ensureDocumentMemoryFts(db)
+    const insert = db.prepare(`
+      INSERT INTO memory_docs_fts
+      (id, kind, file, title, topic, tags, aliases, body, confidence, reinforcement, last_seen_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `)
+    db.transaction(() => {
+      db.prepare('DELETE FROM memory_docs_fts').run()
+      for (const entry of entries) {
+        insert.run(
+          entry.id,
+          entry.kind,
+          entry.file,
+          entry.title,
+          entry.topic ?? '',
+          entry.tags.join(' '),
+          entry.aliases.join(' '),
+          entry.text,
+          entry.confidence,
+          entry.reinforcement,
+          entry.lastSeenAt,
+        )
+      }
+    })()
+  } finally {
+    db.close()
+  }
+}
+
+function searchDocumentMemoryFts(dir: string, terms: string[], limit: number): DocumentMemoryHit[] {
+  try {
+    const db = openDocumentMemoryDb(dir)
+    try {
+      ensureDocumentMemoryFts(db)
+      const query = terms.map((term) => `"${term.replace(/"/g, '""')}"`).join(' OR ')
+      if (!query) return []
+      const rows = db.prepare(`
+        SELECT
+          id,
+          kind,
+          file,
+          title,
+          topic,
+          body,
+          confidence,
+          reinforcement,
+          bm25(memory_docs_fts, 7.0, 6.0, 4.0, 4.0, 1.0) AS rank
+        FROM memory_docs_fts
+        WHERE memory_docs_fts MATCH ?
+        ORDER BY rank
+        LIMIT ?
+      `).all(query, Math.max(limit * 3, limit)) as Array<{
+        id: string
+        kind: 'longTerm' | 'fuzzy'
+        file: string
+        title: string
+        topic: string
+        body: string
+        confidence: number
+        reinforcement: number
+        rank: number
+      }>
+      return rows
+        .map((row) => ({
+          id: row.id,
+          kind: row.kind,
+          title: row.title,
+          text: row.body.slice(0, 420),
+          confidence: Number(row.confidence) || 0,
+          reinforcement: Number(row.reinforcement) || 0,
+          topic: row.topic || undefined,
+          source: row.file,
+          score: ftsScore(row.rank, Number(row.confidence) || 0, Number(row.reinforcement) || 0),
+        }))
+        .sort((a, b) => b.score - a.score)
+        .slice(0, limit)
+    } finally {
+      db.close()
+    }
+  } catch {
+    return []
+  }
+}
+
+function openDocumentMemoryDb(dir: string): Database.Database {
+  const db = new Database(join(dir, 'index.db'))
+  db.pragma('journal_mode = WAL')
+  return db
+}
+
+function ensureDocumentMemoryFts(db: Database.Database): void {
+  db.exec(`
+    CREATE VIRTUAL TABLE IF NOT EXISTS memory_docs_fts USING fts5(
+      id UNINDEXED,
+      kind UNINDEXED,
+      file UNINDEXED,
+      title,
+      topic,
+      tags,
+      aliases,
+      body,
+      confidence UNINDEXED,
+      reinforcement UNINDEXED,
+      last_seen_at UNINDEXED
+    );
+  `)
+}
+
+function ftsScore(rank: number, confidence: number, reinforcement: number): number {
+  return (1 / (1 + Math.abs(rank))) * 10 + confidence * 3 + Math.log1p(reinforcement)
 }
 
 function rankEntries(entries: ParsedDocEntry[], terms: string[], expanded: boolean): DocumentMemoryHit[] {

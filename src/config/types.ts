@@ -331,7 +331,29 @@ export type WhisperTtsConfig = {
   voiceId?: string
 }
 
-export type TtsConfig = MinimaxTtsConfig | MossTtsNanoConfig | VoxcpmTtsConfig | WhisperTtsConfig
+/** Xiaomi MiMo chat-completions audio TTS. */
+export type MimoTtsConfig = {
+  provider: 'mimo'
+  apiKey: string
+  /** OpenAI-compatible base URL, e.g. https://token-plan-cn.xiaomimimo.com/v1 */
+  baseUrl: string
+  /** e.g. mimo-v2.5-tts, mimo-v2.5-tts-voiceclone, mimo-v2-tts */
+  model: string
+  /** Built-in voice for non-clone models. */
+  voiceId?: string
+  /** VoiceClone reference audio path. Required for mimo-v2.5-tts-voiceclone. */
+  referenceAudioPath?: string
+  /** VoiceClone reference audio as raw base64 or data:audio/...;base64,... */
+  referenceAudioBase64?: string
+  /** Style/control prompt sent as the user message. */
+  controlInstruction?: string
+  /** Output format; pcm/pcm16 are also supported by MiMo, but LiveUI currently consumes wav/mp3 best. */
+  format?: 'wav' | 'mp3'
+  /** Single utterance timeout in milliseconds. */
+  timeoutMs?: number
+}
+
+export type TtsConfig = MinimaxTtsConfig | MossTtsNanoConfig | VoxcpmTtsConfig | WhisperTtsConfig | MimoTtsConfig
 
 /** 云端 Whisper ASR 配置（OpenAI-compatible）。 */
 export type WhisperAsrConfig = {

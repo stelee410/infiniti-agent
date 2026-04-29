@@ -30,6 +30,7 @@ import { createMinimaxTts } from './tts/minimaxTts.js'
 import { createMossTtsNano } from './tts/mossTtsNano.js'
 import { checkVoxcpmTtsHealth, createVoxcpmTts } from './tts/voxcpmTts.js'
 import { createWhisperTts } from './tts/whisperTts.js'
+import { createMimoTts } from './tts/mimoTts.js'
 import { createWhisperAsr } from './asr/whisperAsr.js'
 import { createSherpaOnnxAsr } from './asr/sherpaOnnxAsr.js'
 import { spawnLiveElectron } from './liveui/spawnRenderer.js'
@@ -112,6 +113,14 @@ async function configureLiveUiEngines(
       )
     } catch (e) {
       console.warn(`[liveui] TTS 未启用（Whisper 初始化失败）: ${(e as Error).message}`)
+      liveUi.setTtsEngine(null)
+    }
+  } else if (cfg.tts?.provider === 'mimo') {
+    try {
+      liveUi.setTtsEngine(createMimoTts(cfg.tts, cwd))
+      console.error(`[liveui] MiMo TTS 已启用 (model: ${cfg.tts.model})`)
+    } catch (e) {
+      console.warn(`[liveui] TTS 未启用（MiMo 初始化失败）: ${(e as Error).message}`)
       liveUi.setTtsEngine(null)
     }
   } else {

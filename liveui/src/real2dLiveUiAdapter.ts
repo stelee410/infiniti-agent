@@ -131,6 +131,12 @@ export class Real2dLiveUiAdapter {
     this.runtime?.setMouthOpen(v)
   }
 
+  clearMouthOpen(): void {
+    this.pendingMouth = 0
+    if (!this.ready) return
+    this.runtime?.setMouthOpen(0)
+  }
+
   triggerMotion(raw: string): void {
     const motion = this.normalizeMotion(raw)
     if (!motion || !this.ready) return

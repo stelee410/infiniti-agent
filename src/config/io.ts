@@ -414,6 +414,32 @@ function parseTtsConfig(raw: unknown): TtsConfig | undefined {
     if (typeof t.voiceId === 'string' && t.voiceId.trim()) out.voiceId = t.voiceId.trim()
     return out
   }
+  if (t.provider === 'mimo') {
+    if (typeof t.apiKey !== 'string' || !t.apiKey.trim()) return undefined
+    if (typeof t.baseUrl !== 'string' || !t.baseUrl.trim()) return undefined
+    if (typeof t.model !== 'string' || !t.model.trim()) return undefined
+    const out: TtsConfig = {
+      provider: 'mimo',
+      apiKey: t.apiKey.trim(),
+      baseUrl: t.baseUrl.trim(),
+      model: t.model.trim(),
+    }
+    if (typeof t.voiceId === 'string' && t.voiceId.trim()) out.voiceId = t.voiceId.trim()
+    if (typeof t.referenceAudioPath === 'string' && t.referenceAudioPath.trim()) {
+      out.referenceAudioPath = t.referenceAudioPath.trim()
+    }
+    if (typeof t.referenceAudioBase64 === 'string' && t.referenceAudioBase64.trim()) {
+      out.referenceAudioBase64 = t.referenceAudioBase64.trim()
+    }
+    if (typeof t.controlInstruction === 'string' && t.controlInstruction.trim()) {
+      out.controlInstruction = t.controlInstruction.trim()
+    }
+    if (t.format === 'wav' || t.format === 'mp3') out.format = t.format
+    if (typeof t.timeoutMs === 'number' && t.timeoutMs >= 5000 && Number.isFinite(t.timeoutMs)) {
+      out.timeoutMs = Math.floor(t.timeoutMs)
+    }
+    return out
+  }
   return undefined
 }
 
