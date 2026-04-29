@@ -275,17 +275,12 @@ export function ChatApp({
   useEffect(() => {
     if (!liveUi) {
       setLiveUiConnected(false)
-      subconsciousRef.current = null
       return
     }
     return liveUi.onConnectionChange(setLiveUiConnected)
   }, [liveUi])
 
   useEffect(() => {
-    if (!liveUi) {
-      subconsciousRef.current = null
-      return
-    }
     const agent = new SubconsciousAgent(config, cwd, liveUi)
     subconsciousRef.current = agent
     void agent.start()
