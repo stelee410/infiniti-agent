@@ -241,6 +241,7 @@ function parseImageProfile(raw: unknown): ImageProfile | undefined {
   if (typeof u.imageSize === 'string' && u.imageSize.trim()) out.imageSize = u.imageSize.trim()
   if (u.quality === 'auto' || u.quality === 'high' || u.quality === 'medium' || u.quality === 'low') out.quality = u.quality
   if (typeof u.transparentBackground === 'boolean') out.transparentBackground = u.transparentBackground
+  if (u.inputFidelity === 'high' || u.inputFidelity === 'low') out.inputFidelity = u.inputFidelity
   if (typeof u.timeoutMs === 'number' && Number.isFinite(u.timeoutMs) && u.timeoutMs >= 5000) {
     out.timeoutMs = Math.floor(u.timeoutMs)
   }

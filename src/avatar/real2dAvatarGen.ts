@@ -199,7 +199,7 @@ async function generateOne(
         toFile(Buffer.from(r.base64, 'base64'), `real2d-ref-${idx}.${r.mediaType.split('/')[1] ?? 'png'}`, { type: r.mediaType }),
       ),
     ),
-    input_fidelity: 'high',
+    ...(auth.inputFidelity ? { input_fidelity: auth.inputFidelity } : {}),
   } as never, { timeout: auth.timeoutMs || DEFAULT_TIMEOUT_MS })
 
   const first = (resp as { data?: Array<{ b64_json?: string; url?: string }> }).data?.[0]

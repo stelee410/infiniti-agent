@@ -145,6 +145,12 @@ export class LiveUiSession {
     this.lastVisionCapture = undefined
     this.pendingFileAttachments = []
     this.broadcast({ type: 'VISION_ATTACHMENT_CLEAR', data: {} } as LiveUiMessage)
+    this.broadcast({ type: 'ATTACHMENT_CLEAR', data: {} } as LiveUiMessage)
+  }
+
+  clearFileAttachments(): void {
+    this.pendingFileAttachments = []
+    this.broadcast({ type: 'ATTACHMENT_CLEAR', data: {} } as LiveUiMessage)
   }
 
   /** 渲染端输入框内容变化（含空串，用于清空 TUI 草稿状态）。 */

@@ -148,7 +148,7 @@ async function generateWithOpenAI(auth: ResolvedImageProfile, prompt: string, re
             toFile(r.buffer, `${r.role}-${idx}.${r.mimeType.split('/')[1] ?? 'png'}`, { type: r.mimeType }),
           ),
         ),
-        input_fidelity: 'high',
+        ...(auth.inputFidelity ? { input_fidelity: auth.inputFidelity } : {}),
       } as never, { timeout: auth.timeoutMs })
     : await client.images.generate(common as never, { timeout: auth.timeoutMs })
 

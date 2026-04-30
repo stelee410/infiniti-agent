@@ -116,7 +116,7 @@ async function generateAvatarImageBuffer(
           toFile(Buffer.from(r.base64, 'base64'), `avatar-ref-${idx}.${r.mimeType.split('/')[1] ?? 'png'}`, { type: r.mimeType }),
         ),
       ),
-      input_fidelity: 'high',
+      ...(auth.inputFidelity ? { input_fidelity: auth.inputFidelity } : {}),
     } as never)
     : await client.images.generate(common as never)
 

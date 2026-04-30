@@ -817,7 +817,8 @@ export function ChatApp({
         const referenceImages = avatarGenReferenceImagesFromLiveInputs(avatarVision, avatarAttachments)
         try {
           const job = await enqueueAvatarGenJob(cwd, config, prompt, referenceImages)
-          if (avatarVision || avatarAttachments.length) liveUi?.clearVisionAttachment()
+          if (avatarVision) liveUi?.clearVisionAttachment()
+          else if (avatarAttachments.length) liveUi?.clearFileAttachments()
           const content = await polishAvatarGenQueuedReply(config, prompt, job.id)
           void subconsciousRef.current?.observeAssistantOutput(content)
           const next: PersistedMessage[] = [
@@ -862,6 +863,7 @@ export function ChatApp({
         const videoVision = vision ?? liveUi?.consumePendingVisionAttachment()
         const videoAttachments = liveUi?.consumePendingFileAttachments() ?? []
         if (videoVision) liveUi?.clearVisionAttachment()
+        else if (videoAttachments.length) liveUi?.clearFileAttachments()
         const referenceImages = seedanceReferenceImagesFromLiveInputs(videoVision, videoAttachments)
         try {
           const job = await enqueueSeedanceVideoJob(cwd, config, prompt, referenceImages)
@@ -1110,6 +1112,8 @@ export function ChatApp({
           ...(turnAttachments.length ? { attachments: turnAttachments } : {}),
         },
       ]
+      if (turnVision) liveUi?.clearVisionAttachment()
+      else if (turnAttachments.length) liveUi?.clearFileAttachments()
       setMessages(nextMsgs)
       setInput('')
       try {

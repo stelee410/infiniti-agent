@@ -459,6 +459,12 @@ async function bootstrap(): Promise<void> {
     }
   }
 
+  const resetReal2dCompactScaleState = (): void => {
+    pendingReal2dCompactHeight = null
+    real2dCompactBaseStageHeight = null
+    real2dAvatar?.setStageScaleCompensation(1)
+  }
+
   /**
    * 人物始终站在控制条（输入框）上方；气泡独立浮层，不影响人物位置。
    */
@@ -1238,19 +1244,22 @@ async function bootstrap(): Promise<void> {
   window.addEventListener('resize', () => {
     app.renderer.resize(window.innerWidth, window.innerHeight)
     if (real2dAvatar) {
-      const isReal2dCompactResize =
-        pendingReal2dCompactHeight != null &&
-        Math.abs(window.innerHeight - pendingReal2dCompactHeight) <= 4
-      if (isReal2dCompactResize) pendingReal2dCompactHeight = null
-      applyReal2dStageLayout()
-      if (isReal2dCompactResize && real2dLayoutHeight > 0) {
-        const baseHeight = real2dCompactBaseStageHeight ?? real2dLayoutHeight
-        real2dAvatar.setStageScaleCompensation(baseHeight / real2dLayoutHeight)
+      if (minimalMode) {
+        resetReal2dCompactScaleState()
       } else {
-        real2dCompactBaseStageHeight = null
-        real2dAvatar.setStageScaleCompensation(1)
+        const isReal2dCompactResize =
+          pendingReal2dCompactHeight != null &&
+          Math.abs(window.innerHeight - pendingReal2dCompactHeight) <= 4
+        if (isReal2dCompactResize) pendingReal2dCompactHeight = null
+        applyReal2dStageLayout()
+        if (isReal2dCompactResize && real2dLayoutHeight > 0) {
+          const baseHeight = real2dCompactBaseStageHeight ?? real2dLayoutHeight
+          real2dAvatar.setStageScaleCompensation(baseHeight / real2dLayoutHeight)
+        } else {
+          resetReal2dCompactScaleState()
+        }
+        scheduleReal2dVerticalPlacement()
       }
-      scheduleReal2dVerticalPlacement()
     }
     layoutFigureInStage()
     positionBubbleOverFigure()
@@ -2031,7 +2040,15 @@ async function bootstrap(): Promise<void> {
     const trimmedStart = line.trimStart()
     const shouldSendAttachments =
       attachedFiles.length > 0 &&
-      (!trimmedStart.startsWith('/') || trimmedStart === '/avatargen' || trimmedStart.startsWith('/avatargen '))
+      (
+        !trimmedStart.startsWith('/') ||
+        trimmedStart === '/avatargen' ||
+        trimmedStart.startsWith('/avatargen ') ||
+        trimmedStart === '/video' ||
+        trimmedStart.startsWith('/video ') ||
+        trimmedStart === '/seedance' ||
+        trimmedStart.startsWith('/seedance ')
+      )
     const payload = {
       line,
       ...(shouldSendAttachments ? { attachments: attachedFiles } : {}),
@@ -2581,6 +2598,9 @@ async function bootstrap(): Promise<void> {
       console.warn('[liveui] 拍照失败:', msg.data?.error)
     } else if (msg.type === 'VISION_ATTACHMENT_CLEAR') {
       clearConfirmedPhotoUi(false)
+    } else if (msg.type === 'ATTACHMENT_CLEAR') {
+      attachedFiles = []
+      renderAttachments()
     } else if (msg.type === 'AUDIO_CHUNK') {
       if (!minimalMode && ttsEnabled && msg.data) enqueueAudioChunk(msg.data)
     } else if (msg.type === 'AUDIO_RESET') {
@@ -2795,10 +2815,12 @@ async function bootstrap(): Promise<void> {
       startMinimalBubbleReading()
     }
     if (minimalMode) {
+      resetReal2dCompactScaleState()
       resetAudioQueue()
       exitVoiceModeForMinimal()
       userLineInput?.focus()
     } else {
+      resetReal2dCompactScaleState()
       maybeAutoStartAsr()
     }
   }

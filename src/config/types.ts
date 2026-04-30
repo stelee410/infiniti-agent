@@ -91,6 +91,8 @@ export type ImageProfile = {
   quality?: 'auto' | 'high' | 'medium' | 'low'
   /** Whether to request `background: "transparent"` when the upstream supports it. */
   transparentBackground?: boolean
+  /** Whether to send GPT Image `input_fidelity` on edit requests. Off by default for proxy compatibility. */
+  inputFidelity?: 'high' | 'low'
   /** Single image generation timeout in milliseconds. */
   timeoutMs?: number
 }

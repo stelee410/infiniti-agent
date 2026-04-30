@@ -190,6 +190,7 @@ function defaultImageProfile(provider: string, current: JsonObj = {}): JsonObj {
       imageSize: text(current.imageSize) || '1024x1536',
       quality: text(current.quality) || 'high',
       transparentBackground: current.transparentBackground === true,
+      inputFidelity: text(current.inputFidelity),
       timeoutMs: typeof current.timeoutMs === 'number' ? current.timeoutMs : 120000,
     }
   }
@@ -654,6 +655,7 @@ export function initConfigPanel(opts: ConfigPanelOptions): {
           field('Image Size', input(text(p.imageSize || '1024x1536'), (v) => { p.imageSize = v })),
           field('Quality', select(text(p.quality || 'high'), [['high', 'high'], ['medium', 'medium'], ['auto', 'auto'], ['low', 'low']], (v) => { p.quality = v })),
           field('Transparent Background', select(p.transparentBackground ? 'true' : 'false', [['false', 'Disabled'], ['true', 'Enabled']], (v) => { p.transparentBackground = v === 'true' })),
+          field('Input Fidelity', select(text(p.inputFidelity || ''), [['', 'Disabled'], ['high', 'high'], ['low', 'low']], (v) => { if (v) p.inputFidelity = v; else delete p.inputFidelity })),
           field('Timeout ms', input(num(p.timeoutMs, '120000'), (v) => { p.timeoutMs = Number(v) }, 'number')),
         )
       } else {
