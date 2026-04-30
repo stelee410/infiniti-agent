@@ -4,6 +4,7 @@ import {
   parseQueuedMediaCommand,
   queuedMediaEmptyPromptMessage,
   queuedMediaNotice,
+  runQueuedMediaCommand,
   type QueuedMediaLiveUi,
 } from './queuedMediaCommand.js'
 import type { PersistedMessage } from '../llm/persisted.js'
@@ -39,6 +40,66 @@ describe('parseQueuedMediaCommand', () => {
     expect(queuedMediaNotice('avatargen')).toContain('AvatarGen')
     expect(queuedMediaNotice('video')).toContain('Seedance')
     expect(queuedMediaNotice('snap')).toContain('图片任务')
+  })
+})
+
+describe('runQueuedMediaCommand', () => {
+  function runner(overrides: Partial<Parameters<typeof runQueuedMediaCommand<string, string, string, string>>[0]> = {}) {
+    return {
+      getVision: vi.fn(() => 'vision'),
+      getFileAttachments: vi.fn(() => ['file']),
+      clearVisionAttachment: vi.fn(),
+      clearFileAttachments: vi.fn(),
+      avatarReferences: vi.fn((vision?: string, files: string[] = []) => [vision ?? 'none', ...files]),
+      videoReferences: vi.fn((vision?: string, files: string[] = []) => [vision ?? 'none', ...files]),
+      enqueueAvatar: vi.fn(async () => ({ id: 'avatar-job' })),
+      enqueueVideo: vi.fn(async () => ({ id: 'video-job' })),
+      enqueueSnap: vi.fn(async () => ({ id: 'snap-job' })),
+      polishAvatar: vi.fn(async (_prompt: string, jobId: string) => `avatar:${jobId}`),
+      polishVideo: vi.fn(async (_prompt: string, jobId: string) => `video:${jobId}`),
+      polishSnap: vi.fn(async (_prompt: string, jobId: string) => `snap:${jobId}`),
+      ...overrides,
+    }
+  }
+
+  it('routes avatar commands through avatar references and clears consumed vision', async () => {
+    const r = runner()
+    const content = await runQueuedMediaCommand({
+      command: parseQueuedMediaCommand('/avatargen portrait')!,
+      ...r,
+    })
+
+    expect(content).toBe('avatar:avatar-job')
+    expect(r.avatarReferences).toHaveBeenCalledWith('vision', ['file'])
+    expect(r.enqueueAvatar).toHaveBeenCalledWith('portrait', ['vision', 'file'])
+    expect(r.clearVisionAttachment).toHaveBeenCalled()
+    expect(r.clearFileAttachments).not.toHaveBeenCalled()
+  })
+
+  it('routes video commands and clears file attachments when no vision is used', async () => {
+    const r = runner({ getVision: vi.fn(() => undefined) })
+    const content = await runQueuedMediaCommand({
+      command: parseQueuedMediaCommand('/video sunset')!,
+      ...r,
+    })
+
+    expect(content).toBe('video:video-job')
+    expect(r.videoReferences).toHaveBeenCalledWith(undefined, ['file'])
+    expect(r.clearVisionAttachment).not.toHaveBeenCalled()
+    expect(r.clearFileAttachments).toHaveBeenCalled()
+  })
+
+  it('routes snap commands through the snap queue without consuming file attachments', async () => {
+    const r = runner()
+    const content = await runQueuedMediaCommand({
+      command: parseQueuedMediaCommand('/snap cafe')!,
+      ...r,
+    })
+
+    expect(content).toBe('snap:snap-job')
+    expect(r.getFileAttachments).not.toHaveBeenCalled()
+    expect(r.enqueueSnap).toHaveBeenCalledWith('cafe', 'vision')
+    expect(r.clearVisionAttachment).toHaveBeenCalled()
   })
 })
 
