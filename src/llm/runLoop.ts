@@ -26,6 +26,7 @@ import {
   failedToolResultJson,
   type PendingToolExecution,
 } from './toolExecutionMessages.js'
+import { OpenAiToolAccumulator } from './openAiToolAccumulator.js'
 
 const MAX_TOOL_STEPS = 48
 const DRY_RUN_SAFE_TOOLS = new Set<string>(['write_file', 'str_replace'])
@@ -712,10 +713,7 @@ async function runOpenAI(
     })
 
     let content = ''
-    const toolAcc = new Map<
-      number,
-      { id: string; name: string; arguments: string }
-    >()
+    const toolAcc = new OpenAiToolAccumulator()
 
     await withDeadline(
       (async () => {
@@ -732,22 +730,7 @@ async function runOpenAI(
           }
           if (d.tool_calls) {
             for (const tc of d.tool_calls) {
-              const i = tc.index
-              const cur = toolAcc.get(i) ?? {
-                id: '',
-                name: '',
-                arguments: '',
-              }
-              if (tc.id) {
-                cur.id = tc.id
-              }
-              if (tc.function?.name) {
-                cur.name = tc.function.name
-              }
-              if (tc.function?.arguments) {
-                cur.arguments += tc.function.arguments
-              }
-              toolAcc.set(i, cur)
+              toolAcc.add(tc)
             }
           }
         }
@@ -761,10 +744,7 @@ async function runOpenAI(
       break
     }
 
-    const sorted = [...toolAcc.entries()]
-      .sort((a, b) => a[0] - b[0])
-      .map(([, v]) => v)
-    const fnCalls = sorted.filter((v) => v.id && v.name)
+    const fnCalls = toolAcc.toToolCalls()
     agentDebug(
       'openai step',
       step,
@@ -784,15 +764,11 @@ async function runOpenAI(
     appendAssistantToolCalls(
       working,
       content.trim() ? content : null,
-      fnCalls.map((c) => ({
-        id: c.id,
-        name: c.name,
-        argumentsJson: c.arguments || '{}',
-      })),
+      fnCalls,
     )
 
     for (const c of fnCalls) {
-      const out = await dispatch(c.name, c.arguments || '{}')
+      const out = await dispatch(c.name, c.argumentsJson)
       appendToolResult(working, c, out)
     }
   }
