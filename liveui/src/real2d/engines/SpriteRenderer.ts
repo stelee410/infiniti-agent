@@ -245,7 +245,13 @@ export class SpriteRenderer implements Renderer {
     const ref = this.set.neutral;
     const refVisible = ref.visibleBounds ?? { left: 0, top: 0, width: ref.imageW, height: ref.imageH };
 
-    const refScale = Math.min(cssW / refVisible.width, cssH / refVisible.height);
+    // Leave a small headroom inside the canvas. The LiveUI shell may compact
+    // the transparent Electron window after measuring visible pixels; if the
+    // sprite is fit flush to y=0, mid-range zooms can clip hair at the canvas
+    // edge before the window-fit loop has room to recover.
+    const topSafePx = Math.max(16, Math.round(cssH * 0.035));
+    const fitH = Math.max(1, cssH - topSafePx);
+    const refScale = Math.min(cssW / refVisible.width, fitH / refVisible.height);
     const refOX = (cssW - refVisible.width * refScale) / 2 - refVisible.left * refScale;
     const refOY = cssH - refVisible.height * refScale - refVisible.top * refScale;
     const refFC = ref.headPose.faceCenter;
