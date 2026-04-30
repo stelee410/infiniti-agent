@@ -27,6 +27,7 @@ import {
   type PendingToolExecution,
 } from './toolExecutionMessages.js'
 import { OpenAiToolAccumulator } from './openAiToolAccumulator.js'
+import { extractGeminiResponseParts } from './geminiResponseParts.js'
 
 const MAX_TOOL_STEPS = 48
 const DRY_RUN_SAFE_TOOLS = new Set<string>(['write_file', 'str_replace'])
@@ -931,23 +932,7 @@ async function runGemini(
     const response = await streamResult.response
     const parts = response.candidates?.[0]?.content?.parts ?? []
 
-    const textChunks: string[] = []
-    const calls: { name: string; args: Record<string, unknown> }[] = []
-
-    for (const p of parts) {
-      const part = p as { text?: string; functionCall?: { name: string; args?: Record<string, unknown> } }
-      if (part.text) {
-        textChunks.push(part.text)
-      }
-      if (part.functionCall?.name) {
-        calls.push({
-          name: part.functionCall.name,
-          args: part.functionCall.args ?? {},
-        })
-      }
-    }
-
-    const mergedText = textChunks.join('').trim() || null
+    const { mergedText, calls } = extractGeminiResponseParts(parts)
     agentDebug(
       'gemini step',
       step,
