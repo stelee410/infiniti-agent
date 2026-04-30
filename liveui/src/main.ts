@@ -44,6 +44,12 @@ import {
   base64ToArrayBuffer,
   normalizePcmAudioMeta,
 } from './ttsAudioUtils.ts'
+import {
+  canNavigateInputHistory as canNavigateHistoryValue,
+  navigateInputHistory as navigateHistoryValue,
+  parseInputHistory,
+  rememberInput,
+} from './inputHistory.ts'
 import { adaptExpression, type RendererKind } from './expressionAdapter.ts'
 import { Real2dLiveUiAdapter, type Real2dExpressionSlot } from './real2dLiveUiAdapter.ts'
 
@@ -1356,12 +1362,7 @@ async function bootstrap(): Promise<void> {
 
   const loadInputHistory = (): string[] => {
     try {
-      const raw = window.localStorage.getItem(INPUT_HISTORY_STORAGE_KEY)
-      const parsed = raw ? JSON.parse(raw) : []
-      if (!Array.isArray(parsed)) return []
-      return parsed
-        .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
-        .slice(-INPUT_HISTORY_MAX)
+      return parseInputHistory(window.localStorage.getItem(INPUT_HISTORY_STORAGE_KEY), INPUT_HISTORY_MAX)
     } catch {
       return []
     }
@@ -1379,17 +1380,14 @@ async function bootstrap(): Promise<void> {
   }
 
   const rememberInputHistory = (raw: string): void => {
-    const value = raw.trimEnd()
-    if (!value.trim()) return
-    if (inputHistory[inputHistory.length - 1] !== value) {
-      inputHistory.push(value)
-      if (inputHistory.length > INPUT_HISTORY_MAX) {
-        inputHistory = inputHistory.slice(-INPUT_HISTORY_MAX)
-      }
+    const prev = inputHistory
+    const next = rememberInput(inputHistory, raw, INPUT_HISTORY_MAX)
+    inputHistory = next.items
+    inputHistoryIndex = next.index
+    inputHistoryDraft = next.draft
+    if (inputHistory !== prev) {
       saveInputHistory()
     }
-    inputHistoryIndex = inputHistory.length
-    inputHistoryDraft = ''
   }
 
   inputHistory = loadInputHistory()
@@ -1410,22 +1408,22 @@ async function bootstrap(): Promise<void> {
   }
 
   const canNavigateInputHistory = (direction: 'up' | 'down'): boolean => {
-    if (!userLineInput || inputHistory.length === 0) return false
-    const pos = userLineInput.selectionStart ?? userLineInput.value.length
-    if (direction === 'up') return !userLineInput.value.slice(0, pos).includes('\n')
-    return !userLineInput.value.slice(pos).includes('\n')
+    if (!userLineInput) return false
+    return canNavigateHistoryValue(direction, userLineInput.value, userLineInput.selectionStart, inputHistory.length)
   }
 
   const navigateInputHistory = (direction: 'up' | 'down'): boolean => {
     if (!userLineInput || !canNavigateInputHistory(direction)) return false
-    if (inputHistoryIndex === inputHistory.length) {
-      inputHistoryDraft = userLineInput.value
-    }
-    const delta = direction === 'up' ? -1 : 1
-    const next = Math.max(0, Math.min(inputHistory.length, inputHistoryIndex + delta))
-    if (next === inputHistoryIndex) return true
-    inputHistoryIndex = next
-    setComposerValue(next === inputHistory.length ? inputHistoryDraft : inputHistory[next]!)
+    const next = navigateHistoryValue(
+      { items: inputHistory, index: inputHistoryIndex, draft: inputHistoryDraft },
+      direction,
+      userLineInput.value,
+    )
+    inputHistory = next.items
+    inputHistoryIndex = next.index
+    inputHistoryDraft = next.draft
+    if (!next.changed) return true
+    setComposerValue(next.value)
     return true
   }
 
