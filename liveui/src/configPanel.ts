@@ -1,7 +1,9 @@
+import { sendSocketMessage, type SocketLike } from './socketMessages.ts'
+
 type JsonObj = Record<string, any>
 
 type ConfigPanelOptions = {
-  socket: WebSocket
+  socket: SocketLike
   onOpenChange?: (open: boolean) => void
 }
 
@@ -720,7 +722,7 @@ export function initConfigPanel(opts: ConfigPanelOptions): {
   saveBtn?.addEventListener('click', () => {
     ensureDefaultConfigNodes(cfg, cwd)
     syncFlatLlm(cfg)
-    opts.socket.send(JSON.stringify({ type: 'CONFIG_SAVE', data: { config: cfg } }))
+    sendSocketMessage(opts.socket, 'CONFIG_SAVE', { config: cfg })
     setStatus(true, '保存中…')
   })
 
