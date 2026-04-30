@@ -65,7 +65,6 @@ import {
   configPanelLayoutAction,
   shouldApplyReal2dResizeLayout,
   shouldResetReal2dCompactScaleOnConfigClose,
-  shouldRestoreReal2dCompactScaleOnConfigClose,
   shouldRunDynamicFigureFit,
 } from './panelLayoutPolicy.ts'
 import { adaptExpression, type RendererKind } from './expressionAdapter.ts'
@@ -423,15 +422,6 @@ async function bootstrap(): Promise<void> {
   let real2dPlacementTimer: ReturnType<typeof window.setTimeout> | null = null
   let pendingReal2dCompactHeight: number | null = null
   let real2dCompactBaseStageHeight: number | null = null
-  type Real2dCompactScaleSnapshot = {
-    compactBaseStageHeight: number | null
-    layoutHeight: number
-    stageScaleCompensation: number
-    stableStageHeight: number
-    verticalOffset: number
-  }
-  let configPanelReal2dSnapshot: Real2dCompactScaleSnapshot | null = null
-  let pendingConfigPanelReal2dRestore: Real2dCompactScaleSnapshot | null = null
   let debugOverlayEnabled = false
   let debugEmotion = 'neutral'
   let debugEmotionIntensity = 0
@@ -503,27 +493,7 @@ async function bootstrap(): Promise<void> {
     }
   }
 
-  const captureReal2dCompactScaleSnapshot = (): Real2dCompactScaleSnapshot | null => {
-    if (!real2dAvatar) return null
-    return {
-      compactBaseStageHeight: real2dCompactBaseStageHeight,
-      layoutHeight: real2dLayoutHeight,
-      stageScaleCompensation: real2dAvatar.getStageScaleCompensation(),
-      stableStageHeight: real2dStableStageHeight,
-      verticalOffset: real2dAvatar.getVerticalOffset(),
-    }
-  }
-
-  const restoreReal2dCompactScaleSnapshot = (snapshot: Real2dCompactScaleSnapshot): void => {
-    pendingReal2dCompactHeight = null
-    real2dCompactBaseStageHeight = snapshot.compactBaseStageHeight
-    real2dStableStageHeight = Math.max(real2dStableStageHeight, snapshot.stableStageHeight, snapshot.layoutHeight)
-    real2dAvatar?.setStageScaleCompensation(snapshot.stageScaleCompensation)
-    real2dAvatar?.setVerticalOffset(snapshot.verticalOffset)
-  }
-
   const resetReal2dCompactScaleState = (): void => {
-    if (pendingConfigPanelReal2dRestore) return
     pendingReal2dCompactHeight = null
     real2dCompactBaseStageHeight = null
     real2dAvatar?.setStageScaleCompensation(1)
@@ -1316,19 +1286,12 @@ async function bootstrap(): Promise<void> {
     app.renderer.resize(window.innerWidth, window.innerHeight)
     if (!shouldApplyReal2dResizeLayout({
       configPanelOpen,
-      hasPendingConfigPanelRestore: pendingConfigPanelReal2dRestore != null,
     })) {
       return
     }
     if (real2dAvatar) {
       if (minimalMode) {
         resetReal2dCompactScaleState()
-      } else if (pendingConfigPanelReal2dRestore) {
-        const snapshot = pendingConfigPanelReal2dRestore
-        pendingConfigPanelReal2dRestore = null
-        applyReal2dStageLayout()
-        restoreReal2dCompactScaleSnapshot(snapshot)
-        scheduleReal2dVerticalPlacement()
       } else {
         const isReal2dCompactResize =
           pendingReal2dCompactHeight != null &&
@@ -1391,15 +1354,6 @@ async function bootstrap(): Promise<void> {
   const configPanel = initConfigPanel({
     socket,
     onOpenChange: (open, reason) => {
-      if (open) {
-        configPanelReal2dSnapshot = captureReal2dCompactScaleSnapshot()
-        pendingConfigPanelReal2dRestore = null
-      } else if (shouldRestoreReal2dCompactScaleOnConfigClose(open, reason)) {
-        pendingConfigPanelReal2dRestore = configPanelReal2dSnapshot
-      } else {
-        configPanelReal2dSnapshot = null
-        pendingConfigPanelReal2dRestore = null
-      }
       configPanelOpen = open
       document.body.classList.toggle('liveui-config-open', open)
       window.infinitiLiveUi?.setConfigPanelOpen?.(open)
@@ -1411,12 +1365,7 @@ async function bootstrap(): Promise<void> {
       if (shouldResetReal2dCompactScaleOnConfigClose(open, reason)) {
         resetReal2dCompactScaleState()
       }
-      requestAnimationFrame(() => {
-        if (pendingConfigPanelReal2dRestore) {
-          restoreReal2dCompactScaleSnapshot(pendingConfigPanelReal2dRestore)
-        }
-        refreshNormalWindowLayout()
-      })
+      requestAnimationFrame(() => refreshNormalWindowLayout())
     },
   })
 

@@ -132,10 +132,6 @@ export class Real2dLiveUiAdapter {
     this.applyContainerTransform()
   }
 
-  getStageScaleCompensation(): number {
-    return this.stageScaleCompensation
-  }
-
   getVisualBounds(): DOMRect | null {
     const canvas = this.opts.container.querySelector('canvas.avr-avatar') as HTMLCanvasElement | null
     if (!canvas) return null

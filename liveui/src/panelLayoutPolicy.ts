@@ -14,9 +14,8 @@ export function shouldRunDynamicFigureFit(state: {
 
 export function shouldApplyReal2dResizeLayout(state: {
   configPanelOpen: boolean
-  hasPendingConfigPanelRestore: boolean
 }): boolean {
-  return !state.configPanelOpen || state.hasPendingConfigPanelRestore
+  return !state.configPanelOpen
 }
 
 export function shouldResetReal2dCompactScaleOnConfigClose(
@@ -24,12 +23,5 @@ export function shouldResetReal2dCompactScaleOnConfigClose(
   reason?: ConfigPanelCloseReason,
 ): boolean {
   if (open) return false
-  return reason === undefined || reason === 'saved'
-}
-
-export function shouldRestoreReal2dCompactScaleOnConfigClose(
-  open: boolean,
-  reason?: ConfigPanelCloseReason,
-): boolean {
-  return !open && reason === 'cancel'
+  return reason === undefined || reason === 'cancel' || reason === 'saved'
 }
