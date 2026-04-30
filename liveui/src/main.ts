@@ -393,6 +393,7 @@ async function bootstrap(): Promise<void> {
   let liveModelNaturalH = 600
   let real2dLayoutHeight = 0
   let real2dLayoutWidth = 0
+  let real2dStableStageHeight = 0
   let real2dPlacementTimer: ReturnType<typeof window.setTimeout> | null = null
   let pendingReal2dCompactHeight: number | null = null
   let real2dCompactBaseStageHeight: number | null = null
@@ -440,11 +441,19 @@ async function bootstrap(): Promise<void> {
     return window.innerHeight
   }
 
+  const real2dRuntimeStageHeight = (): number => {
+    const current = real2dStageHeight()
+    if (!minimalMode) {
+      real2dStableStageHeight = Math.max(real2dStableStageHeight, current)
+    }
+    return Math.max(current, real2dStableStageHeight || current)
+  }
+
   const applyReal2dStageLayout = (resizeRuntime = true): void => {
     const stage = document.getElementById('liveui-real2d-stage') as HTMLElement | null
     if (!stage) return
     const nextWidth = window.innerWidth
-    const nextHeight = real2dStageHeight()
+    const nextHeight = real2dRuntimeStageHeight()
     stage.style.left = '0'
     stage.style.right = '0'
     stage.style.top = '0'
