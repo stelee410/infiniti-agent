@@ -394,6 +394,8 @@ async function bootstrap(): Promise<void> {
   let real2dLayoutHeight = 0
   let real2dLayoutWidth = 0
   let real2dPlacementTimer: ReturnType<typeof window.setTimeout> | null = null
+  let pendingReal2dCompactHeight: number | null = null
+  let real2dCompactBaseStageHeight: number | null = null
   let debugOverlayEnabled = false
   let debugEmotion = 'neutral'
   let debugEmotionIntensity = 0
@@ -648,10 +650,14 @@ async function bootstrap(): Promise<void> {
         const barHeight = bar ? Math.ceil(bar.getBoundingClientRect().height) : 120
         const minH = Math.max(360, barHeight + 220)
         const topGoal = 10
-        const shrink = Math.max(0, Math.floor(b.top - topGoal))
-        const nextH = Math.max(minH, Math.min(1000, window.innerHeight - shrink))
-        if (Math.abs(nextH - window.innerHeight) < 10) return
+        const topDelta = Math.floor(b.top - topGoal)
+        const nextH = Math.max(minH, Math.min(1000, window.innerHeight - topDelta))
+        if (Math.abs(nextH - window.innerHeight) < 6) return
         try {
+          if (real2dAvatar) {
+            pendingReal2dCompactHeight = nextH
+            real2dCompactBaseStageHeight ??= real2dLayoutHeight || real2dStageHeight()
+          }
           c(nextH)
           if (attempt < 6) {
             window.setTimeout(() => scheduleCompactWindowHeight(attempt + 1), 220)
@@ -1232,7 +1238,18 @@ async function bootstrap(): Promise<void> {
   window.addEventListener('resize', () => {
     app.renderer.resize(window.innerWidth, window.innerHeight)
     if (real2dAvatar) {
+      const isReal2dCompactResize =
+        pendingReal2dCompactHeight != null &&
+        Math.abs(window.innerHeight - pendingReal2dCompactHeight) <= 4
+      if (isReal2dCompactResize) pendingReal2dCompactHeight = null
       applyReal2dStageLayout()
+      if (isReal2dCompactResize && real2dLayoutHeight > 0) {
+        const baseHeight = real2dCompactBaseStageHeight ?? real2dLayoutHeight
+        real2dAvatar.setStageScaleCompensation(baseHeight / real2dLayoutHeight)
+      } else {
+        real2dCompactBaseStageHeight = null
+        real2dAvatar.setStageScaleCompensation(1)
+      }
       scheduleReal2dVerticalPlacement()
     }
     layoutFigureInStage()

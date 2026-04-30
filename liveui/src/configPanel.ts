@@ -10,12 +10,12 @@ const tabs = [
   ['liveUi', 'LiveUI'],
   ['tts', 'TTS'],
   ['asr', 'ASR'],
-  ['avatarGen', 'AvatarGen'],
-  ['snap', 'Snap'],
+  ['image', 'Image'],
   ['seedance', 'Seedance'],
 ] as const
 
 const llmProviders = ['anthropic', 'openai', 'gemini', 'minimax', 'openrouter']
+const imageProviders = ['gpt-image-2', 'nano-banana']
 const ttsProviders = ['', 'mimo', 'voxcpm', 'moss_tts_nano', 'minimax', 'whisper']
 const mimoTtsModels = ['mimo-v2.5-tts-voiceclone', 'mimo-v2.5-tts-voicedesign', 'mimo-v2.5-tts', 'mimo-v2-tts']
 
@@ -180,6 +180,61 @@ function ensureLlmProfiles(cfg: JsonObj): Record<string, JsonObj> {
   return cfg.llm.profiles
 }
 
+function defaultImageProfile(provider: string, current: JsonObj = {}): JsonObj {
+  if (provider === 'gpt-image-2') {
+    return {
+      provider,
+      baseUrl: text(current.baseUrl) || 'https://api.openai.com/v1',
+      apiKey: text(current.apiKey),
+      model: text(current.model) || 'gpt-image-2',
+      imageSize: text(current.imageSize) || '1024x1536',
+      quality: text(current.quality) || 'high',
+      transparentBackground: current.transparentBackground === true,
+      timeoutMs: typeof current.timeoutMs === 'number' ? current.timeoutMs : 120000,
+    }
+  }
+  return {
+    provider: 'nano-banana',
+    baseUrl: text(current.baseUrl) || 'https://openrouter.ai/api/v1',
+    apiKey: text(current.apiKey),
+    model: text(current.model) || 'google/gemini-3-pro-image-preview',
+    aspectRatio: text(current.aspectRatio) || '2:3',
+    imageSize: text(current.imageSize),
+    quality: text(current.quality),
+    timeoutMs: typeof current.timeoutMs === 'number' ? current.timeoutMs : 120000,
+  }
+}
+
+function ensureImageProfiles(cfg: JsonObj): Record<string, JsonObj> {
+  cfg.image ??= {}
+  if (!cfg.image.profiles || typeof cfg.image.profiles !== 'object') {
+    const avatarProvider = text(cfg.avatarGen?.provider) === 'chatgpt-image' ? 'gpt-image-2' : 'nano-banana'
+    const snapProvider = text(cfg.snap?.provider) === 'gpt-image-2' ? 'gpt-image-2' : 'nano-banana'
+    cfg.image.profiles = {
+      avatar: defaultImageProfile(avatarProvider, {
+        ...cfg.avatarGen,
+        provider: avatarProvider,
+      }),
+      snap: defaultImageProfile(snapProvider, {
+        ...cfg.snap,
+        provider: snapProvider,
+      }),
+    }
+    cfg.image.default = cfg.image.default || 'avatar'
+    cfg.image.avatarGenProfile ??= 'avatar'
+    cfg.image.snapProfile ??= 'snap'
+  }
+  const profiles = cfg.image.profiles as Record<string, JsonObj>
+  if (!Object.keys(profiles).length) {
+    profiles.main = defaultImageProfile('nano-banana')
+    cfg.image.default = 'main'
+  }
+  if (!cfg.image.default || !profiles[cfg.image.default]) cfg.image.default = Object.keys(profiles)[0]
+  if (!cfg.image.avatarGenProfile || !profiles[cfg.image.avatarGenProfile]) cfg.image.avatarGenProfile = cfg.image.default
+  if (!cfg.image.snapProfile || !profiles[cfg.image.snapProfile]) cfg.image.snapProfile = cfg.image.default
+  return profiles
+}
+
 function inferSharedModelsDir(cwd: string): string {
   const m = cwd.match(/^\/Users\/[^/]+\/Dev(?:\/|$)/)
   if (m) return `${m[0].replace(/\/$/, '')}/models`
@@ -214,21 +269,9 @@ function ensureDefaultConfigNodes(cfg: JsonObj, cwd: string): void {
     numThreads: 4,
   }
 
-  cfg.avatarGen ??= {
-    provider: 'gemini',
-    baseUrl: 'https://openrouter.ai/api/v1',
-    model: 'google/gemini-3-pro-image-preview',
-    aspectRatio: '2:3',
-  }
-  cfg.snap ??= {
-    provider: 'nano-banana',
-    baseUrl: 'https://openrouter.ai/api/v1',
-    model: 'google/gemini-3-pro-image-preview',
-    aspectRatio: '4:3',
-    imageSize: '',
-    quality: 'auto',
-    timeoutMs: 120000,
-  }
+  ensureImageProfiles(cfg)
+  delete cfg.avatarGen
+  delete cfg.snap
   cfg.seedance ??= {
     provider: 'volcengine',
     baseUrl: 'https://ark.cn-beijing.volces.com',
@@ -333,8 +376,7 @@ export function initConfigPanel(opts: ConfigPanelOptions): {
     else if (active === 'liveUi') renderLiveUi(content)
     else if (active === 'tts') renderTts(content)
     else if (active === 'asr') renderAsr(content)
-    else if (active === 'avatarGen') renderAvatarGen(content)
-    else if (active === 'snap') renderSnap(content)
+    else if (active === 'image') renderImage(content)
     else renderSeedance(content)
   }
 
@@ -566,55 +608,84 @@ export function initConfigPanel(opts: ConfigPanelOptions): {
     root.append(section)
   }
 
-  const renderAvatarGen = (root: HTMLElement): void => {
-    cfg.avatarGen ??= {}
-    const a = cfg.avatarGen
+  const renderImage = (root: HTMLElement): void => {
     const section = el('section', { class: 'config-section config-section--active' })
-    const grid = el('div', { class: 'config-grid' })
-    grid.append(
-      field('Provider', select(text(a.provider || 'gemini'), [['gemini', 'gemini'], ['chatgpt-image', 'chatgpt-image']], (v) => { a.provider = v })),
-      field('Base URL', input(text(a.baseUrl), (v) => { a.baseUrl = v })),
-      field('API Key', input(text(a.apiKey), (v) => { a.apiKey = v }, 'password')),
-      field('Model', input(text(a.model), (v) => { a.model = v })),
-      field('Aspect Ratio', input(text(a.aspectRatio), (v) => { a.aspectRatio = v })),
-      field('Image Size', input(text(a.imageSize), (v) => { a.imageSize = v })),
-    )
-    section.append(grid)
-    root.append(section)
-  }
-
-  const renderSnap = (root: HTMLElement): void => {
-    cfg.snap ??= {}
-    const s = cfg.snap
-    const provider = text(s.provider || 'nano-banana')
-    const section = el('section', { class: 'config-section config-section--active' })
-    const grid = el('div', { class: 'config-grid' })
-    grid.append(
-      field('Provider', select(provider, [['nano-banana', 'nano-banana'], ['gpt-image-2', 'gpt-image-2']], (v) => {
-        const prevBase = text(s.baseUrl)
-        const prevModel = text(s.model)
-        s.provider = v
-        if (v === 'nano-banana') {
-          if (!prevBase || prevBase === 'https://api.openai.com/v1') s.baseUrl = 'https://openrouter.ai/api/v1'
-          if (!prevModel || prevModel === 'gpt-image-2') s.model = 'google/gemini-3-pro-image-preview'
-          s.aspectRatio ||= '4:3'
-        } else {
-          if (!prevBase || prevBase === 'https://openrouter.ai/api/v1') s.baseUrl = 'https://api.openai.com/v1'
-          if (!prevModel || prevModel === 'google/gemini-3-pro-image-preview') s.model = 'gpt-image-2'
-          s.imageSize ||= '1024x1024'
-          s.quality ||= 'auto'
+    const profiles = ensureImageProfiles(cfg)
+    const names = Object.keys(profiles)
+    section.append(field('Default image provider profile', select(String(cfg.image.default || names[0]), names.map((n) => [n, n]), (v) => {
+      cfg.image.default = v
+      rerender()
+    })))
+    section.append(field('AvatarGen image profile', select(String(cfg.image.avatarGenProfile || cfg.image.default || names[0]), names.map((n) => [n, n]), (v) => {
+      cfg.image.avatarGenProfile = v
+      rerender()
+    })))
+    section.append(field('Snap image profile', select(String(cfg.image.snapProfile || cfg.image.default || names[0]), names.map((n) => [n, n]), (v) => {
+      cfg.image.snapProfile = v
+      rerender()
+    })))
+    const list = el('div', { class: 'config-list config-span-2' })
+    for (const name of names) {
+      const p = profiles[name]
+      const provider = text(p.provider || 'nano-banana')
+      const card = el('div', { class: 'config-card config-grid' })
+      card.append(
+        field('名称', commitInput(name, (v) => {
+          const next = v.trim()
+          if (!next || next === name || profiles[next]) return
+          profiles[next] = profiles[name]
+          delete profiles[name]
+          if (cfg.image.default === name) cfg.image.default = next
+          if (cfg.image.avatarGenProfile === name) cfg.image.avatarGenProfile = next
+          if (cfg.image.snapProfile === name) cfg.image.snapProfile = next
+          rerender()
+        })),
+        field('Provider', select(provider, imageProviders.map((x) => [x, x]), (v) => {
+          Object.assign(p, defaultImageProfile(v, p))
+          p.provider = v
+          rerender()
+        })),
+        field('Base URL', input(text(p.baseUrl), (v) => { p.baseUrl = v })),
+        field('API Key', input(text(p.apiKey), (v) => { p.apiKey = v }, 'password')),
+        field('Model', input(text(p.model), (v) => { p.model = v })),
+      )
+      if (provider === 'gpt-image-2') {
+        card.append(
+          field('Image Size', input(text(p.imageSize || '1024x1536'), (v) => { p.imageSize = v })),
+          field('Quality', select(text(p.quality || 'high'), [['high', 'high'], ['medium', 'medium'], ['auto', 'auto'], ['low', 'low']], (v) => { p.quality = v })),
+          field('Transparent Background', select(p.transparentBackground ? 'true' : 'false', [['false', 'Disabled'], ['true', 'Enabled']], (v) => { p.transparentBackground = v === 'true' })),
+          field('Timeout ms', input(num(p.timeoutMs, '120000'), (v) => { p.timeoutMs = Number(v) }, 'number')),
+        )
+      } else {
+        card.append(
+          field('Aspect Ratio', input(text(p.aspectRatio || '2:3'), (v) => { p.aspectRatio = v })),
+          field('Image Size', input(text(p.imageSize), (v) => { p.imageSize = v })),
+          field('Quality', select(text(p.quality || ''), [['', 'default'], ['auto', 'auto'], ['high', 'high'], ['medium', 'medium'], ['low', 'low']], (v) => { if (v) p.quality = v; else delete p.quality })),
+          field('Timeout ms', input(num(p.timeoutMs, '120000'), (v) => { p.timeoutMs = Number(v) }, 'number')),
+        )
+      }
+      const del = button('删除', () => {
+        if (Object.keys(profiles).length <= 1) {
+          setStatus(false, '至少保留一个 Image provider')
+          return
         }
+        delete profiles[name]
+        const first = Object.keys(profiles)[0]
+        if (cfg.image.default === name) cfg.image.default = first
+        if (cfg.image.avatarGenProfile === name) cfg.image.avatarGenProfile = first
+        if (cfg.image.snapProfile === name) cfg.image.snapProfile = first
         rerender()
-      })),
-      field('Base URL', input(text(s.baseUrl), (v) => { s.baseUrl = v })),
-      field('API Key', input(text(s.apiKey), (v) => { s.apiKey = v }, 'password')),
-      field('Model', input(text(s.model), (v) => { s.model = v })),
-      field('Aspect Ratio', input(text(s.aspectRatio), (v) => { s.aspectRatio = v })),
-      field('Image Size', input(text(s.imageSize), (v) => { s.imageSize = v })),
-      field('Quality', select(text(s.quality || 'auto'), [['auto', 'auto'], ['high', 'high'], ['medium', 'medium'], ['low', 'low']], (v) => { s.quality = v })),
-      field('Timeout ms', input(num(s.timeoutMs, '120000'), (v) => { s.timeoutMs = Number(v) }, 'number')),
-    )
-    section.append(grid)
+      })
+      card.append(el('div', { class: 'config-row config-span-2' }, [del]))
+      list.append(card)
+    }
+    section.append(list)
+    section.append(button('添加 Image provider', () => {
+      let i = Object.keys(profiles).length + 1
+      while (profiles[`image${i}`]) i++
+      profiles[`image${i}`] = defaultImageProfile('nano-banana')
+      rerender()
+    }))
     root.append(section)
   }
 

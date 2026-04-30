@@ -4,10 +4,11 @@ import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import sharp from 'sharp'
 import type { InfinitiConfig } from '../config/types.js'
-import { resolveLlmProfile } from '../config/types.js'
 import type { LiveUiFileAttachment, LiveUiVisionAttachment } from '../liveui/protocol.js'
 import { localInboxDir } from '../paths.js'
 import { transparentizeStudioBackgroundPng } from './transparentizePngBackground.js'
+import { openRouterGenerateImageBuffer } from './openRouterImageGen.js'
+import { resolveAvatarGenImageProfile, type ResolvedImageProfile } from '../image/resolveImageProfile.js'
 
 export type AvatarGenReferenceImage = {
   mediaType: 'image/jpeg' | 'image/png' | 'image/webp'
@@ -18,20 +19,10 @@ export type AvatarGenReferenceImage = {
 export type Real2dAvatarGenResult = {
   dir: string
   files: Array<{ name: string; path: string; bytes: number; hasAlpha: boolean }>
-  provider: 'chatgpt-image'
-  model: 'gpt-image-2'
+  provider: ResolvedImageProfile['provider']
+  model: string
 }
 
-type AvatarGenAuth = {
-  provider: 'chatgpt-image'
-  baseUrl: string
-  apiKey: string
-  model: 'gpt-image-2'
-  imageSize?: string
-}
-
-const DEFAULT_OPENAI_IMAGE_BASE_URL = 'https://api.openai.com/v1'
-const DEFAULT_GPT_IMAGE_MODEL = 'gpt-image-2'
 const DEFAULT_TIMEOUT_MS = 120_000
 
 const TARGETS = [
@@ -72,14 +63,6 @@ const TARGETS = [
   },
 ] as const
 
-function pickFirstNonEmpty(...vals: Array<string | undefined | null>): string {
-  for (const v of vals) {
-    const t = (v ?? '').trim()
-    if (t) return t
-  }
-  return ''
-}
-
 async function appendAvatarGenLog(cwd: string, line: string): Promise<void> {
   try {
     await mkdir(join(cwd, '.infiniti-agent'), { recursive: true })
@@ -89,37 +72,8 @@ async function appendAvatarGenLog(cwd: string, line: string): Promise<void> {
   }
 }
 
-export function resolveReal2dAvatarGenAuth(cfg: InfinitiConfig): AvatarGenAuth {
-  const ag = cfg.avatarGen
-  const envModel = process.env.INFINITI_AVATAR_GEN_MODEL?.trim()
-  const provider = ag?.provider
-  const model = pickFirstNonEmpty(ag?.model, envModel, provider === 'chatgpt-image' ? DEFAULT_GPT_IMAGE_MODEL : undefined)
-
-  if (provider !== 'chatgpt-image' || model !== DEFAULT_GPT_IMAGE_MODEL) {
-    throw new Error(
-      '当前 AvatarGen 不是 GPT-Image2 设置，real2d 表情集生成暂时不能使用。请把 avatarGen.provider 设为 chatgpt-image，并把 avatarGen.model 设为 gpt-image-2。',
-    )
-  }
-
-  const prof = resolveLlmProfile(cfg)
-  const apiKey = pickFirstNonEmpty(
-    ag?.apiKey,
-    process.env.INFINITI_OPENAI_IMAGE_API_KEY,
-    process.env.OPENAI_API_KEY,
-    prof.provider === 'openai' ? prof.apiKey : undefined,
-    cfg.llm.provider === 'openai' ? cfg.llm.apiKey : undefined,
-  )
-  if (!apiKey) {
-    throw new Error('缺少 OpenAI 图像 API Key：请在 avatarGen.apiKey、INFINITI_OPENAI_IMAGE_API_KEY 或 OPENAI_API_KEY 中配置')
-  }
-
-  return {
-    provider: 'chatgpt-image',
-    baseUrl: ag?.baseUrl?.trim() || DEFAULT_OPENAI_IMAGE_BASE_URL,
-    apiKey,
-    model: DEFAULT_GPT_IMAGE_MODEL,
-    ...(ag?.imageSize?.trim() ? { imageSize: ag.imageSize.trim() } : {}),
-  }
+export function resolveReal2dAvatarGenAuth(cfg: InfinitiConfig): ResolvedImageProfile {
+  return resolveAvatarGenImageProfile(cfg)
 }
 
 export function avatarGenReferenceImagesFromLiveInputs(
@@ -150,16 +104,28 @@ export function avatarGenReferenceImagesFromLiveInputs(
   return out.slice(0, 4)
 }
 
-function buildPrompt(userPrompt: string, target: typeof TARGETS[number], hasReference: boolean): string {
+function backgroundPrompt(auth: ResolvedImageProfile): string {
+  return auth.transparentBackground
+    ? [
+        'transparent background, no backdrop, no white canvas.',
+        'The output must be a PNG with a true alpha-transparent background. Do not create a white, black, gray, gradient, studio, paper, canvas, checkerboard, or any visible background.',
+      ].join(' ')
+    : [
+        'pure solid white background, clean white studio backdrop.',
+        'Use a flat white background specifically for post-processing cutout. Do not create scenery, texture, paper, canvas, checkerboard, props, text, borders, or shadows touching the image border.',
+      ].join(' ')
+}
+
+function buildPrompt(userPrompt: string, target: typeof TARGETS[number], hasReference: boolean, auth: ResolvedImageProfile): string {
   const extra = userPrompt.trim()
   const referenceRules = hasReference
     ? [
-        'Using the provided transparent-background PNG avatar as the reference image, preserve the exact same character identity, hairstyle, outfit, body pose, camera angle, lighting, crop, scale, and transparent background.',
+        `Using the provided avatar as the reference image, preserve the exact same character identity, hairstyle, outfit, body pose, camera angle, lighting, crop, and scale. ${auth.transparentBackground ? 'Preserve or create a transparent background.' : 'Place the character on a pure solid white background.'}`,
         '',
         'Modify only the facial expression or mouth shape according to the target description below.',
       ]
     : [
-        'Generate one front-facing transparent-background PNG avatar sprite from the user instruction below.',
+        'Generate one front-facing PNG avatar sprite from the user instruction below.',
         'Create a centered upper-body or bust portrait suitable for a Real2D avatar sprite.',
         'Use a consistent character identity, hairstyle, outfit, body pose, camera angle, lighting, crop, and scale that can be reused for all expression variants.',
       ]
@@ -167,7 +133,8 @@ function buildPrompt(userPrompt: string, target: typeof TARGETS[number], hasRefe
   return [
     ...referenceRules,
     '',
-    'The output must be a PNG with a true alpha-transparent background. Do not create a white, black, gray, gradient, studio, or checkerboard background. Do not add props, text, shadows, scenery, borders, or extra objects. Keep the character centered and consistent.',
+    backgroundPrompt(auth),
+    'Do not add props, text, scenery, borders, or extra objects. Keep the character centered and consistent.',
     '',
     `Target file: ${target.name}`,
     `Target expression: ${target.prompt}`,
@@ -198,16 +165,34 @@ async function ensureTransparentBackground(cwd: string, name: string, buf: Buffe
 }
 
 async function generateOne(
-  client: OpenAI,
-  auth: AvatarGenAuth,
+  client: OpenAI | null,
+  auth: ResolvedImageProfile,
   refs: AvatarGenReferenceImage[],
   prompt: string,
 ): Promise<Buffer> {
+  if (auth.provider !== 'gpt-image-2') {
+    return await openRouterGenerateImageBuffer({
+      baseUrl: auth.baseUrl,
+      apiKey: auth.apiKey,
+      model: auth.model,
+      prompt,
+      referenceImages: refs.map((r) => ({ mimeType: r.mediaType, base64: r.base64 })),
+      modalities: ['image', 'text'],
+      aspectRatio: auth.aspectRatio ?? '2:3',
+      ...(auth.imageSize ? { imageSize: auth.imageSize } : {}),
+      ...(auth.quality ? { quality: auth.quality } : {}),
+      transparentBackground: auth.transparentBackground,
+      timeoutMs: auth.timeoutMs,
+    })
+  }
+  if (!client) throw new Error('OpenAI client missing')
   const resp = await client.images.edit({
     model: auth.model,
     prompt,
     n: 1,
     size: auth.imageSize ?? '1024x1536',
+    quality: auth.quality,
+    ...(auth.transparentBackground ? { background: 'transparent' } : {}),
     output_format: 'png',
     image: await Promise.all(
       refs.map((r, idx) =>
@@ -215,7 +200,7 @@ async function generateOne(
       ),
     ),
     input_fidelity: 'high',
-  } as never, { timeout: DEFAULT_TIMEOUT_MS })
+  } as never, { timeout: auth.timeoutMs || DEFAULT_TIMEOUT_MS })
 
   const first = (resp as { data?: Array<{ b64_json?: string; url?: string }> }).data?.[0]
   if (!first) throw new Error('OpenAI 图像响应为空')
@@ -231,17 +216,34 @@ async function generateOne(
 }
 
 async function generateBaseWithoutReference(
-  client: OpenAI,
-  auth: AvatarGenAuth,
+  client: OpenAI | null,
+  auth: ResolvedImageProfile,
   prompt: string,
 ): Promise<Buffer> {
+  if (auth.provider !== 'gpt-image-2') {
+    return await openRouterGenerateImageBuffer({
+      baseUrl: auth.baseUrl,
+      apiKey: auth.apiKey,
+      model: auth.model,
+      prompt,
+      modalities: ['image', 'text'],
+      aspectRatio: auth.aspectRatio ?? '2:3',
+      ...(auth.imageSize ? { imageSize: auth.imageSize } : {}),
+      ...(auth.quality ? { quality: auth.quality } : {}),
+      transparentBackground: auth.transparentBackground,
+      timeoutMs: auth.timeoutMs,
+    })
+  }
+  if (!client) throw new Error('OpenAI client missing')
   const resp = await client.images.generate({
     model: auth.model,
     prompt,
     n: 1,
     size: auth.imageSize ?? '1024x1536',
+    quality: auth.quality,
+    ...(auth.transparentBackground ? { background: 'transparent' } : {}),
     output_format: 'png',
-  } as never, { timeout: DEFAULT_TIMEOUT_MS })
+  } as never, { timeout: auth.timeoutMs || DEFAULT_TIMEOUT_MS })
 
   const first = (resp as { data?: Array<{ b64_json?: string; url?: string }> }).data?.[0]
   if (!first) throw new Error('OpenAI 图像响应为空')
@@ -270,13 +272,15 @@ export async function generateReal2dAvatarSet(
     `infiniti-agent-avatargen-real2d-${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID().slice(0, 8)}`,
   )
   await mkdir(outDir, { recursive: true })
-  await appendAvatarGenLog(cwd, `start model=${auth.model} refs=${referenceImages.length} out=${outDir}`)
+  await appendAvatarGenLog(cwd, `start provider=${auth.provider} model=${auth.model} refs=${referenceImages.length} transparentBackground=${auth.transparentBackground} out=${outDir}`)
 
-  const client = new OpenAI({ apiKey: auth.apiKey, baseURL: auth.baseUrl, timeout: DEFAULT_TIMEOUT_MS })
+  const client = auth.provider === 'gpt-image-2'
+    ? new OpenAI({ apiKey: auth.apiKey, baseURL: auth.baseUrl, timeout: auth.timeoutMs || DEFAULT_TIMEOUT_MS })
+    : null
   const files: Real2dAvatarGenResult['files'] = []
   let refs = referenceImages
   for (const target of TARGETS) {
-    const prompt = buildPrompt(userPrompt, target, refs.length > 0)
+    const prompt = buildPrompt(userPrompt, target, refs.length > 0, auth)
     const rawBuf = refs.length
       ? await generateOne(client, auth, refs, prompt)
       : await generateBaseWithoutReference(client, auth, prompt)
@@ -292,5 +296,5 @@ export async function generateReal2dAvatarSet(
   }
 
   await appendAvatarGenLog(cwd, `ok out=${outDir}`)
-  return { dir: outDir, files, provider: 'chatgpt-image', model: DEFAULT_GPT_IMAGE_MODEL }
+  return { dir: outDir, files, provider: auth.provider, model: auth.model }
 }

@@ -7,6 +7,8 @@ import type {
   AsrConfig,
   AvatarGenConfig,
   CompactionConfig,
+  ImageConfig,
+  ImageProfile,
   InfinitiConfig,
   LiveUiConfig,
   LlmProfile,
@@ -139,6 +141,7 @@ export async function loadConfig(cwd?: string): Promise<InfinitiConfig> {
   const liveUi = parseLiveUiConfig(o.liveUi)
   const tts = parseTtsConfig(o.tts)
   const asr = parseAsrConfig(o.asr)
+  const image = parseImageConfig(o.image)
   const avatarGen = parseAvatarGenConfig(o.avatarGen)
   const snap = parseSnapImageConfig(o.snap)
   const seedance = parseSeedanceVideoConfig(o.seedance)
@@ -174,6 +177,7 @@ export async function loadConfig(cwd?: string): Promise<InfinitiConfig> {
     ...(liveUi ? { liveUi } : {}),
     ...(tts ? { tts } : {}),
     ...(asr ? { asr } : {}),
+    ...(image ? { image } : {}),
     ...(avatarGen ? { avatarGen } : {}),
     ...(snap ? { snap } : {}),
     ...(seedance ? { seedance } : {}),
@@ -190,12 +194,15 @@ function parseAvatarGenConfig(raw: unknown): AvatarGenConfig | undefined {
   if (!raw || typeof raw !== 'object') return undefined
   const u = raw as Record<string, unknown>
   const out: AvatarGenConfig = {}
+  if (typeof u.imageProfile === 'string' && u.imageProfile.trim()) out.imageProfile = u.imageProfile.trim()
   if (u.provider === 'gemini' || u.provider === 'chatgpt-image') out.provider = u.provider
   if (typeof u.baseUrl === 'string' && u.baseUrl.trim()) out.baseUrl = u.baseUrl.trim()
   if (typeof u.apiKey === 'string' && u.apiKey.trim()) out.apiKey = u.apiKey.trim()
   if (typeof u.model === 'string' && u.model.trim()) out.model = u.model.trim()
   if (typeof u.aspectRatio === 'string' && u.aspectRatio.trim()) out.aspectRatio = u.aspectRatio.trim()
   if (typeof u.imageSize === 'string' && u.imageSize.trim()) out.imageSize = u.imageSize.trim()
+  if (u.quality === 'auto' || u.quality === 'high' || u.quality === 'medium' || u.quality === 'low') out.quality = u.quality
+  if (typeof u.transparentBackground === 'boolean') out.transparentBackground = u.transparentBackground
   return Object.keys(out).length ? out : undefined
 }
 
@@ -203,6 +210,7 @@ function parseSnapImageConfig(raw: unknown): SnapImageConfig | undefined {
   if (!raw || typeof raw !== 'object') return undefined
   const u = raw as Record<string, unknown>
   const out: SnapImageConfig = {}
+  if (typeof u.imageProfile === 'string' && u.imageProfile.trim()) out.imageProfile = u.imageProfile.trim()
   if (u.provider === 'nano-banana' || u.provider === 'gpt-image-2') out.provider = u.provider
   if (typeof u.baseUrl === 'string' && u.baseUrl.trim()) out.baseUrl = u.baseUrl.trim()
   if (typeof u.apiKey === 'string' && u.apiKey.trim()) out.apiKey = u.apiKey.trim()
@@ -215,6 +223,47 @@ function parseSnapImageConfig(raw: unknown): SnapImageConfig | undefined {
   if (typeof u.timeoutMs === 'number' && Number.isFinite(u.timeoutMs) && u.timeoutMs >= 5000) {
     out.timeoutMs = Math.floor(u.timeoutMs)
   }
+  return Object.keys(out).length ? out : undefined
+}
+
+function parseImageProfile(raw: unknown): ImageProfile | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const u = raw as Record<string, unknown>
+  const provider = u.provider
+  if (provider !== 'gpt-image-2' && provider !== 'nano-banana') return undefined
+  const baseUrl = typeof u.baseUrl === 'string' ? u.baseUrl.trim() : ''
+  const apiKey = typeof u.apiKey === 'string' ? u.apiKey.trim() : ''
+  const model = typeof u.model === 'string' ? u.model.trim() : ''
+  if (!baseUrl || !model) return undefined
+  const out: ImageProfile = { provider, baseUrl, model }
+  if (apiKey) out.apiKey = apiKey
+  if (typeof u.aspectRatio === 'string' && u.aspectRatio.trim()) out.aspectRatio = u.aspectRatio.trim()
+  if (typeof u.imageSize === 'string' && u.imageSize.trim()) out.imageSize = u.imageSize.trim()
+  if (u.quality === 'auto' || u.quality === 'high' || u.quality === 'medium' || u.quality === 'low') out.quality = u.quality
+  if (typeof u.transparentBackground === 'boolean') out.transparentBackground = u.transparentBackground
+  if (typeof u.timeoutMs === 'number' && Number.isFinite(u.timeoutMs) && u.timeoutMs >= 5000) {
+    out.timeoutMs = Math.floor(u.timeoutMs)
+  }
+  return out
+}
+
+function parseImageConfig(raw: unknown): ImageConfig | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const u = raw as Record<string, unknown>
+  const profilesRaw = u.profiles
+  const profiles: Record<string, ImageProfile> = {}
+  if (profilesRaw && typeof profilesRaw === 'object') {
+    for (const [name, value] of Object.entries(profilesRaw as Record<string, unknown>)) {
+      const n = name.trim()
+      const p = parseImageProfile(value)
+      if (n && p) profiles[n] = p
+    }
+  }
+  const out: ImageConfig = {}
+  if (typeof u.default === 'string' && u.default.trim()) out.default = u.default.trim()
+  if (typeof u.avatarGenProfile === 'string' && u.avatarGenProfile.trim()) out.avatarGenProfile = u.avatarGenProfile.trim()
+  if (typeof u.snapProfile === 'string' && u.snapProfile.trim()) out.snapProfile = u.snapProfile.trim()
+  if (Object.keys(profiles).length) out.profiles = profiles
   return Object.keys(out).length ? out : undefined
 }
 
@@ -521,8 +570,7 @@ export async function saveConfig(input: SaveConfigInput): Promise<void> {
     ...(existing?.liveUi ? { liveUi: existing.liveUi } : {}),
     ...(existing?.tts ? { tts: existing.tts } : {}),
     ...(existing?.asr ? { asr: existing.asr } : {}),
-    ...(existing?.avatarGen ? { avatarGen: existing.avatarGen } : {}),
-    ...(existing?.snap ? { snap: existing.snap } : {}),
+    ...(existing?.image ? { image: existing.image } : {}),
     ...(existing?.seedance ? { seedance: existing.seedance } : {}),
   }
   const target = GLOBAL_CONFIG_PATH

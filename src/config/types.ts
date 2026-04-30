@@ -76,11 +76,36 @@ export type LiveUiSpriteExpressionsConfig = {
   manifest?: string
 }
 
-/**
- * `generate_avatar` 等使用的 OpenRouter 兼容图像 API（Nano Banana / Gemini Flash Image 等）。
- * `apiKey` 优先级：`avatarGen.apiKey` → 环境变量 `INFINITI_OPENROUTER_API_KEY` / `OPENROUTER_API_KEY` → 当前默认 LLM profile 的 `apiKey`。
- */
+export type ImageProvider = 'gpt-image-2' | 'nano-banana'
+
+export type ImageProfile = {
+  provider: ImageProvider
+  baseUrl: string
+  apiKey?: string
+  model: string
+  /** OpenRouter image_config.aspect_ratio, e.g. 16:9 / 4:3 / 1:1. */
+  aspectRatio?: string
+  /** OpenRouter image_size or OpenAI size, e.g. auto / 1024x1024 / 1536x1024 / 1024x1536. */
+  imageSize?: string
+  /** OpenAI GPT Image quality. For transparent backgrounds, medium/high are more reliable. */
+  quality?: 'auto' | 'high' | 'medium' | 'low'
+  /** Whether to request `background: "transparent"` when the upstream supports it. */
+  transparentBackground?: boolean
+  /** Single image generation timeout in milliseconds. */
+  timeoutMs?: number
+}
+
+export type ImageConfig = {
+  default?: string
+  avatarGenProfile?: string
+  snapProfile?: string
+  profiles?: Record<string, ImageProfile>
+}
+
+/** Legacy AvatarGen image config. New configs should use `image.avatarGenProfile` + `image.profiles`. */
 export type AvatarGenConfig = {
+  /** Preferred image provider profile name from `image.profiles`. Legacy direct fields below are still supported. */
+  imageProfile?: string
   provider?: 'gemini' | 'chatgpt-image'
   baseUrl?: string
   apiKey?: string
@@ -88,10 +113,16 @@ export type AvatarGenConfig = {
   model?: string
   aspectRatio?: string
   imageSize?: string
+  /** OpenAI GPT Image quality. For transparent backgrounds, medium/high are more reliable; AvatarGen defaults to high. */
+  quality?: 'auto' | 'high' | 'medium' | 'low'
+  /** Whether to send `background: "transparent"` to GPT Image APIs. Disabled by default for New API compatibility. */
+  transparentBackground?: boolean
 }
 
-/** `/snap <提示词>` 合照 / 写实照片生成。 */
+/** Legacy `/snap` image config. New configs should use `image.snapProfile` + `image.profiles`. */
 export type SnapImageConfig = {
+  /** Preferred image provider profile name from `image.profiles`. Legacy direct fields below are still supported. */
+  imageProfile?: string
   /** `nano-banana` 走 OpenRouter 图像模型；`gpt-image-2` 走 OpenAI Images API。 */
   provider?: 'nano-banana' | 'gpt-image-2'
   baseUrl?: string
@@ -231,7 +262,10 @@ export type InfinitiConfig = {
   liveUi?: LiveUiConfig
   tts?: TtsConfig
   asr?: AsrConfig
+  image?: ImageConfig
+  /** Legacy field kept for reading old config files; new config writes image.avatarGenProfile. */
   avatarGen?: AvatarGenConfig
+  /** Legacy field kept for reading old config files; new config writes image.snapProfile. */
   snap?: SnapImageConfig
   seedance?: SeedanceVideoConfig
 }

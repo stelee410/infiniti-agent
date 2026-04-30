@@ -3,11 +3,11 @@ import { existsSync } from 'node:fs'
 import { appendFile, mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { extname, join, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import type { InfinitiConfig, SnapImageConfig } from '../config/types.js'
-import { resolveLlmProfile } from '../config/types.js'
+import type { InfinitiConfig } from '../config/types.js'
 import type { LiveUiVisionAttachment } from '../liveui/protocol.js'
 import { openRouterGenerateImageBuffer, type OpenRouterRefImage } from '../avatar/openRouterImageGen.js'
 import { localInboxDir } from '../paths.js'
+import { resolveSnapImageProfile, type ResolvedImageProfile } from '../image/resolveImageProfile.js'
 
 type RefImage = {
   role: 'user' | 'agent'
@@ -17,18 +17,12 @@ type RefImage = {
 
 export type SnapGenerateResult = {
   path: string
-  provider: 'nano-banana' | 'gpt-image-2'
+  provider: ResolvedImageProfile['provider']
   model: string
   bytes: number
   usedUserPhoto: boolean
   usedAgentReference: boolean
 }
-
-const DEFAULT_OPENROUTER = 'https://openrouter.ai/api/v1'
-const DEFAULT_NANO_BANANA_MODEL = 'google/gemini-3-pro-image-preview'
-const DEFAULT_OPENAI_IMAGE_BASE_URL = 'https://api.openai.com/v1'
-const DEFAULT_GPT_IMAGE_MODEL = 'gpt-image-2'
-const DEFAULT_TIMEOUT_MS = 120_000
 
 async function appendSnapLog(cwd: string, line: string): Promise<void> {
   try {
@@ -37,14 +31,6 @@ async function appendSnapLog(cwd: string, line: string): Promise<void> {
   } catch {
     /* diagnostics must not break generation */
   }
-}
-
-function pickFirstNonEmpty(...vals: Array<string | undefined | null>): string {
-  for (const v of vals) {
-    const t = (v ?? '').trim()
-    if (t) return t
-  }
-  return ''
 }
 
 function mimeForPath(p: string): 'image/jpeg' | 'image/png' | 'image/webp' | 'application/octet-stream' {
@@ -108,53 +94,6 @@ function userVisionToRef(vision?: LiveUiVisionAttachment): RefImage | null {
   }
 }
 
-function resolveSnapConfig(cfg: InfinitiConfig): Required<Pick<SnapImageConfig, 'provider' | 'baseUrl' | 'model'>> &
-  Omit<SnapImageConfig, 'provider' | 'baseUrl' | 'model'> & { apiKey: string } {
-  const snap = cfg.snap ?? {}
-  const provider = snap.provider ?? 'nano-banana'
-  const prof = resolveLlmProfile(cfg)
-
-  if (provider === 'gpt-image-2') {
-    const apiKey = pickFirstNonEmpty(
-      snap.apiKey,
-      process.env.INFINITI_OPENAI_IMAGE_API_KEY,
-      process.env.OPENAI_API_KEY,
-      prof.provider === 'openai' ? prof.apiKey : undefined,
-      cfg.llm.provider === 'openai' ? cfg.llm.apiKey : undefined,
-    )
-    if (!apiKey) throw new Error('缺少 OpenAI 图像 API Key：请在 snap.apiKey 或 OPENAI_API_KEY 中配置')
-    return {
-      provider,
-      baseUrl: snap.baseUrl?.trim() || DEFAULT_OPENAI_IMAGE_BASE_URL,
-      apiKey,
-      model: snap.model?.trim() || DEFAULT_GPT_IMAGE_MODEL,
-      ...(snap.imageSize?.trim() ? { imageSize: snap.imageSize.trim() } : { imageSize: '1024x1024' }),
-      ...(snap.quality ? { quality: snap.quality } : { quality: 'auto' }),
-      ...(snap.aspectRatio?.trim() ? { aspectRatio: snap.aspectRatio.trim() } : {}),
-      timeoutMs: snap.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-    }
-  }
-
-  const apiKey = pickFirstNonEmpty(
-    snap.apiKey,
-    process.env.INFINITI_OPENROUTER_API_KEY,
-    process.env.OPENROUTER_API_KEY,
-    prof.provider === 'openrouter' ? prof.apiKey : undefined,
-    cfg.llm.provider === 'openrouter' ? cfg.llm.apiKey : undefined,
-  )
-  if (!apiKey) throw new Error('缺少 OpenRouter API Key：请在 snap.apiKey、OPENROUTER_API_KEY 或 OpenRouter LLM profile 中配置')
-  return {
-    provider,
-    baseUrl: snap.baseUrl?.trim() || DEFAULT_OPENROUTER,
-    apiKey,
-    model: snap.model?.trim() || DEFAULT_NANO_BANANA_MODEL,
-    ...(snap.aspectRatio?.trim() ? { aspectRatio: snap.aspectRatio.trim() } : { aspectRatio: '4:3' }),
-    ...(snap.imageSize?.trim() ? { imageSize: snap.imageSize.trim() } : {}),
-    ...(snap.quality ? { quality: snap.quality } : {}),
-    timeoutMs: snap.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-  }
-}
-
 function buildSnapPrompt(userPrompt: string, refs: RefImage[]): string {
   const hasUser = refs.some((r) => r.role === 'user')
   const hasAgent = refs.some((r) => r.role === 'agent')
@@ -170,7 +109,7 @@ function buildSnapPrompt(userPrompt: string, refs: RefImage[]): string {
   return `${base}\n\nUser prompt: ${userPrompt.trim()}`
 }
 
-async function generateWithOpenRouter(auth: ReturnType<typeof resolveSnapConfig>, prompt: string, refs: RefImage[]): Promise<Buffer> {
+async function generateWithOpenRouter(auth: ResolvedImageProfile, prompt: string, refs: RefImage[]): Promise<Buffer> {
   const referenceImages: OpenRouterRefImage[] = refs.map((r) => ({
     mimeType: r.mimeType,
     base64: r.buffer.toString('base64'),
@@ -184,11 +123,13 @@ async function generateWithOpenRouter(auth: ReturnType<typeof resolveSnapConfig>
     modalities: ['image', 'text'],
     ...(auth.aspectRatio ? { aspectRatio: auth.aspectRatio } : {}),
     ...(auth.imageSize ? { imageSize: auth.imageSize } : {}),
+    ...(auth.quality ? { quality: auth.quality } : {}),
+    transparentBackground: auth.transparentBackground,
     timeoutMs: auth.timeoutMs,
   })
 }
 
-async function generateWithOpenAI(auth: ReturnType<typeof resolveSnapConfig>, prompt: string, refs: RefImage[]): Promise<Buffer> {
+async function generateWithOpenAI(auth: ResolvedImageProfile, prompt: string, refs: RefImage[]): Promise<Buffer> {
   const client = new OpenAI({ apiKey: auth.apiKey, baseURL: auth.baseUrl, timeout: auth.timeoutMs })
   const common = {
     model: auth.model,
@@ -196,6 +137,7 @@ async function generateWithOpenAI(auth: ReturnType<typeof resolveSnapConfig>, pr
     n: 1,
     ...(auth.imageSize ? { size: auth.imageSize } : {}),
     ...(auth.quality ? { quality: auth.quality } : {}),
+    ...(auth.transparentBackground ? { background: 'transparent' } : {}),
     output_format: 'png',
   }
   const resp = refs.length
@@ -232,7 +174,7 @@ export async function generateSnapPhoto(
   const promptText = userPrompt.trim()
   if (!promptText) throw new Error('/snap 后请输入提示词，例如：/snap 在咖啡馆自拍，暖色灯光')
 
-  const auth = resolveSnapConfig(cfg)
+  const auth = resolveSnapImageProfile(cfg)
   const refs = [userVisionToRef(userVision), await loadAgentReference(cwd, cfg)].filter((x): x is RefImage => x != null)
   const prompt = buildSnapPrompt(promptText, refs)
   await appendSnapLog(
