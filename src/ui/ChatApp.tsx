@@ -16,14 +16,10 @@ import {
   buildLiveUiExpressionNudgeFromManifest,
   tryReadSpriteExpressionManifestSync,
 } from '../liveui/spriteExpressionManifest.js'
-import { compactSessionMessages } from '../llm/compactSession.js'
-import { resolvedCompactionSettings } from '../llm/compactionSettings.js'
-import { estimateMessagesTokens } from '../llm/estimateTokens.js'
 import { runToolLoop } from '../llm/runLoop.js'
 import type { PersistedMessage } from '../llm/persisted.js'
 import { oneShotTextCompletion } from '../llm/oneShotCompletion.js'
 import { saveSession, loadSession } from '../session/file.js'
-import { archiveSession } from '../session/archive.js'
 import { localInboxDir, localSkillsDir } from '../paths.js'
 import type { McpManager } from '../mcp/manager.js'
 import { loadConfig, saveProjectConfig } from '../config/io.js'
@@ -86,6 +82,7 @@ import {
   handleSpeakSlashCommand,
   handleUndoSlashCommand,
 } from './chatCommandHandlers.js'
+import { maybeStartAutoCompaction } from './chatAutoCompaction.js'
 
 /**
  * Live 下 TTS 用的「干净正文」：与流式 onTextDelta 一致，先 `processAssistantStreamChunk` 得 `displayText`
@@ -849,54 +846,20 @@ export function ChatApp({
       const userLine = raw
 
       let baseMessages = messages
-      const cs = resolvedCompactionSettings(config)
-      if (
-        cs.autoThresholdTokens > 0 &&
-        estimateMessagesTokens(baseMessages) >= cs.autoThresholdTokens
-      ) {
-        setCompacting(true)
-        setNotice('历史较长，正在自动压缩上下文（非流式）…')
-        try {
-          const compactPromise = subconsciousRef.current
-            ? subconsciousRef.current.compactSessionAsync({
-                messages: baseMessages,
-                minTailMessages: cs.minTailMessages,
-                maxToolSnippetChars: cs.maxToolSnippetChars,
-                preCompactHook: cs.preCompactHook,
-              })
-            : (async () => {
-                if (baseMessages.length > 0) await archiveSession(cwd, baseMessages).catch(() => {})
-                const next = await compactSessionMessages({
-                  config,
-                  cwd,
-                  messages: baseMessages,
-                  minTailMessages: cs.minTailMessages,
-                  maxToolSnippetChars: cs.maxToolSnippetChars,
-                  preCompactHook: cs.preCompactHook,
-                })
-                await saveSession(cwd, next)
-                return next
-              })()
-          void compactPromise
-            .then((next) => {
-              setMessages(next)
-              setNotice('已自动后台压缩上下文')
-              setTimeout(() => setNotice(null), 5000)
-            })
-            .catch((e: unknown) => {
-              setError(formatChatError(e))
-              setNotice(null)
-            })
-            .finally(() => setCompacting(false))
-          setNotice('历史较长，已提交后台压缩；本轮继续使用当前上下文…')
-        } catch (e: unknown) {
-          setError(formatChatError(e))
-          setNotice(null)
-          setCompacting(false)
-          setBusy(false)
-          return
-        }
-      }
+      maybeStartAutoCompaction({
+        cwd,
+        config,
+        messages: baseMessages,
+        controller: subconsciousRef.current,
+        ui: {
+          setCompacting,
+          setNotice,
+          setError,
+          setBusy,
+          setMessages,
+          clearNoticeLater: (ms) => setTimeout(() => setNotice(null), ms),
+        },
+      })
 
       const turnVision = vision ?? liveUi?.consumePendingVisionAttachment()
       const turnAttachments = liveUi?.consumePendingFileAttachments() ?? []
