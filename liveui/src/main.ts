@@ -56,6 +56,11 @@ import {
   slashMenuWindow,
   type SlashRow,
 } from './slashMenuModel.ts'
+import {
+  describeCameraError,
+  photoDataUrl,
+  scaledCaptureSize,
+} from './cameraUtils.ts'
 import { adaptExpression, type RendererKind } from './expressionAdapter.ts'
 import { Real2dLiveUiAdapter, type Real2dExpressionSlot } from './real2dLiveUiAdapter.ts'
 
@@ -1534,32 +1539,6 @@ async function bootstrap(): Promise<void> {
     })
   }
 
-  const describeCameraError = (e: unknown): string => {
-    if (e === undefined) return 'thrown value is undefined'
-    if (e === null) return 'thrown value is null'
-    const maybe = e as { name?: unknown; message?: unknown; stack?: unknown }
-    const name = typeof maybe?.name === 'string' ? maybe.name : ''
-    const message = typeof maybe?.message === 'string' ? maybe.message : ''
-    const stack = typeof maybe?.stack === 'string' ? maybe.stack : ''
-    const friendly =
-      name === 'NotAllowedError' || name === 'SecurityError'
-        ? '摄像头权限被系统拒绝'
-        : name === 'NotFoundError' || name === 'DevicesNotFoundError'
-          ? '没有找到可用摄像头'
-          : name === 'NotReadableError' || name === 'TrackStartError'
-            ? '摄像头被其他应用占用'
-            : ''
-    const parts = [friendly, name, message, stack].filter(Boolean)
-    if (parts.length) return parts.join(' | ')
-    try {
-      const json = JSON.stringify(e)
-      if (json && json !== '{}') return `${Object.prototype.toString.call(e)} ${json}`
-    } catch {
-      /* ignore */
-    }
-    return String(e)
-  }
-
   const stopMediaStream = (stream: MediaStream): void => {
     for (const track of stream.getTracks()) {
       try {
@@ -1618,10 +1597,7 @@ async function bootstrap(): Promise<void> {
     srcH: number,
     location: LiveUiVisionAttachment['location'] | undefined,
   ): LiveUiVisionAttachment => {
-    const maxSide = 640
-    const scale = Math.min(1, maxSide / Math.max(srcW, srcH))
-    const w = Math.max(1, Math.round(srcW * scale))
-    const h = Math.max(1, Math.round(srcH * scale))
+    const { width: w, height: h } = scaledCaptureSize(srcW, srcH)
     const canvasEl = document.createElement('canvas')
     canvasEl.width = w
     canvasEl.height = h
@@ -2943,9 +2919,6 @@ async function bootstrap(): Promise<void> {
   const cameraFlash = document.getElementById('liveui-camera-flash') as HTMLElement | null
   const attachmentList = document.getElementById('liveui-attachment-list')
   const CAMERA_COUNTDOWN_CAPTURE_DELAY_MS = 3 * 720 + 120
-
-  const photoDataUrl = (vision: LiveUiVisionAttachment): string =>
-    `data:${vision.mediaType};base64,${vision.imageBase64}`
 
   const readBlobBase64 = (blob: Blob): Promise<string> =>
     new Promise((resolve, reject) => {
