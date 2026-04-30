@@ -7,12 +7,6 @@ import {
   type StreamLiveUiState,
 } from '../../src/liveui/emotionParse.ts'
 import type { LiveUiStatusVariant, LiveUiVisionAttachment } from '../../src/liveui/protocol.ts'
-import type { LiveUiVoiceMicWire } from '../../src/liveui/voiceMicEnv.ts'
-import {
-  VOICE_MIC_DEFAULT_SILENCE_END_MS,
-  VOICE_MIC_DEFAULT_SPEECH_RMS_THRESHOLD,
-  VOICE_MIC_DEFAULT_SUPPRESS_INTERRUPT_DURING_TTS,
-} from '../../src/liveui/voiceMicEnv.ts'
 import { renderLiveUiBubbleMarkdown } from './bubbleMarkdown.ts'
 import { ReconnectingWebSocket } from './reconnectingWebSocket.ts'
 import { isSocketOpen, sendSocketMessage } from './socketMessages.ts'
@@ -40,6 +34,11 @@ import {
   attachmentMediaType,
   shouldReadAttachmentText,
 } from './attachmentUtils.ts'
+import {
+  VAD_FFT_SIZE,
+  computeVadFrame as computeVadFrameFromSamples,
+  resolveVoiceMicWire,
+} from './voiceMicUtils.ts'
 import { adaptExpression, type RendererKind } from './expressionAdapter.ts'
 import { Real2dLiveUiAdapter, type Real2dExpressionSlot } from './real2dLiveUiAdapter.ts'
 
@@ -2671,33 +2670,7 @@ async function bootstrap(): Promise<void> {
   })
 
   // ── 麦克风按钮：默认按住空格说话；`infiniti-agent live --auto` 使用连续 VAD 模式 ──
-  const resolveVoiceMicWire = (): LiveUiVoiceMicWire => {
-    const vm = window.infinitiLiveUi?.voiceMic
-    const speech =
-      typeof vm?.speechRmsThreshold === 'number' &&
-      Number.isFinite(vm.speechRmsThreshold) &&
-      vm.speechRmsThreshold > 0
-        ? Math.min(0.35, Math.max(0.001, vm.speechRmsThreshold))
-        : VOICE_MIC_DEFAULT_SPEECH_RMS_THRESHOLD
-    const silence =
-      typeof vm?.silenceEndMs === 'number' && Number.isFinite(vm.silenceEndMs)
-        ? Math.min(12000, Math.max(200, Math.round(vm.silenceEndMs)))
-        : VOICE_MIC_DEFAULT_SILENCE_END_MS
-    const suppress =
-      vm?.suppressInterruptDuringTts === false
-        ? false
-        : VOICE_MIC_DEFAULT_SUPPRESS_INTERRUPT_DURING_TTS
-    const mode = vm?.mode === 'auto' ? 'auto' : 'push_to_talk'
-    return {
-      speechRmsThreshold: speech,
-      silenceEndMs: silence,
-      suppressInterruptDuringTts: suppress,
-      mode,
-      ttsAutoEnabled: vm?.ttsAutoEnabled !== false,
-      asrAutoEnabled: vm?.asrAutoEnabled === true,
-    }
-  }
-  const voiceMic = resolveVoiceMicWire()
+  const voiceMic = resolveVoiceMicWire(window.infinitiLiveUi?.voiceMic)
   const voiceMicAuto = voiceMic.mode === 'auto'
   /** 已进入说话段后略低于 speech 门限，避免字间弱音被当成静音 */
   const vadRmsRelease = Math.max(0.004, Math.min(voiceMic.speechRmsThreshold * 0.48, voiceMic.speechRmsThreshold - 1e-6))
@@ -2746,26 +2719,11 @@ async function bootstrap(): Promise<void> {
     if (micIconRecording) micIconRecording.style.display = recordingNow ? '' : 'none'
   }
 
-  /** 须与 AnalyserNode.fftSize 一致，否则 getFloatTimeDomainData 行为未定义 */
-  const VAD_FFT_SIZE = 512
   const vadTimeDomain = new Float32Array(VAD_FFT_SIZE)
   const vadFreqBytes = new Uint8Array(VAD_FFT_SIZE / 2)
 
-  /** 人声大致集中频段（Hz），用于相对全带的能量占比 */
-  const VAD_SPEECH_FMIN = 300
-  const VAD_SPEECH_FMAX = 3400
-  /** 频段能量占全带比例下限：过低多为低频轰鸣或高频嘶声 */
-  const VAD_MIN_SPEECH_BAND_RATIO = 0.33
-  /**
-   * 语音带内频谱平坦度上限（几何均值/算术均值）。
-   * 接近 1 多为宽带噪声；人声有共振峰，通常更低。
-   */
-  const VAD_MAX_SPEECH_FLATNESS = 0.62
   /** 安静时语音带能量 EMA；用于简易「相对噪声底」判别 */
   let vadNoiseSpeechBandEma = 1e-10
-  const VAD_NOISE_EMA = 0.06
-  /** 当前帧语音带功率相对噪声底的最小倍数（线性） */
-  const VAD_MIN_SPEECH_TO_NOISE = 2.0
 
   /**
    * 单帧：时域 RMS + 频谱人声特征（频段占比、平坦度、相对噪声底）。
@@ -2775,57 +2733,18 @@ async function bootstrap(): Promise<void> {
     if (!micAnalyser || !micAudioCtx) return { rms: 0, spectralOk: false }
 
     micAnalyser.getFloatTimeDomainData(vadTimeDomain)
-    let sumSq = 0
-    for (let i = 0; i < vadTimeDomain.length; i++) {
-      const s = vadTimeDomain[i]!
-      sumSq += s * s
-    }
-    const rms = Math.sqrt(sumSq / vadTimeDomain.length)
-
-    const sr = micAudioCtx.sampleRate
     const n = micAnalyser.frequencyBinCount
-    if (vadFreqBytes.length < n) return { rms, spectralOk: false }
+    if (vadFreqBytes.length < n) return { rms: 0, spectralOk: false }
     micAnalyser.getByteFrequencyData(vadFreqBytes.subarray(0, n))
-
-    const binFromHz = (hz: number) => Math.floor((hz * VAD_FFT_SIZE) / sr)
-    const start = Math.max(1, binFromHz(VAD_SPEECH_FMIN))
-    const end = Math.min(n - 1, binFromHz(VAD_SPEECH_FMAX))
-    if (end <= start) return { rms, spectralOk: true }
-
-    let totalPow = 0
-    for (let i = 1; i < n; i++) {
-      const v = vadFreqBytes[i]! / 255
-      totalPow += v * v
-    }
-    if (totalPow < 1e-8) return { rms, spectralOk: false }
-
-    let speechPow = 0
-    let logSum = 0
-    const bandBins = end - start + 1
-    for (let i = start; i <= end; i++) {
-      const v = vadFreqBytes[i]! / 255
-      const p = v * v + 1e-12
-      speechPow += p
-      logSum += Math.log(p)
-    }
-    const amean = speechPow / bandBins
-    const gmean = Math.exp(logSum / bandBins)
-    const flatness = amean > 0 ? gmean / amean : 1
-    if (!Number.isFinite(flatness)) return { rms, spectralOk: false }
-
-    const bandRatio = speechPow / totalPow
-    const ratioOk = bandRatio >= VAD_MIN_SPEECH_BAND_RATIO
-    const flatOk = flatness <= VAD_MAX_SPEECH_FLATNESS
-
-    if (rms < voiceMic.speechRmsThreshold * 0.55) {
-      vadNoiseSpeechBandEma =
-        (1 - VAD_NOISE_EMA) * vadNoiseSpeechBandEma + VAD_NOISE_EMA * speechPow
-    }
-    const snrOk =
-      speechPow >= VAD_MIN_SPEECH_TO_NOISE * vadNoiseSpeechBandEma ||
-      vadNoiseSpeechBandEma < 1e-6
-
-    return { rms, spectralOk: ratioOk && flatOk && snrOk }
+    const frame = computeVadFrameFromSamples({
+      timeDomain: vadTimeDomain,
+      freqBytes: vadFreqBytes.subarray(0, n),
+      sampleRate: micAudioCtx.sampleRate,
+      speechRmsThreshold: voiceMic.speechRmsThreshold,
+      noiseSpeechBandEma: vadNoiseSpeechBandEma,
+    })
+    vadNoiseSpeechBandEma = frame.noiseSpeechBandEma
+    return { rms: frame.rms, spectralOk: frame.spectralOk }
   }
 
   const sendRecordedAudio = (): void => {
