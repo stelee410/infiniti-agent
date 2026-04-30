@@ -14,6 +14,8 @@ import {
   VOICE_MIC_DEFAULT_SUPPRESS_INTERRUPT_DURING_TTS,
 } from '../../src/liveui/voiceMicEnv.ts'
 import { renderLiveUiBubbleMarkdown } from './bubbleMarkdown.ts'
+import { ReconnectingWebSocket } from './reconnectingWebSocket.ts'
+import { isSocketOpen, sendSocketMessage } from './socketMessages.ts'
 import { FIGURE_LAYOUT } from './figureLayoutConfig.ts'
 import {
   HIT_BODY_RE,
@@ -1313,7 +1315,7 @@ async function bootstrap(): Promise<void> {
 
   const port = readPort()
   const wsUrl = `ws://127.0.0.1:${port}`
-  const socket = new WebSocket(wsUrl)
+  const socket = new ReconnectingWebSocket(wsUrl)
   let configPanelOpen = false
   const configPanel = initConfigPanel({
     socket,
@@ -1444,11 +1446,11 @@ async function bootstrap(): Promise<void> {
       ev.stopPropagation()
       const defaultPath = attachment.path.split(/[\\/]/).pop() || filenameFromPath(attachment.path)
       const dest = await window.infinitiLiveUi?.savePath?.({ defaultPath })
-      if (dest && socket.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({
-          type: 'INBOX_SAVE_AS',
-          data: { sourcePath: attachment.path, destinationPath: dest },
-        }))
+      if (dest) {
+        sendSocketMessage(socket, 'INBOX_SAVE_AS', {
+          sourcePath: attachment.path,
+          destinationPath: dest,
+        })
       }
     })
     actions.appendChild(saveBtn)
@@ -1540,9 +1542,7 @@ async function bootstrap(): Promise<void> {
     const ids = unreadInboxItems.map((m) => m.id)
     if (ids.length === 0) return
     inboxMarkTimer = window.setTimeout(() => {
-      if (socket.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({ type: 'INBOX_MARK_READ', data: { ids } }))
-      }
+      sendSocketMessage(socket, 'INBOX_MARK_READ', { ids })
     }, 1500)
   }
 
@@ -1615,8 +1615,8 @@ async function bootstrap(): Promise<void> {
   inputHistoryIndex = inputHistory.length
 
   const pushComposerDraft = (): void => {
-    if (socket.readyState !== WebSocket.OPEN || !userLineInput) return
-    socket.send(JSON.stringify({ type: 'USER_COMPOSER', data: { text: userLineInput.value } }))
+    if (!userLineInput) return
+    sendSocketMessage(socket, 'USER_COMPOSER', { text: userLineInput.value })
   }
 
   const setComposerValue = (value: string): void => {
@@ -1720,8 +1720,7 @@ async function bootstrap(): Promise<void> {
 
   const sendLiveUiInteraction = (kind: 'head_pat' | 'body_poke'): void => {
     touchConvActivity()
-    if (socket.readyState !== WebSocket.OPEN) return
-    socket.send(JSON.stringify({ type: 'LIVEUI_INTERACTION', data: { kind } }))
+    sendSocketMessage(socket, 'LIVEUI_INTERACTION', { kind })
   }
 
   let cameraCapturing = false
@@ -2045,7 +2044,6 @@ async function bootstrap(): Promise<void> {
 
   const sendUserCommand = (line: string): void => {
     touchConvActivity()
-    if (socket.readyState !== WebSocket.OPEN) return
     const trimmedStart = line.trimStart()
     const shouldSendAttachments =
       attachedFiles.length > 0 &&
@@ -2062,7 +2060,7 @@ async function bootstrap(): Promise<void> {
       line,
       ...(shouldSendAttachments ? { attachments: attachedFiles } : {}),
     }
-    socket.send(JSON.stringify({ type: 'USER_INPUT', data: payload }))
+    if (!sendSocketMessage(socket, 'USER_INPUT', payload)) return
     if ((attachedPhotoVision || attachedFiles.length) && !trimmedStart.startsWith('/')) {
       clearConfirmedPhotoUi(false)
       attachedFiles = []
@@ -2717,7 +2715,7 @@ async function bootstrap(): Promise<void> {
     ev.preventDefault()
     const v = userLineInput.value.trimEnd()
     if (!v.trim()) return
-    if (socket.readyState !== WebSocket.OPEN) return
+    if (!isSocketOpen(socket)) return
     touchConvActivity()
     rememberInputHistory(v)
     void sendUserCommand(v)
@@ -2769,9 +2767,7 @@ async function bootstrap(): Promise<void> {
     if (!ttsAvailable) return
     ttsEnabled = !ttsEnabled
     updateSpeakerBtn()
-    if (socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({ type: 'TTS_TOGGLE', data: { enabled: ttsEnabled } }))
-    }
+    sendSocketMessage(socket, 'TTS_TOGGLE', { enabled: ttsEnabled })
     if (!ttsEnabled) resetAudioQueue()
   })
 
@@ -3070,9 +3066,9 @@ async function bootstrap(): Promise<void> {
     const reader = new FileReader()
     reader.onloadend = () => {
       const base64 = (reader.result as string).split(',')[1]
-      if (base64 && socket.readyState === WebSocket.OPEN) {
+      if (base64 && isSocketOpen(socket)) {
         console.debug(`[liveui] 发送录音: ${blob.size} bytes`)
-        socket.send(JSON.stringify({ type: 'MIC_AUDIO', data: { audioBase64: base64, format: 'webm' } }))
+        sendSocketMessage(socket, 'MIC_AUDIO', { audioBase64: base64, format: 'webm' })
       }
     }
     reader.readAsDataURL(blob)
@@ -3123,9 +3119,7 @@ async function bootstrap(): Promise<void> {
     if (!voiceMode || voiceMicAuto || pttRecording || !micStream) return
     if (llmBusy && !interruptSent) {
       interruptSent = true
-      if (socket.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({ type: 'INTERRUPT' }))
-      }
+      sendSocketMessage(socket, 'INTERRUPT')
       resetAudioQueue()
     }
     if (!startSegmentRecording()) return
@@ -3153,9 +3147,7 @@ async function bootstrap(): Promise<void> {
     if (llmBusy && !interruptSent && !blockInterruptForTtsPlayback && rmsStart && spectralOk) {
       interruptSent = true
       console.debug('[liveui] 检测到语音打断，发送 INTERRUPT')
-      if (socket.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({ type: 'INTERRUPT' }))
-      }
+      sendSocketMessage(socket, 'INTERRUPT')
       resetAudioQueue()
     }
 
@@ -3456,8 +3448,8 @@ async function bootstrap(): Promise<void> {
     attachBtn?.classList.remove('liveui-attach-btn--has-photo')
     attachBtn?.setAttribute('title', '附件')
     renderAttachments()
-    if (notifyServer && socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({ type: 'VISION_ATTACHMENT_CLEAR', data: {} }))
+    if (notifyServer) {
+      sendSocketMessage(socket, 'VISION_ATTACHMENT_CLEAR', {})
     }
   }
 
@@ -3467,8 +3459,8 @@ async function bootstrap(): Promise<void> {
     previewPhotoVision = null
     if (photoPreview) photoPreview.hidden = true
     if (photoPreviewImg) photoPreviewImg.removeAttribute('src')
-    if (notifyServer && requestId && socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({ type: 'VISION_CAPTURE_CANCEL', data: { requestId } }))
+    if (notifyServer && requestId) {
+      sendSocketMessage(socket, 'VISION_CAPTURE_CANCEL', { requestId })
     }
   }
 
@@ -3514,9 +3506,7 @@ async function bootstrap(): Promise<void> {
     if (!previewPhotoVision || !previewPhotoRequestId) return
     const requestId = previewPhotoRequestId
     const vision = previewPhotoVision
-    if (socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({ type: 'VISION_CAPTURE_CONFIRM', data: { requestId, vision } }))
-    }
+    sendSocketMessage(socket, 'VISION_CAPTURE_CONFIRM', { requestId, vision })
     if (photoPreviewImg?.src) {
       animatePhotoIntoAttachment(photoPreviewImg, () => setAttachedPhoto(requestId, vision))
     } else {
@@ -3574,17 +3564,17 @@ async function bootstrap(): Promise<void> {
       finishCameraCaptureUi()
     }, 30_000)
     try {
-      if (socket.readyState !== WebSocket.OPEN) {
+      if (!isSocketOpen(socket)) {
         throw new Error('LiveUI WebSocket 未连接，无法请求 CLI 摄像头拍照')
       }
       window.infinitiLiveUi?.setCameraCaptureOpen?.(true)
       layoutFigureInStage()
       positionBubbleOverFigure()
       if (activeCameraRequestId !== requestId) return
-      socket.send(JSON.stringify({
-        type: 'VISION_CAPTURE_REQUEST',
-        data: { requestId, captureDelayMs: CAMERA_COUNTDOWN_CAPTURE_DELAY_MS },
-      }))
+      sendSocketMessage(socket, 'VISION_CAPTURE_REQUEST', {
+        requestId,
+        captureDelayMs: CAMERA_COUNTDOWN_CAPTURE_DELAY_MS,
+      })
       await runCameraCountdown()
     } catch (e) {
       console.warn(`[liveui] 拍照失败: ${describeCameraError(e)}`)
