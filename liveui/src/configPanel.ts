@@ -16,8 +16,10 @@ import {
 
 type ConfigPanelOptions = {
   socket: SocketLike
-  onOpenChange?: (open: boolean) => void
+  onOpenChange?: (open: boolean, reason?: ConfigPanelCloseReason) => void
 }
+
+export type ConfigPanelCloseReason = 'cancel' | 'saved'
 
 const tabs = [
   ['llm', 'LLM'],
@@ -92,7 +94,7 @@ async function pickPath(kind: 'file' | 'directory', defaultPath?: string): Promi
 
 export function initConfigPanel(opts: ConfigPanelOptions): {
   open: (cwd: string, config: unknown) => void
-  close: () => void
+  close: (reason?: ConfigPanelCloseReason) => void
   setStatus: (ok: boolean, message: string) => void
 } {
   const panel = document.getElementById('liveui-config-panel') as HTMLDivElement | null
@@ -113,11 +115,11 @@ export function initConfigPanel(opts: ConfigPanelOptions): {
     statusEl.className = ok ? 'ok' : 'err'
   }
 
-  const close = (): void => {
+  const close = (reason: ConfigPanelCloseReason = 'cancel'): void => {
     if (!panel) return
     panel.hidden = true
     panel.setAttribute('aria-hidden', 'true')
-    opts.onOpenChange?.(false)
+    opts.onOpenChange?.(false, reason)
   }
 
   const open = (nextCwd: string, config: unknown): void => {
@@ -500,7 +502,7 @@ export function initConfigPanel(opts: ConfigPanelOptions): {
     root.append(section)
   }
 
-  closeBtn?.addEventListener('click', close)
+  closeBtn?.addEventListener('click', () => close('cancel'))
   saveBtn?.addEventListener('click', () => {
     ensureDefaultConfigNodes(cfg, cwd)
     syncFlatLlm(cfg)

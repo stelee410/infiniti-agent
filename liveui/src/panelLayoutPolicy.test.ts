@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   configPanelLayoutAction,
+  shouldResetReal2dCompactScaleOnConfigClose,
   shouldRunDynamicFigureFit,
 } from './panelLayoutPolicy.ts'
 
@@ -17,5 +18,13 @@ describe('panelLayoutPolicy', () => {
 
   it('still allows minimal-mode bounds sync while the panel is open', () => {
     expect(shouldRunDynamicFigureFit({ minimalMode: true, configPanelOpen: true })).toBe(true)
+  })
+
+  it('resets Real2D compact scale compensation when cancel closes the config panel', () => {
+    expect(shouldResetReal2dCompactScaleOnConfigClose(false, 'cancel')).toBe(true)
+  })
+
+  it('does not reset Real2D compact scale compensation while the config panel opens', () => {
+    expect(shouldResetReal2dCompactScaleOnConfigClose(true)).toBe(false)
   })
 })

@@ -63,6 +63,7 @@ import {
 } from './cameraUtils.ts'
 import {
   configPanelLayoutAction,
+  shouldResetReal2dCompactScaleOnConfigClose,
   shouldRunDynamicFigureFit,
 } from './panelLayoutPolicy.ts'
 import { adaptExpression, type RendererKind } from './expressionAdapter.ts'
@@ -1346,7 +1347,7 @@ async function bootstrap(): Promise<void> {
   const socket = new ReconnectingWebSocket(wsUrl)
   const configPanel = initConfigPanel({
     socket,
-    onOpenChange: (open) => {
+    onOpenChange: (open, reason) => {
       configPanelOpen = open
       document.body.classList.toggle('liveui-config-open', open)
       window.infinitiLiveUi?.setConfigPanelOpen?.(open)
@@ -1355,7 +1356,9 @@ async function bootstrap(): Promise<void> {
         cancelDynamicWindowFit()
         return
       }
-      resetReal2dCompactScaleState()
+      if (shouldResetReal2dCompactScaleOnConfigClose(open, reason)) {
+        resetReal2dCompactScaleState()
+      }
       requestAnimationFrame(() => refreshNormalWindowLayout())
     },
   })
@@ -2289,7 +2292,7 @@ async function bootstrap(): Promise<void> {
       const ok = !!msg.data?.ok
       configPanel.setStatus(ok, typeof msg.data?.message === 'string' ? msg.data.message : '')
       if (ok) {
-        configPanel.close()
+        configPanel.close('saved')
         requestAnimationFrame(() => scheduleDynamicWindowFit())
       }
     } else if (msg.type === 'VISION_CAPTURE_RESULT') {
