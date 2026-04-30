@@ -120,12 +120,7 @@ export class IdentityEngine {
 
   async detectFromImage(img: HTMLImageElement): Promise<IdentityProfile> {
     const landmarker = await getLandmarker(this.cfg);
-    if (!img.complete) {
-      await new Promise<void>((res, rej) => {
-        img.onload = () => res();
-        img.onerror = () => rej(new Error("image load failed"));
-      });
-    }
+    await waitForImage(img);
     const w = img.naturalWidth || img.width;
     const h = img.naturalHeight || img.height;
     const result = landmarker.detect(img);
@@ -146,6 +141,22 @@ export class IdentityEngine {
     const visibleBounds = measureVisibleBounds(img, w, h);
     const bitmap = await createImageBitmap(img);
 
+    return this.buildProfile(landmarks, bitmap, w, h, visibleBounds, headMatrix);
+  }
+
+  async buildProfileFromReferenceImage(
+    img: HTMLImageElement,
+    reference: IdentityProfile,
+  ): Promise<IdentityProfile> {
+    await waitForImage(img);
+    const w = img.naturalWidth || img.width;
+    const h = img.naturalHeight || img.height;
+    const sx = w / Math.max(1, reference.imageW);
+    const sy = h / Math.max(1, reference.imageH);
+    const landmarks = reference.landmarks.map((p) => ({ x: p.x * sx, y: p.y * sy }));
+    const visibleBounds = measureVisibleBounds(img, w, h);
+    const bitmap = await createImageBitmap(img);
+    const headMatrix = reference.headMatrix ? new Float32Array(reference.headMatrix) : null;
     return this.buildProfile(landmarks, bitmap, w, h, visibleBounds, headMatrix);
   }
 
@@ -310,6 +321,14 @@ export class IdentityEngine {
       center,
     };
   }
+}
+
+async function waitForImage(img: HTMLImageElement): Promise<void> {
+  if (img.complete) return;
+  await new Promise<void>((res, rej) => {
+    img.onload = () => res();
+    img.onerror = () => rej(new Error("image load failed"));
+  });
 }
 
 function measureVisibleBounds(img: HTMLImageElement, w: number, h: number): ImageBounds {

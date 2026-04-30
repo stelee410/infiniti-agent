@@ -317,7 +317,11 @@ export class AvatarRuntime {
         set[key] = await ie.detectFromImage(img);
       } catch (e) {
         this.reportError("LANDMARK_FAILED", { key, error: e });
-        throw new Error(`face detection failed on ${key}: ${(e as Error).message}`);
+        if (key === "neutral" || !set.neutral) {
+          throw new Error(`face detection failed on ${key}: ${(e as Error).message}`);
+        }
+        console.warn(`[avatar] sprite ${key} landmark fallback to neutral:`, e);
+        set[key] = await ie.buildProfileFromReferenceImage(img, set.neutral);
       }
     }
     // Phoneme test sprites — optional. Skip silently on missing file or
