@@ -50,6 +50,12 @@ import {
   parseInputHistory,
   rememberInput,
 } from './inputHistory.ts'
+import {
+  slashInsertText,
+  slashMenuHintText,
+  slashMenuWindow,
+  type SlashRow,
+} from './slashMenuModel.ts'
 import { adaptExpression, type RendererKind } from './expressionAdapter.ts'
 import { Real2dLiveUiAdapter, type Real2dExpressionSlot } from './real2dLiveUiAdapter.ts'
 
@@ -1337,7 +1343,6 @@ async function bootstrap(): Promise<void> {
   const INPUT_HISTORY_STORAGE_KEY = 'infiniti-liveui-input-history-v1'
   const INPUT_HISTORY_MAX = 100
   const SLASH_MENU_MAX_ROWS = 10
-  type SlashRow = { id: string; kind: string; label: string; desc: string; insert: string }
   let slashMenuOpenLive = false
   let slashRows: SlashRow[] = []
   let slashSel = 0
@@ -1431,8 +1436,7 @@ async function bootstrap(): Promise<void> {
     if (!userLineInput || slashRows.length === 0) return
     const item = slashRows[slashSel]
     if (!item) return
-    const ins = item.insert.endsWith(' ') ? item.insert : `${item.insert} `
-    userLineInput.value = ins
+    userLineInput.value = slashInsertText(item.insert)
     pushComposerDraft()
   }
 
@@ -1448,25 +1452,14 @@ async function bootstrap(): Promise<void> {
     slashMenuEl.setAttribute('aria-hidden', 'false')
     const total = slashRows.length
     if (slashHintEl) {
-      slashHintEl.textContent =
-        total === 0
-          ? '无匹配项，继续输入或退格'
-          : `↑↓ 选择 · Tab 写入 — 共 ${total} 项`
+      slashHintEl.textContent = slashMenuHintText(total)
     }
-    const n = slashRows.length
-    slashSel = n === 0 ? 0 : Math.max(0, Math.min(slashSel, n - 1))
-    let start = 0
-    if (total > SLASH_MENU_MAX_ROWS) {
-      start = Math.max(
-        0,
-        Math.min(slashSel - Math.floor(SLASH_MENU_MAX_ROWS / 2), total - SLASH_MENU_MAX_ROWS),
-      )
-    }
-    const visible = slashRows.slice(start, start + SLASH_MENU_MAX_ROWS)
+    const windowed = slashMenuWindow(slashRows, slashSel, SLASH_MENU_MAX_ROWS)
+    slashSel = windowed.selected
     slashListEl.replaceChildren()
-    for (let i = 0; i < visible.length; i++) {
-      const item = visible[i]!
-      const globalIdx = start + i
+    for (let i = 0; i < windowed.visible.length; i++) {
+      const item = windowed.visible[i]!
+      const globalIdx = windowed.start + i
       const row = document.createElement('li')
       row.className = `liveui-slash-row${globalIdx === slashSel ? ' liveui-slash-row--active' : ''}`
       row.setAttribute('role', 'option')
