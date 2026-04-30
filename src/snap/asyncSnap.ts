@@ -1,6 +1,5 @@
 import { spawn } from 'node:child_process'
-import { existsSync } from 'node:fs'
-import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { InfinitiConfig } from '../config/types.js'
@@ -10,8 +9,7 @@ import { localJobsDir } from '../paths.js'
 import { executeMemoryAction } from '../memory/structured.js'
 import { writeInboxMessage } from '../inbox/store.js'
 import { oneShotTextCompletion } from '../llm/oneShotCompletion.js'
-import type { PersistedMessage } from '../llm/persisted.js'
-import { loadSession, saveSession } from '../session/file.js'
+import { appendAssistantSessionMessage, appendAsyncJobLog, asyncJobFileName, currentCliWorkerInvocation } from '../jobs/asyncJob.js'
 import { generateSnapPhoto } from './generateSnap.js'
 
 export type SnapJob = {
@@ -28,38 +26,8 @@ export type EnqueuedSnapJob = {
   jobPath: string
 }
 
-function jobFileName(id: string): string {
-  return `${id}.json`
-}
-
 async function appendJobLog(cwd: string, line: string): Promise<void> {
-  try {
-    const dir = join(cwd, '.infiniti-agent')
-    await mkdir(dir, { recursive: true })
-    await appendFile(join(dir, 'snap-async.log'), `${new Date().toISOString()} ${line}\n`, 'utf8')
-  } catch {
-    /* best effort diagnostics */
-  }
-}
-
-function currentCliInvocation(cwd: string, jobPath: string): { command: string; args: string[] } {
-  const entry = process.argv[1]
-  if (!entry) {
-    return { command: 'infiniti-agent', args: ['snap-worker', jobPath] }
-  }
-  if (/\.(tsx?|mts|cts)$/i.test(entry)) {
-    const localTsx = join(cwd, 'node_modules', '.bin', process.platform === 'win32' ? 'tsx.cmd' : 'tsx')
-    return {
-      command: existsSync(localTsx) ? localTsx : 'npx',
-      args: existsSync(localTsx)
-        ? [entry, 'snap-worker', jobPath]
-        : ['tsx', entry, 'snap-worker', jobPath],
-    }
-  }
-  return {
-    command: process.execPath,
-    args: [...process.execArgv, entry, 'snap-worker', jobPath],
-  }
+  return appendAsyncJobLog(cwd, 'snap-async.log', line)
 }
 
 export async function enqueueSnapPhotoJob(
@@ -79,10 +47,10 @@ export async function enqueueSnapPhotoJob(
     createdAt: new Date().toISOString(),
     ...(userVision ? { userVision } : {}),
   }
-  const jobPath = join(dir, jobFileName(id))
+  const jobPath = join(dir, asyncJobFileName(id))
   await writeFile(jobPath, JSON.stringify(job, null, 2) + '\n', 'utf8')
 
-  const childSpec = currentCliInvocation(cwd, jobPath)
+  const childSpec = currentCliWorkerInvocation(cwd, 'snap-worker', jobPath)
   const child = spawn(childSpec.command, childSpec.args, {
     cwd,
     detached: true,
@@ -150,13 +118,6 @@ async function polishSnapText(
   } catch {
     return fallback
   }
-}
-
-async function appendAssistantSessionMessage(cwd: string, content: string): Promise<void> {
-  if (!content.trim()) return
-  const session = await loadSession(cwd)
-  const messages: PersistedMessage[] = session?.messages ?? []
-  await saveSession(cwd, [...messages, { role: 'assistant', content }])
 }
 
 export async function runSnapPhotoJob(jobPath: string): Promise<void> {

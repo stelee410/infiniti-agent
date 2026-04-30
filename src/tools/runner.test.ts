@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtemp, rm } from 'fs/promises'
+import { mkdtemp, rm, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { runBuiltinTool, type ToolRunContext } from './runner.js'
@@ -312,6 +312,70 @@ describe('invalid JSON args', () => {
     const parsed = JSON.parse(result)
     expect(parsed.ok).toBe(false)
     expect(parsed.error).toContain('JSON')
+  })
+
+  it('returns error for unknown builtin tool names', async () => {
+    const result = await runBuiltinTool(
+      'missing_tool' as Parameters<typeof runBuiltinTool>[0],
+      JSON.stringify({}),
+      ctx,
+    )
+    const parsed = JSON.parse(result)
+    expect(parsed.ok).toBe(false)
+    expect(parsed.error).toContain('未知')
+  })
+})
+
+describe('workspace safety guards', () => {
+  it('rejects glob patterns that escape the workspace', async () => {
+    const result = await runBuiltinTool(
+      'glob_files',
+      JSON.stringify({ pattern: '../*.sh' }),
+      ctx,
+    )
+    const parsed = JSON.parse(result)
+    expect(parsed.ok).toBe(false)
+    expect(parsed.error).toContain('工作区')
+  })
+
+  it('does not return paths outside the workspace from glob', async () => {
+    await writeFile(join(cwd, 'inside.txt'), 'ok', 'utf8')
+    const result = await runBuiltinTool(
+      'glob_files',
+      JSON.stringify({ pattern: '**/*.txt' }),
+      ctx,
+    )
+    const parsed = JSON.parse(result)
+    expect(parsed.ok).toBe(true)
+    expect(parsed.files).toEqual(['inside.txt'])
+  })
+
+  it('rejects bash cwd outside the workspace', async () => {
+    const result = await runBuiltinTool(
+      'bash',
+      JSON.stringify({ command: 'pwd', cwd: '..' }),
+      ctx,
+    )
+    const parsed = JSON.parse(result)
+    expect(parsed.ok).toBe(false)
+    expect(parsed.error).toContain('工作区')
+  })
+
+  it('blocks local and private HTTP targets before fetch', async () => {
+    for (const url of [
+      'http://[::1]:8080/',
+      'http://192.168.1.1/',
+      'http://169.254.169.254/latest/meta-data/',
+    ]) {
+      const result = await runBuiltinTool(
+        'http_request',
+        JSON.stringify({ method: 'GET', url }),
+        ctx,
+      )
+      const parsed = JSON.parse(result)
+      expect(parsed.ok).toBe(false)
+      expect(parsed.error).toContain('已阻止')
+    }
   })
 })
 

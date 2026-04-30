@@ -68,6 +68,12 @@ import {
   stripLiveUiTagsFromMessages,
 } from '../liveui/emotionParse.js'
 import { SubconsciousAgent } from '../subconscious/agent.js'
+import {
+  finalizeQueuedMediaCommand,
+  parseQueuedMediaCommand,
+  queuedMediaEmptyPromptMessage,
+  queuedMediaNotice,
+} from './queuedMediaCommand.js'
 
 /**
  * Live 下 TTS 用的「干净正文」：与流式 onTextDelta 一致，先 `processAssistantStreamChunk` 得 `displayText`
@@ -799,139 +805,65 @@ export function ChatApp({
         setInput('')
         return
       }
-      if (raw === '/avatargen' || raw.startsWith('/avatargen ')) {
-        const prompt = raw.startsWith('/avatargen ') ? raw.slice('/avatargen '.length).trim() : ''
+      const mediaCommand = parseQueuedMediaCommand(raw)
+      if (mediaCommand) {
+        const prompt = mediaCommand.prompt
         if (!prompt) {
-          const msg = '/avatargen 后请输入要求，例如：/avatargen 城市猎人风格的美少女'
+          const msg = queuedMediaEmptyPromptMessage(mediaCommand)
           setInput('')
           setError(msg)
-          liveUi?.sendAssistantStream(msg, true, true)
+          if (mediaCommand.kind === 'avatargen') {
+            liveUi?.sendAssistantStream(msg, true, true)
+          }
           return
         }
         if (busyRef.current) return
         setError(null)
-        setNotice('Real2D 表情集任务已交给 AvatarGen 后台处理，完成后会放进你的邮箱')
+        setNotice(queuedMediaNotice(mediaCommand.kind))
         setInput('')
-        const avatarVision = vision ?? liveUi?.consumePendingVisionAttachment()
-        const avatarAttachments = liveUi?.consumePendingFileAttachments() ?? []
-        const referenceImages = avatarGenReferenceImagesFromLiveInputs(avatarVision, avatarAttachments)
         try {
-          const job = await enqueueAvatarGenJob(cwd, config, prompt, referenceImages)
-          if (avatarVision) liveUi?.clearVisionAttachment()
-          else if (avatarAttachments.length) liveUi?.clearFileAttachments()
-          const content = await polishAvatarGenQueuedReply(config, prompt, job.id)
-          void subconsciousRef.current?.observeAssistantOutput(content)
-          const next: PersistedMessage[] = [
-            ...messages,
-            { role: 'user', content: raw },
-            { role: 'assistant', content },
-          ]
-          setMessages(next)
-          await saveSession(cwd, next)
-          setNotice(content)
-          setTimeout(() => setNotice(null), 12000)
-          if (liveUi) {
-            liveUi.sendAssistantStream(content, true, true)
-            if (liveUi.hasTts) {
-              const clean = ttsDisplayCleanForLiveUi(content, expressionManifest)
-              liveUi.resetAudio()
-              for (const seg of splitTtsSegments(clean)) {
-                liveUi.enqueueTts(seg)
-              }
-            }
+          let content: string
+          if (mediaCommand.kind === 'avatargen') {
+            const avatarVision = vision ?? liveUi?.consumePendingVisionAttachment()
+            const avatarAttachments = liveUi?.consumePendingFileAttachments() ?? []
+            const referenceImages = avatarGenReferenceImagesFromLiveInputs(avatarVision, avatarAttachments)
+            const job = await enqueueAvatarGenJob(cwd, config, prompt, referenceImages)
+            if (avatarVision) liveUi?.clearVisionAttachment()
+            else if (avatarAttachments.length) liveUi?.clearFileAttachments()
+            content = await polishAvatarGenQueuedReply(config, prompt, job.id)
+          } else if (mediaCommand.kind === 'video') {
+            const videoVision = vision ?? liveUi?.consumePendingVisionAttachment()
+            const videoAttachments = liveUi?.consumePendingFileAttachments() ?? []
+            if (videoVision) liveUi?.clearVisionAttachment()
+            else if (videoAttachments.length) liveUi?.clearFileAttachments()
+            const referenceImages = seedanceReferenceImagesFromLiveInputs(videoVision, videoAttachments)
+            const job = await enqueueSeedanceVideoJob(cwd, config, prompt, referenceImages)
+            content = await polishVideoQueuedReply(config, prompt, job.id)
+          } else {
+            const snapVision = vision ?? liveUi?.consumePendingVisionAttachment()
+            if (snapVision) liveUi?.clearVisionAttachment()
+            const job = await enqueueSnapPhotoJob(cwd, config, prompt, snapVision)
+            content = await polishSnapQueuedReply(config, prompt, job.id)
           }
+          await finalizeQueuedMediaCommand({
+            cwd,
+            messages,
+            rawCommand: raw,
+            assistantContent: content,
+            liveUi,
+            cleanForTts: (text) => ttsDisplayCleanForLiveUi(text, expressionManifest),
+            observeAssistantOutput: (text) => subconsciousRef.current?.observeAssistantOutput(text),
+            saveSession,
+            setMessages,
+            setNotice,
+            clearNoticeLater: (ms) => setTimeout(() => setNotice(null), ms),
+          })
         } catch (e: unknown) {
           const msg = formatChatError(e)
           setError(msg)
-          liveUi?.sendAssistantStream(msg, true, true)
-          setNotice(null)
-        }
-        return
-      }
-      if (raw === '/video' || raw.startsWith('/video ') || raw === '/seedance' || raw.startsWith('/seedance ')) {
-        const prefix = raw.startsWith('/seedance') ? '/seedance' : '/video'
-        const prompt = raw.startsWith(`${prefix} `) ? raw.slice(prefix.length + 1).trim() : ''
-        if (!prompt) {
-          setError(`${prefix} 后请输入提示词，例如：${prefix} 夕阳海边的电影感航拍，慢速推进`)
-          setInput('')
-          return
-        }
-        if (busyRef.current) return
-        setError(null)
-        setNotice('视频任务已交给 Seedance 后台处理，完成后会放进你的邮箱')
-        setInput('')
-        const videoVision = vision ?? liveUi?.consumePendingVisionAttachment()
-        const videoAttachments = liveUi?.consumePendingFileAttachments() ?? []
-        if (videoVision) liveUi?.clearVisionAttachment()
-        else if (videoAttachments.length) liveUi?.clearFileAttachments()
-        const referenceImages = seedanceReferenceImagesFromLiveInputs(videoVision, videoAttachments)
-        try {
-          const job = await enqueueSeedanceVideoJob(cwd, config, prompt, referenceImages)
-          const content = await polishVideoQueuedReply(config, prompt, job.id)
-          void subconsciousRef.current?.observeAssistantOutput(content)
-          const next: PersistedMessage[] = [
-            ...messages,
-            { role: 'user', content: raw },
-            { role: 'assistant', content },
-          ]
-          setMessages(next)
-          await saveSession(cwd, next)
-          setNotice(content)
-          setTimeout(() => setNotice(null), 12000)
-          if (liveUi) {
-            liveUi.sendAssistantStream(content, true, true)
-            if (liveUi.hasTts) {
-              const clean = ttsDisplayCleanForLiveUi(content, expressionManifest)
-              liveUi.resetAudio()
-              for (const seg of splitTtsSegments(clean)) {
-                liveUi.enqueueTts(seg)
-              }
-            }
+          if (mediaCommand.kind === 'avatargen') {
+            liveUi?.sendAssistantStream(msg, true, true)
           }
-        } catch (e: unknown) {
-          setError(formatChatError(e))
-          setNotice(null)
-        }
-        return
-      }
-      if (raw === '/snap' || raw.startsWith('/snap ')) {
-        const prompt = raw.startsWith('/snap ') ? raw.slice('/snap '.length).trim() : ''
-        if (!prompt) {
-          setError('/snap 后请输入提示词，例如：/snap 在咖啡馆自拍，暖色灯光')
-          setInput('')
-          return
-        }
-        if (busyRef.current) return
-        setError(null)
-        setNotice('图片任务已交给后台处理，一会儿会放进你的邮箱')
-        setInput('')
-        const snapVision = vision ?? liveUi?.consumePendingVisionAttachment()
-        if (snapVision) liveUi?.clearVisionAttachment()
-        try {
-          const job = await enqueueSnapPhotoJob(cwd, config, prompt, snapVision)
-          const content = await polishSnapQueuedReply(config, prompt, job.id)
-          void subconsciousRef.current?.observeAssistantOutput(content)
-          const next: PersistedMessage[] = [
-            ...messages,
-            { role: 'user', content: raw },
-            { role: 'assistant', content },
-          ]
-          setMessages(next)
-          await saveSession(cwd, next)
-          setNotice(content)
-          setTimeout(() => setNotice(null), 12000)
-          if (liveUi) {
-            liveUi.sendAssistantStream(content, true, true)
-            if (liveUi.hasTts) {
-              const clean = ttsDisplayCleanForLiveUi(content, expressionManifest)
-              liveUi.resetAudio()
-              for (const seg of splitTtsSegments(clean)) {
-                liveUi.enqueueTts(seg)
-              }
-            }
-          }
-        } catch (e: unknown) {
-          setError(formatChatError(e))
           setNotice(null)
         }
         return

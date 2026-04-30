@@ -3,8 +3,8 @@ import React from 'react'
 import { render } from 'ink'
 import { Command } from 'commander'
 import { existsSync } from 'fs'
-import { cp, mkdir } from 'fs/promises'
-import { configExistsSync, loadConfig, ensureLocalAgentDir, upgradeConfig } from './config/io.js'
+import { mkdir } from 'fs/promises'
+import { configExistsSync, loadConfig, ensureLocalAgentDir } from './config/io.js'
 import { InitWizard } from './ui/InitWizard.js'
 import { ChatWithSplash } from './ui/ChatWithSplash.js'
 import { McpManager } from './mcp/manager.js'
@@ -16,11 +16,6 @@ import {
   localAgentDir,
   localSkillsDir,
   GLOBAL_AGENT_DIR,
-  GLOBAL_CONFIG_PATH,
-  GLOBAL_SKILLS_DIR,
-  GLOBAL_MEMORY_PATH,
-  localConfigPath,
-  localMemoryPath,
 } from './paths.js'
 import { runCliPrompt } from './runCliPrompt.js'
 import { readPackageVersion } from './packageRoot.js'
@@ -42,9 +37,12 @@ import { runAddLlm, runSelectLlm } from './cli/llmCli.js'
 import { runLinkyunSync } from './cli/linkyunSync.js'
 import { runGenerateAvatar } from './cli/generateAvatar.js'
 import { runSetLiveAgent } from './cli/setLiveAgent.js'
-import { runSnapPhotoJob } from './snap/asyncSnap.js'
-import { runSeedanceVideoJob } from './video/asyncVideo.js'
-import { runAvatarGenJob } from './avatar/asyncAvatarGen.js'
+import { parseWorkerCommand, runWorkerCommand } from './cli/workerCommands.js'
+import { defaultLegacyCliDeps, parseLegacyCliCommand, runLegacyCliCommand } from './cli/legacyCliCommand.js'
+import { parseGlobalFlags } from './cli/globalFlags.js'
+import { runMigrateCommand } from './cli/migrateCommand.js'
+import { runUpgradeCommand } from './cli/upgradeCommand.js'
+import { LiveCommandError, resolveLiveCommandPlan } from './cli/liveCommand.js'
 import { disableUiLogFile, enableUiLogFile, withUiLogFile } from './utils/uiLogFile.js'
 
 const cwd = process.cwd()
@@ -281,91 +279,33 @@ async function main(): Promise<void> {
   const uiLogEnabledAtStartup = isUiModeInvocation(process.argv.slice(2))
   if (uiLogEnabledAtStartup) enableUiLogFile(cwd)
   try {
-  if (process.argv.includes('--debug')) {
-    const idx = process.argv.indexOf('--debug')
-    process.argv.splice(idx, 1)
+  const parsedGlobalFlags = parseGlobalFlags(process.argv.slice(2))
+  if (parsedGlobalFlags.debug) {
     process.env.INFINITI_AGENT_DEBUG = '1'
     console.error('[debug] 调试模式已启用，meta-agent / 工具调度等详细日志将输出到 stderr')
   }
 
-  const skipPermissions = process.argv.includes('--dangerously-skip-permissions')
+  const skipPermissions = parsedGlobalFlags.skipPermissions
   if (skipPermissions) {
-    const idx = process.argv.indexOf('--dangerously-skip-permissions')
-    process.argv.splice(idx, 1)
     console.error('⚠ --dangerously-skip-permissions: 所有工具确认将被跳过')
   }
 
-  const disableThinking = process.argv.includes('--disable-thinking')
-  if (disableThinking) {
-    const idx = process.argv.indexOf('--disable-thinking')
-    process.argv.splice(idx, 1)
-  }
-  const argv = process.argv.slice(2)
+  const disableThinking = parsedGlobalFlags.disableThinking
+  process.argv = [process.argv[0]!, process.argv[1]!, ...parsedGlobalFlags.argv]
+  const argv = parsedGlobalFlags.argv
 
-  if (argv[0] === 'snap-worker') {
-    const jobPath = argv[1]
-    if (!jobPath) {
-      console.error('用法: infiniti-agent snap-worker <job.json>')
-      process.exit(2)
-    }
-    try {
-      await runSnapPhotoJob(jobPath)
-    } catch (e) {
-      console.error((e as Error).message)
-      process.exit(2)
-    }
+  const workerCommand = parseWorkerCommand(argv)
+  if (workerCommand) {
+    await runWorkerCommand(workerCommand)
     return
   }
 
-  if (argv[0] === 'video-worker') {
-    const jobPath = argv[1]
-    if (!jobPath) {
-      console.error('用法: infiniti-agent video-worker <job.json>')
-      process.exit(2)
-    }
-    try {
-      await runSeedanceVideoJob(jobPath)
-    } catch (e) {
-      console.error((e as Error).message)
-      process.exit(2)
-    }
-    return
-  }
-
-  if (argv[0] === 'avatargen-worker') {
-    const jobPath = argv[1]
-    if (!jobPath) {
-      console.error('用法: infiniti-agent avatargen-worker <job.json>')
-      process.exit(2)
-    }
-    try {
-      await runAvatarGenJob(jobPath)
-    } catch (e) {
-      console.error((e as Error).message)
-      process.exit(2)
-    }
-    return
-  }
-
-  // 兼容旧写法 --cli
-  const cliIdx = argv.indexOf('--cli')
-  if (cliIdx !== -1) {
-    const prompt = argv.slice(cliIdx + 1).join(' ').trim()
-    if (!prompt) {
-      console.error('用法: infiniti-agent cli <prompt>（多词无需引号）')
-      process.exit(2)
-    }
-    if (!configExistsSync(cwd)) {
-      console.error('尚未配置。请先运行: infiniti-agent init 或 infiniti-agent migrate')
-      process.exit(2)
-    }
-    try {
-      const cfg = applyThinkingOverride(await loadConfig(cwd), disableThinking)
-      await runCliPrompt(cfg, prompt)
-    } catch (e) {
-      console.error((e as Error).message)
-      process.exit(2)
-    }
+  const legacyCliCommand = parseLegacyCliCommand(argv)
+  if (legacyCliCommand) {
+    await runLegacyCliCommand(
+      legacyCliCommand,
+      defaultLegacyCliDeps(cwd, disableThinking, applyThinkingOverride),
+    )
     return
   }
 
@@ -393,37 +333,7 @@ async function main(): Promise<void> {
     .command('migrate')
     .description('将全局 ~/.infiniti-agent/ 配置复制到当前目录 .infiniti-agent/，实现项目级独立')
     .action(async () => {
-      const localDir = localAgentDir(cwd)
-      await mkdir(localDir, { recursive: true })
-      let copied = 0
-
-      if (existsSync(GLOBAL_CONFIG_PATH) && !existsSync(localConfigPath(cwd))) {
-        await cp(GLOBAL_CONFIG_PATH, localConfigPath(cwd))
-        console.log(`✓ config.json → ${localConfigPath(cwd)}`)
-        copied++
-      }
-
-      if (existsSync(GLOBAL_MEMORY_PATH) && !existsSync(localMemoryPath(cwd))) {
-        await cp(GLOBAL_MEMORY_PATH, localMemoryPath(cwd))
-        console.log(`✓ memory.md → ${localMemoryPath(cwd)}`)
-        copied++
-      }
-
-      if (existsSync(GLOBAL_SKILLS_DIR)) {
-        const localSkills = localSkillsDir(cwd)
-        if (!existsSync(localSkills)) {
-          await cp(GLOBAL_SKILLS_DIR, localSkills, { recursive: true })
-          console.log(`✓ skills/ → ${localSkills}`)
-          copied++
-        }
-      }
-
-      if (copied === 0) {
-        console.log('无需迁移（本地已存在或全局无配置）。如需首次配置请运行: infiniti-agent init')
-      } else {
-        console.log(`\n已迁移 ${copied} 项到 ${localDir}`)
-        console.log('后续所有 session、memory、skills 均在此目录下独立运行。')
-      }
+      await runMigrateCommand(cwd)
     })
 
   program
@@ -431,41 +341,7 @@ async function main(): Promise<void> {
     .description('升级 config.json 到最新格式（旧平铺 llm → profiles，移除废弃字段）')
     .option('--global', '升级全局 ~/.infiniti-agent/config.json（默认升级当前目录的）')
     .action(async (cmdOpts: { global?: boolean }) => {
-      const targets: string[] = []
-      const localCfg = localConfigPath(cwd)
-      const globalCfg = GLOBAL_CONFIG_PATH
-
-      if (cmdOpts.global) {
-        if (existsSync(globalCfg)) targets.push(globalCfg)
-        else {
-          console.log(`全局配置不存在: ${globalCfg}`)
-          return
-        }
-      } else {
-        if (existsSync(localCfg)) targets.push(localCfg)
-        if (existsSync(globalCfg)) targets.push(globalCfg)
-      }
-
-      if (!targets.length) {
-        console.log('未找到任何 config.json。请先运行: infiniti-agent init')
-        return
-      }
-
-      for (const target of targets) {
-        try {
-          const result = await upgradeConfig(target)
-          if (result.changed) {
-            console.log(`\n✓ 已升级: ${target}`)
-            for (const c of result.changes) {
-              console.log(`  - ${c}`)
-            }
-          } else {
-            console.log(`✓ ${target} — 已是最新格式，无需升级`)
-          }
-        } catch (e) {
-          console.error(`✗ ${target}: ${(e as Error).message}`)
-        }
-      }
+      await runUpgradeCommand(cwd, cmdOpts)
     })
 
   program
@@ -526,63 +402,33 @@ async function main(): Promise<void> {
         process.exit(2)
       }
 
-      const explicitPort = cmdOpts.port?.trim()
-      const port = explicitPort
-        ? Number(explicitPort)
-        : cfg.liveUi?.port ??
-          (process.env.INFINITI_LIVEUI_PORT ? Number(process.env.INFINITI_LIVEUI_PORT) : 8080)
-
-      if (!Number.isFinite(port) || port <= 0 || port > 65535) {
-        console.error('无效端口，请使用 1–65535 之间的数字。')
-        process.exit(2)
-      }
-
-      const spriteResolved = resolveSpriteExpressionDirForUi(cwd, cfg.liveUi)
-      for (const w of spriteResolved?.warnings ?? []) {
-        console.error(`[liveui] ${w}`)
-      }
-
-      const resolved = resolveLive2dModelForUi(cwd, cfg.liveUi)
-      for (const w of resolved?.warnings ?? []) {
-        console.error(`[liveui] ${w}`)
-      }
-
-      const useSprite = Boolean(spriteResolved?.dirFileUrl)
-      const renderer = cfg.liveUi?.renderer ?? (useSprite ? 'sprite' : 'live2d')
-      const useReal2d = renderer === 'real2d' && useSprite
-      const useSpriteOnly = renderer === 'sprite' && useSprite
-      if (renderer === 'real2d' && !useSprite) {
-        console.error('[liveui] renderer=real2d 需要 liveUi.spriteExpressions.dir，当前将回退 Live2D/占位')
-      } else if (useReal2d) {
-        console.error(`[liveui] 已启用 real2d（基于 spriteExpressions PNG），不使用 Live2D 模型 URL`)
-      } else if (useSpriteOnly) {
-        console.error(`[liveui] 已启用 spriteExpressions（PNG），不使用 Live2D 模型 URL`)
-      }
-
-      let cliFigureZoomOverride: number | undefined
-      const zoomRaw = cmdOpts.zoom?.trim()
-      if (zoomRaw) {
-        const z = Number(zoomRaw)
-        if (!Number.isFinite(z) || z < 0.4 || z > 1.5) {
-          console.error('[live] --zoom 取值需在 0.4 ~ 1.5 之间，例如 0.9 表示 90%。')
+      let livePlan: ReturnType<typeof resolveLiveCommandPlan>
+      try {
+        livePlan = resolveLiveCommandPlan(cwd, cfg, cmdOpts)
+      } catch (e) {
+        if (e instanceof LiveCommandError) {
+          console.error(e.message)
           process.exit(2)
         }
-        cliFigureZoomOverride = z
-        console.error(`[liveui] 人物缩放: ${(z * 100).toFixed(0)}%`)
-      } else if (typeof cfg.liveUi?.figureZoom === 'number') {
-        console.error(`[liveui] 人物缩放: ${(cfg.liveUi.figureZoom * 100).toFixed(0)}%`)
+        throw e
+      }
+      for (const w of livePlan.warnings) {
+        console.error(`[liveui] ${w}`)
+      }
+      for (const msg of livePlan.info) {
+        console.error(`[liveui] ${msg}`)
       }
 
-      const liveUi = new LiveUiSession(port)
+      const liveUi = new LiveUiSession(livePlan.port, { mediaRoots: [localAgentDir(cwd)] })
       await runChatTui({
         skipPermissions,
         disableThinking,
         liveUi,
-        liveUiRenderer: useReal2d ? 'real2d' : useSpriteOnly ? 'sprite' : 'live2d',
-        liveUiModel3FileUrl: useReal2d || useSpriteOnly ? undefined : resolved?.model3FileUrl,
-        liveUiSpriteExpressionDirFileUrl: useReal2d || useSpriteOnly ? spriteResolved?.dirFileUrl : undefined,
-        liveUiVoiceMicJson: buildLiveUiVoiceMicEnvJson(cfg.liveUi, { auto: cmdOpts.auto === true }),
-        liveUiFigureZoom: cliFigureZoomOverride,
+        liveUiRenderer: livePlan.renderer,
+        liveUiModel3FileUrl: livePlan.model3FileUrl,
+        liveUiSpriteExpressionDirFileUrl: livePlan.spriteExpressionDirFileUrl,
+        liveUiVoiceMicJson: livePlan.voiceMicJson,
+        liveUiFigureZoom: livePlan.figureZoomOverride,
         onConfigReload: async (nextCfg) => {
           if (nextCfg.liveUi?.port && nextCfg.liveUi.port !== liveUi.port) {
             console.warn(
@@ -592,7 +438,7 @@ async function main(): Promise<void> {
           await configureLiveUiEngines(liveUi, nextCfg)
           restartLiveUiElectron(liveUi, nextCfg, {
             auto: cmdOpts.auto === true,
-            figureZoom: cliFigureZoomOverride,
+            figureZoom: livePlan.figureZoomOverride,
           })
         },
       })

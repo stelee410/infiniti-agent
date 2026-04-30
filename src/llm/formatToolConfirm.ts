@@ -19,7 +19,9 @@ export async function formatToolConfirmDetail(
 ): Promise<string> {
   if (name === 'bash') {
     const cmd = String(args.command ?? '').trim()
-    return cmd.length > 4000 ? `${cmd.slice(0, 4000)}\n…` : cmd
+    const cwd = typeof args.cwd === 'string' && args.cwd.trim() ? args.cwd.trim() : '.'
+    const shown = cmd.length > 4000 ? `${cmd.slice(0, 4000)}\n…` : cmd
+    return `${shown}\n[cwd] ${cwd}`
   }
   if (name === 'http_request') {
     return `${String(args.method ?? 'GET')} ${String(args.url ?? '')}`

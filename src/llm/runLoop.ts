@@ -21,6 +21,7 @@ import { evaluateToolSafety } from './toolGateAgent.js'
 import { agentDebug } from '../utils/agentDebug.js'
 
 const MAX_TOOL_STEPS = 48
+const DRY_RUN_SAFE_TOOLS = new Set<string>(['write_file', 'str_replace'])
 
 const LLM_TIMEOUT_MS = 180_000
 const LLM_MAX_RETRIES = 1
@@ -58,6 +59,10 @@ function attachmentContextText(m: Extract<PersistedMessage, { role: 'user' }>): 
     }
   })
   return parts.join('\n').trim()
+}
+
+export function canBypassToolSafetyForDryRun(name: string, args: Record<string, unknown>): boolean {
+  return DRY_RUN_SAFE_TOOLS.has(name) && args.dry_run === true
 }
 
 function imageAttachments(m: Extract<PersistedMessage, { role: 'user' }>): UserFileAttachment[] {
@@ -202,7 +207,7 @@ export async function runToolLoop(opts: RunLoopOptions): Promise<{
     if (!opts.skipPermissions) {
       let args: Record<string, unknown>
       try { args = JSON.parse(argsJson) as Record<string, unknown> } catch { args = {} }
-      if (args.dry_run !== true) {
+      if (!canBypassToolSafetyForDryRun(name, args)) {
         const detail = CONFIRMABLE_BUILTIN_TOOLS.has(name)
           ? await formatToolConfirmDetail(name, args, opts.cwd)
           : `${name}(${JSON.stringify(args).slice(0, 2000)})`
@@ -539,6 +544,43 @@ async function runAnthropic(
         'Anthropic',
       )
       msg = final as unknown as Anthropic.Messages.Message
+    } catch (e) {
+      if (pendingTools.length) {
+        const error = e instanceof Error ? e.message : String(e)
+        working.push({
+          role: 'assistant',
+          content: null,
+          toolCalls: pendingTools.map((pt) => ({
+            id: pt.id,
+            name: pt.name,
+            argumentsJson: JSON.stringify(pt.input),
+          })),
+        })
+        for (const pt of pendingTools) {
+          let result: string
+          try {
+            result = await pt.resultPromise
+          } catch (toolError) {
+            result = JSON.stringify({
+              ok: false,
+              status: 'tool_failed_after_stream_error',
+              error: toolError instanceof Error ? toolError.message : String(toolError),
+            })
+          }
+          working.push({
+            role: 'tool',
+            toolCallId: pt.id,
+            name: pt.name,
+            content: result,
+          })
+        }
+        working.push({
+          role: 'assistant',
+          content: `Anthropic stream failed after tool dispatch: ${error}`,
+        })
+        return { messages: working }
+      }
+      throw e
     } finally {
       clearInterval(idleCheck)
       opts.signal?.removeEventListener('abort', onAbort)

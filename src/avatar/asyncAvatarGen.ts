@@ -1,6 +1,5 @@
 import { spawn } from 'node:child_process'
-import { existsSync } from 'node:fs'
-import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { InfinitiConfig } from '../config/types.js'
@@ -9,8 +8,7 @@ import { localJobsDir } from '../paths.js'
 import { executeMemoryAction } from '../memory/structured.js'
 import { writeInboxMessage } from '../inbox/store.js'
 import { oneShotTextCompletion } from '../llm/oneShotCompletion.js'
-import type { PersistedMessage } from '../llm/persisted.js'
-import { loadSession, saveSession } from '../session/file.js'
+import { appendAssistantSessionMessage, appendAsyncJobLog, asyncJobFileName, currentCliWorkerInvocation } from '../jobs/asyncJob.js'
 import {
   generateReal2dAvatarSet,
   resolveReal2dAvatarGenAuth,
@@ -31,38 +29,8 @@ export type EnqueuedAvatarGenJob = {
   jobPath: string
 }
 
-function jobFileName(id: string): string {
-  return `${id}.json`
-}
-
 async function appendJobLog(cwd: string, line: string): Promise<void> {
-  try {
-    const dir = join(cwd, '.infiniti-agent')
-    await mkdir(dir, { recursive: true })
-    await appendFile(join(dir, 'avatargen-async.log'), `${new Date().toISOString()} ${line}\n`, 'utf8')
-  } catch {
-    /* best effort diagnostics */
-  }
-}
-
-function currentCliInvocation(cwd: string, jobPath: string): { command: string; args: string[] } {
-  const entry = process.argv[1]
-  if (!entry) {
-    return { command: 'infiniti-agent', args: ['avatargen-worker', jobPath] }
-  }
-  if (/\.(tsx?|mts|cts)$/i.test(entry)) {
-    const localTsx = join(cwd, 'node_modules', '.bin', process.platform === 'win32' ? 'tsx.cmd' : 'tsx')
-    return {
-      command: existsSync(localTsx) ? localTsx : 'npx',
-      args: existsSync(localTsx)
-        ? [entry, 'avatargen-worker', jobPath]
-        : ['tsx', entry, 'avatargen-worker', jobPath],
-    }
-  }
-  return {
-    command: process.execPath,
-    args: [...process.execArgv, entry, 'avatargen-worker', jobPath],
-  }
+  return appendAsyncJobLog(cwd, 'avatargen-async.log', line)
 }
 
 export async function enqueueAvatarGenJob(
@@ -84,10 +52,10 @@ export async function enqueueAvatarGenJob(
     createdAt: new Date().toISOString(),
     referenceImages,
   }
-  const jobPath = join(dir, jobFileName(id))
+  const jobPath = join(dir, asyncJobFileName(id))
   await writeFile(jobPath, JSON.stringify(job, null, 2) + '\n', 'utf8')
 
-  const childSpec = currentCliInvocation(cwd, jobPath)
+  const childSpec = currentCliWorkerInvocation(cwd, 'avatargen-worker', jobPath)
   const child = spawn(childSpec.command, childSpec.args, {
     cwd,
     detached: true,
@@ -154,13 +122,6 @@ async function polishAvatarGenText(
   } catch {
     return fallback
   }
-}
-
-async function appendAssistantSessionMessage(cwd: string, content: string): Promise<void> {
-  if (!content.trim()) return
-  const session = await loadSession(cwd)
-  const messages: PersistedMessage[] = session?.messages ?? []
-  await saveSession(cwd, [...messages, { role: 'assistant', content }])
 }
 
 export async function runAvatarGenJob(jobPath: string): Promise<void> {
