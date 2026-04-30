@@ -20,6 +20,7 @@ const ALWAYS_SAFE = new Set([
   'read_notebook_cell',
   'snap_photo',
   'seedance_video',
+  'schedule',
 ])
 
 // ── 上下文感知：用户在前轮 block 后明确批准 → 放行 ──

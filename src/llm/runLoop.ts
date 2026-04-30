@@ -9,6 +9,7 @@ import { runBuiltinTool } from '../tools/runner.js'
 import type { AgentToolSpec } from '../mcp/manager.js'
 import type { PersistedMessage, UserFileAttachment } from './persisted.js'
 import type { SeedanceReferenceImage } from '../video/generateSeedanceVideo.js'
+import type { AvatarGenReferenceImage } from '../avatar/real2dAvatarGen.js'
 import type { McpManager } from '../mcp/manager.js'
 import type { EditHistory } from '../session/editHistory.js'
 import type { ToolRunContext } from '../tools/runner.js'
@@ -20,6 +21,7 @@ import { evaluateToolSafety } from './toolGateAgent.js'
 import { agentDebug } from '../utils/agentDebug.js'
 
 const MAX_TOOL_STEPS = 48
+const DRY_RUN_SAFE_TOOLS = new Set<string>(['write_file', 'str_replace'])
 
 const LLM_TIMEOUT_MS = 180_000
 const LLM_MAX_RETRIES = 1
@@ -57,6 +59,10 @@ function attachmentContextText(m: Extract<PersistedMessage, { role: 'user' }>): 
     }
   })
   return parts.join('\n').trim()
+}
+
+export function canBypassToolSafetyForDryRun(name: string, args: Record<string, unknown>): boolean {
+  return DRY_RUN_SAFE_TOOLS.has(name) && args.dry_run === true
 }
 
 function imageAttachments(m: Extract<PersistedMessage, { role: 'user' }>): UserFileAttachment[] {
@@ -105,6 +111,32 @@ function latestSeedanceReferenceImages(messages: PersistedMessage[]): SeedanceRe
       }
     }
     return out.slice(0, 9)
+  }
+  return []
+}
+
+function latestAvatarGenReferenceImages(messages: PersistedMessage[]): AvatarGenReferenceImage[] {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]!
+    if (m.role !== 'user') continue
+    const out: AvatarGenReferenceImage[] = []
+    if (m.vision) {
+      out.push({
+        mediaType: m.vision.mediaType,
+        base64: m.vision.imageBase64,
+        label: 'camera snapshot',
+      })
+    }
+    for (const a of imageAttachments(m)) {
+      if (a.mediaType === 'image/jpeg' || a.mediaType === 'image/png' || a.mediaType === 'image/webp') {
+        out.push({
+          mediaType: a.mediaType,
+          base64: a.base64,
+          label: a.name,
+        })
+      }
+    }
+    return out.slice(0, 4)
   }
   return []
 }
@@ -175,7 +207,7 @@ export async function runToolLoop(opts: RunLoopOptions): Promise<{
     if (!opts.skipPermissions) {
       let args: Record<string, unknown>
       try { args = JSON.parse(argsJson) as Record<string, unknown> } catch { args = {} }
-      if (args.dry_run !== true) {
+      if (!canBypassToolSafetyForDryRun(name, args)) {
         const detail = CONFIRMABLE_BUILTIN_TOOLS.has(name)
           ? await formatToolConfirmDetail(name, args, opts.cwd)
           : `${name}(${JSON.stringify(args).slice(0, 2000)})`
@@ -209,6 +241,7 @@ export async function runToolLoop(opts: RunLoopOptions): Promise<{
         config: opts.config,
         snapVision: latestUserVision(opts.messages),
         seedanceImages: latestSeedanceReferenceImages(opts.messages),
+        avatarGenImages: latestAvatarGenReferenceImages(opts.messages),
         editHistory: opts.editHistory,
         memoryCoordinator: opts.memoryCoordinator,
       })
@@ -511,6 +544,43 @@ async function runAnthropic(
         'Anthropic',
       )
       msg = final as unknown as Anthropic.Messages.Message
+    } catch (e) {
+      if (pendingTools.length) {
+        const error = e instanceof Error ? e.message : String(e)
+        working.push({
+          role: 'assistant',
+          content: null,
+          toolCalls: pendingTools.map((pt) => ({
+            id: pt.id,
+            name: pt.name,
+            argumentsJson: JSON.stringify(pt.input),
+          })),
+        })
+        for (const pt of pendingTools) {
+          let result: string
+          try {
+            result = await pt.resultPromise
+          } catch (toolError) {
+            result = JSON.stringify({
+              ok: false,
+              status: 'tool_failed_after_stream_error',
+              error: toolError instanceof Error ? toolError.message : String(toolError),
+            })
+          }
+          working.push({
+            role: 'tool',
+            toolCallId: pt.id,
+            name: pt.name,
+            content: result,
+          })
+        }
+        working.push({
+          role: 'assistant',
+          content: `Anthropic stream failed after tool dispatch: ${error}`,
+        })
+        return { messages: working }
+      }
+      throw e
     } finally {
       clearInterval(idleCheck)
       opts.signal?.removeEventListener('abort', onAbort)

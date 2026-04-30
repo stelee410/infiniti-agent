@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtemp, rm } from 'fs/promises'
+import { mkdtemp, rm, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { runBuiltinTool, type ToolRunContext } from './runner.js'
 import { loadMemoryStore } from '../memory/structured.js'
 import { loadProfileStore } from '../memory/userProfile.js'
+import { loadScheduleStore, saveScheduleStore } from '../schedule/store.js'
 import type { InfinitiConfig } from '../config/types.js'
 
 const testConfig: InfinitiConfig = {
@@ -236,12 +237,145 @@ describe('update_memory legacy tool', () => {
   })
 })
 
+describe('schedule tool dispatch', () => {
+  it('creates a one-off schedule task from structured LLM args', async () => {
+    const result = await runBuiltinTool(
+      'schedule',
+      JSON.stringify({
+        action: 'create',
+        kind: 'once',
+        prompt: '好好休息',
+        next_run_at: '2026-04-29T23:00:00+08:00',
+      }),
+      ctx,
+    )
+    const parsed = JSON.parse(result)
+    expect(parsed.ok).toBe(true)
+
+    const store = await loadScheduleStore(cwd)
+    expect(store.tasks).toHaveLength(1)
+    expect(store.tasks[0]!.prompt).toBe('好好休息')
+    expect(store.tasks[0]!.kind).toBe('once')
+  })
+
+  it('lists and removes schedule tasks', async () => {
+    const created = JSON.parse(await runBuiltinTool(
+      'schedule',
+      JSON.stringify({
+        action: 'create',
+        kind: 'daily',
+        prompt: 'read Hacker News',
+        time_of_day: '08:30',
+      }),
+      ctx,
+    ))
+    expect(created.ok).toBe(true)
+
+    const listed = JSON.parse(await runBuiltinTool('schedule', JSON.stringify({ action: 'list' }), ctx))
+    expect(listed.ok).toBe(true)
+    expect(listed.count).toBe(1)
+
+    const removed = JSON.parse(await runBuiltinTool(
+      'schedule',
+      JSON.stringify({ action: 'remove', id: created.task.id.slice(0, 12) }),
+      ctx,
+    ))
+    expect(removed.ok).toBe(true)
+  })
+
+  it('clears completed schedule tasks', async () => {
+    const created = JSON.parse(await runBuiltinTool(
+      'schedule',
+      JSON.stringify({
+        action: 'create',
+        kind: 'once',
+        prompt: 'single run',
+        next_run_at: '2026-04-29T23:00:00+08:00',
+      }),
+      ctx,
+    ))
+    expect(created.ok).toBe(true)
+
+    const store = await loadScheduleStore(cwd)
+    store.tasks[0]!.enabled = false
+    await saveScheduleStore(cwd, store)
+
+    const cleared = JSON.parse(await runBuiltinTool('schedule', JSON.stringify({ action: 'clear' }), ctx))
+    expect(cleared.ok).toBe(true)
+    expect(cleared.removedCount).toBe(1)
+  })
+})
+
 describe('invalid JSON args', () => {
   it('returns error for malformed JSON', async () => {
     const result = await runBuiltinTool('memory', 'not json', ctx)
     const parsed = JSON.parse(result)
     expect(parsed.ok).toBe(false)
     expect(parsed.error).toContain('JSON')
+  })
+
+  it('returns error for unknown builtin tool names', async () => {
+    const result = await runBuiltinTool(
+      'missing_tool' as Parameters<typeof runBuiltinTool>[0],
+      JSON.stringify({}),
+      ctx,
+    )
+    const parsed = JSON.parse(result)
+    expect(parsed.ok).toBe(false)
+    expect(parsed.error).toContain('未知')
+  })
+})
+
+describe('workspace safety guards', () => {
+  it('rejects glob patterns that escape the workspace', async () => {
+    const result = await runBuiltinTool(
+      'glob_files',
+      JSON.stringify({ pattern: '../*.sh' }),
+      ctx,
+    )
+    const parsed = JSON.parse(result)
+    expect(parsed.ok).toBe(false)
+    expect(parsed.error).toContain('工作区')
+  })
+
+  it('does not return paths outside the workspace from glob', async () => {
+    await writeFile(join(cwd, 'inside.txt'), 'ok', 'utf8')
+    const result = await runBuiltinTool(
+      'glob_files',
+      JSON.stringify({ pattern: '**/*.txt' }),
+      ctx,
+    )
+    const parsed = JSON.parse(result)
+    expect(parsed.ok).toBe(true)
+    expect(parsed.files).toEqual(['inside.txt'])
+  })
+
+  it('rejects bash cwd outside the workspace', async () => {
+    const result = await runBuiltinTool(
+      'bash',
+      JSON.stringify({ command: 'pwd', cwd: '..' }),
+      ctx,
+    )
+    const parsed = JSON.parse(result)
+    expect(parsed.ok).toBe(false)
+    expect(parsed.error).toContain('工作区')
+  })
+
+  it('blocks local and private HTTP targets before fetch', async () => {
+    for (const url of [
+      'http://[::1]:8080/',
+      'http://192.168.1.1/',
+      'http://169.254.169.254/latest/meta-data/',
+    ]) {
+      const result = await runBuiltinTool(
+        'http_request',
+        JSON.stringify({ method: 'GET', url }),
+        ctx,
+      )
+      const parsed = JSON.parse(result)
+      expect(parsed.ok).toBe(false)
+      expect(parsed.error).toContain('已阻止')
+    }
   })
 })
 

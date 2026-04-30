@@ -7,6 +7,8 @@ import type {
   AsrConfig,
   AvatarGenConfig,
   CompactionConfig,
+  ImageConfig,
+  ImageProfile,
   InfinitiConfig,
   LiveUiConfig,
   LlmProfile,
@@ -139,6 +141,7 @@ export async function loadConfig(cwd?: string): Promise<InfinitiConfig> {
   const liveUi = parseLiveUiConfig(o.liveUi)
   const tts = parseTtsConfig(o.tts)
   const asr = parseAsrConfig(o.asr)
+  const image = parseImageConfig(o.image)
   const avatarGen = parseAvatarGenConfig(o.avatarGen)
   const snap = parseSnapImageConfig(o.snap)
   const seedance = parseSeedanceVideoConfig(o.seedance)
@@ -174,6 +177,7 @@ export async function loadConfig(cwd?: string): Promise<InfinitiConfig> {
     ...(liveUi ? { liveUi } : {}),
     ...(tts ? { tts } : {}),
     ...(asr ? { asr } : {}),
+    ...(image ? { image } : {}),
     ...(avatarGen ? { avatarGen } : {}),
     ...(snap ? { snap } : {}),
     ...(seedance ? { seedance } : {}),
@@ -182,128 +186,194 @@ export async function loadConfig(cwd?: string): Promise<InfinitiConfig> {
 
 function parseStringArray(raw: unknown): string[] | undefined {
   if (!Array.isArray(raw)) return undefined
-  const out = raw.filter((v): v is string => typeof v === 'string').map((v) => v.trim()).filter(Boolean)
+  const out = raw.map((v) => stringField({ value: v })).filter((v): v is string => !!v)
   return out.length ? out : undefined
 }
 
+function recordField(raw: unknown): Record<string, unknown> | undefined {
+  return raw && typeof raw === 'object' ? raw as Record<string, unknown> : undefined
+}
+
+function stringField(args: {
+  value: unknown
+  required?: boolean
+}): string | undefined {
+  if (typeof args.value !== 'string') return undefined
+  const trimmed = args.value.trim()
+  if (!trimmed && args.required) return undefined
+  return trimmed || undefined
+}
+
+function enumField<const T extends string>(
+  value: unknown,
+  allowed: readonly T[],
+): T | undefined {
+  return allowed.includes(value as T) ? value as T : undefined
+}
+
+function numberField(args: {
+  value: unknown
+  min?: number
+  max?: number
+  integer?: boolean
+  round?: boolean
+}): number | undefined {
+  if (typeof args.value !== 'number' || !Number.isFinite(args.value)) return undefined
+  if (args.min !== undefined && args.value < args.min) return undefined
+  if (args.max !== undefined && args.value > args.max) return undefined
+  if (args.integer) return Math.floor(args.value)
+  if (args.round) return Math.round(args.value)
+  return args.value
+}
+
+function boolField(value: unknown): boolean | undefined {
+  return typeof value === 'boolean' ? value : undefined
+}
+
 function parseAvatarGenConfig(raw: unknown): AvatarGenConfig | undefined {
-  if (!raw || typeof raw !== 'object') return undefined
-  const u = raw as Record<string, unknown>
+  const u = recordField(raw)
+  if (!u) return undefined
   const out: AvatarGenConfig = {}
-  if (u.provider === 'gemini' || u.provider === 'chatgpt-image') out.provider = u.provider
-  if (typeof u.baseUrl === 'string' && u.baseUrl.trim()) out.baseUrl = u.baseUrl.trim()
-  if (typeof u.apiKey === 'string' && u.apiKey.trim()) out.apiKey = u.apiKey.trim()
-  if (typeof u.model === 'string' && u.model.trim()) out.model = u.model.trim()
-  if (typeof u.aspectRatio === 'string' && u.aspectRatio.trim()) out.aspectRatio = u.aspectRatio.trim()
-  if (typeof u.imageSize === 'string' && u.imageSize.trim()) out.imageSize = u.imageSize.trim()
+  const provider = enumField(u.provider, ['gemini', 'chatgpt-image'] as const)
+  const quality = enumField(u.quality, ['auto', 'high', 'medium', 'low'] as const)
+  const transparentBackground = boolField(u.transparentBackground)
+  const fields = ['imageProfile', 'baseUrl', 'apiKey', 'model', 'aspectRatio', 'imageSize'] as const
+  for (const field of fields) {
+    const value = stringField({ value: u[field] })
+    if (value) out[field] = value
+  }
+  if (provider) out.provider = provider
+  if (quality) out.quality = quality
+  if (transparentBackground !== undefined) out.transparentBackground = transparentBackground
   return Object.keys(out).length ? out : undefined
 }
 
 function parseSnapImageConfig(raw: unknown): SnapImageConfig | undefined {
-  if (!raw || typeof raw !== 'object') return undefined
-  const u = raw as Record<string, unknown>
+  const u = recordField(raw)
+  if (!u) return undefined
   const out: SnapImageConfig = {}
-  if (u.provider === 'nano-banana' || u.provider === 'gpt-image-2') out.provider = u.provider
-  if (typeof u.baseUrl === 'string' && u.baseUrl.trim()) out.baseUrl = u.baseUrl.trim()
-  if (typeof u.apiKey === 'string' && u.apiKey.trim()) out.apiKey = u.apiKey.trim()
-  if (typeof u.model === 'string' && u.model.trim()) out.model = u.model.trim()
-  if (typeof u.aspectRatio === 'string' && u.aspectRatio.trim()) out.aspectRatio = u.aspectRatio.trim()
-  if (typeof u.imageSize === 'string' && u.imageSize.trim()) out.imageSize = u.imageSize.trim()
-  if (u.quality === 'auto' || u.quality === 'high' || u.quality === 'medium' || u.quality === 'low') {
-    out.quality = u.quality
+  const provider = enumField(u.provider, ['nano-banana', 'gpt-image-2'] as const)
+  const quality = enumField(u.quality, ['auto', 'high', 'medium', 'low'] as const)
+  const timeoutMs = numberField({ value: u.timeoutMs, min: 5000, integer: true })
+  const fields = ['imageProfile', 'baseUrl', 'apiKey', 'model', 'aspectRatio', 'imageSize'] as const
+  for (const field of fields) {
+    const value = stringField({ value: u[field] })
+    if (value) out[field] = value
   }
-  if (typeof u.timeoutMs === 'number' && Number.isFinite(u.timeoutMs) && u.timeoutMs >= 5000) {
-    out.timeoutMs = Math.floor(u.timeoutMs)
+  if (provider) out.provider = provider
+  if (quality) out.quality = quality
+  if (timeoutMs !== undefined) out.timeoutMs = timeoutMs
+  return Object.keys(out).length ? out : undefined
+}
+
+function parseImageProfile(raw: unknown): ImageProfile | undefined {
+  const u = recordField(raw)
+  if (!u) return undefined
+  const provider = enumField(u.provider, ['gpt-image-2', 'nano-banana'] as const)
+  if (!provider) return undefined
+  const baseUrl = stringField({ value: u.baseUrl }) ?? ''
+  const apiKey = stringField({ value: u.apiKey }) ?? ''
+  const model = stringField({ value: u.model }) ?? ''
+  if (!baseUrl || !model) return undefined
+  const out: ImageProfile = { provider, baseUrl, model }
+  if (apiKey) out.apiKey = apiKey
+  const quality = enumField(u.quality, ['auto', 'high', 'medium', 'low'] as const)
+  const transparentBackground = boolField(u.transparentBackground)
+  const inputFidelity = enumField(u.inputFidelity, ['high', 'low'] as const)
+  const timeoutMs = numberField({ value: u.timeoutMs, min: 5000, integer: true })
+  for (const field of ['aspectRatio', 'imageSize'] as const) {
+    const value = stringField({ value: u[field] })
+    if (value) out[field] = value
   }
+  if (quality) out.quality = quality
+  if (transparentBackground !== undefined) out.transparentBackground = transparentBackground
+  if (inputFidelity) out.inputFidelity = inputFidelity
+  if (timeoutMs !== undefined) out.timeoutMs = timeoutMs
+  return out
+}
+
+function parseImageConfig(raw: unknown): ImageConfig | undefined {
+  const u = recordField(raw)
+  if (!u) return undefined
+  const profilesRaw = u.profiles
+  const profiles: Record<string, ImageProfile> = {}
+  const profilesObj = recordField(profilesRaw)
+  if (profilesObj) {
+    for (const [name, value] of Object.entries(profilesObj)) {
+      const n = name.trim()
+      const p = parseImageProfile(value)
+      if (n && p) profiles[n] = p
+    }
+  }
+  const out: ImageConfig = {}
+  for (const field of ['default', 'avatarGenProfile', 'snapProfile'] as const) {
+    const value = stringField({ value: u[field] })
+    if (value) out[field] = value
+  }
+  if (Object.keys(profiles).length) out.profiles = profiles
   return Object.keys(out).length ? out : undefined
 }
 
 function parseSeedanceVideoConfig(raw: unknown): SeedanceVideoConfig | undefined {
-  if (!raw || typeof raw !== 'object') return undefined
-  const u = raw as Record<string, unknown>
+  const u = recordField(raw)
+  if (!u) return undefined
   const out: SeedanceVideoConfig = {}
-  if (u.provider === 'volcengine') out.provider = u.provider
-  if (typeof u.baseUrl === 'string' && u.baseUrl.trim()) out.baseUrl = u.baseUrl.trim()
-  if (typeof u.apiKey === 'string' && u.apiKey.trim()) out.apiKey = u.apiKey.trim()
-  if (typeof u.model === 'string' && u.model.trim()) out.model = u.model.trim()
-  if (typeof u.ratio === 'string' && u.ratio.trim()) out.ratio = u.ratio.trim()
-  if (typeof u.duration === 'number' && Number.isFinite(u.duration) && u.duration > 0) {
-    out.duration = Math.floor(u.duration)
+  const provider = enumField(u.provider, ['volcengine'] as const)
+  const duration = numberField({ value: u.duration, min: Number.MIN_VALUE, integer: true })
+  const generateAudio = boolField(u.generateAudio)
+  const watermark = boolField(u.watermark)
+  for (const field of ['baseUrl', 'apiKey', 'model', 'ratio', 'resolution'] as const) {
+    const value = stringField({ value: u[field] })
+    if (value) out[field] = value
   }
-  if (typeof u.resolution === 'string' && u.resolution.trim()) out.resolution = u.resolution.trim()
-  if (typeof u.generateAudio === 'boolean') out.generateAudio = u.generateAudio
-  if (typeof u.watermark === 'boolean') out.watermark = u.watermark
+  if (provider) out.provider = provider
+  if (duration !== undefined) out.duration = duration
+  if (generateAudio !== undefined) out.generateAudio = generateAudio
+  if (watermark !== undefined) out.watermark = watermark
   const imageUrls = parseStringArray(u.referenceImageUrls)
   const videoUrls = parseStringArray(u.referenceVideoUrls)
   const audioUrls = parseStringArray(u.referenceAudioUrls)
   if (imageUrls) out.referenceImageUrls = imageUrls
   if (videoUrls) out.referenceVideoUrls = videoUrls
   if (audioUrls) out.referenceAudioUrls = audioUrls
-  if (typeof u.pollIntervalMs === 'number' && Number.isFinite(u.pollIntervalMs) && u.pollIntervalMs >= 1000) {
-    out.pollIntervalMs = Math.floor(u.pollIntervalMs)
-  }
-  if (typeof u.timeoutMs === 'number' && Number.isFinite(u.timeoutMs) && u.timeoutMs >= 10000) {
-    out.timeoutMs = Math.floor(u.timeoutMs)
-  }
+  const pollIntervalMs = numberField({ value: u.pollIntervalMs, min: 1000, integer: true })
+  const timeoutMs = numberField({ value: u.timeoutMs, min: 10000, integer: true })
+  if (pollIntervalMs !== undefined) out.pollIntervalMs = pollIntervalMs
+  if (timeoutMs !== undefined) out.timeoutMs = timeoutMs
   return Object.keys(out).length ? out : undefined
 }
 
 function parseLiveUiConfig(raw: unknown): LiveUiConfig | undefined {
-  if (!raw || typeof raw !== 'object') return undefined
-  const u = raw as Record<string, unknown>
+  const u = recordField(raw)
+  if (!u) return undefined
   const out: LiveUiConfig = {}
-  if (typeof u.port === 'number' && Number.isFinite(u.port)) {
-    const p = Math.floor(u.port)
-    if (p >= 1 && p <= 65535) out.port = p
+  const port = numberField({ value: u.port, min: 1, max: 65535, integer: true })
+  const subconsciousHeartbeatMs = numberField({ value: u.subconsciousHeartbeatMs, min: 5000, max: 3600000, round: true })
+  const figureZoom = numberField({ value: u.figureZoom, min: 0.4, max: 1.5 })
+  const renderer = enumField(u.renderer, ['live2d', 'sprite', 'real2d'] as const)
+  const asrMode = enumField(u.asrMode, ['manual', 'auto'] as const)
+  const voiceMicSpeechRmsThreshold = numberField({ value: u.voiceMicSpeechRmsThreshold, min: Number.MIN_VALUE, max: 0.35 })
+  const voiceMicSilenceEndMs = numberField({ value: u.voiceMicSilenceEndMs, min: 200, max: 12000, round: true })
+  if (port !== undefined) out.port = port
+  if (subconsciousHeartbeatMs !== undefined) out.subconsciousHeartbeatMs = subconsciousHeartbeatMs
+  if (figureZoom !== undefined) out.figureZoom = figureZoom
+  for (const field of ['ttsAutoEnabled', 'asrAutoEnabled', 'voiceMicSuppressInterruptDuringTts'] as const) {
+    const value = boolField(u[field])
+    if (value !== undefined) out[field] = value
   }
-  if (typeof u.subconsciousHeartbeatMs === 'number' && Number.isFinite(u.subconsciousHeartbeatMs)) {
-    const ms = Math.round(u.subconsciousHeartbeatMs)
-    if (ms >= 5000 && ms <= 3600000) out.subconsciousHeartbeatMs = ms
+  if (renderer) out.renderer = renderer
+  if (asrMode) out.asrMode = asrMode
+  for (const field of ['live2dModelsDir', 'live2dModelDict', 'live2dModelName', 'live2dModel3Json'] as const) {
+    const value = stringField({ value: u[field] })
+    if (value) out[field] = value
   }
-  if (typeof u.figureZoom === 'number' && Number.isFinite(u.figureZoom)) {
-    const z = u.figureZoom
-    if (z >= 0.4 && z <= 1.5) out.figureZoom = z
-  }
-  if (typeof u.ttsAutoEnabled === 'boolean') {
-    out.ttsAutoEnabled = u.ttsAutoEnabled
-  }
-  if (u.renderer === 'live2d' || u.renderer === 'sprite' || u.renderer === 'real2d') {
-    out.renderer = u.renderer
-  }
-  if (typeof u.asrAutoEnabled === 'boolean') {
-    out.asrAutoEnabled = u.asrAutoEnabled
-  }
-  if (u.asrMode === 'manual' || u.asrMode === 'auto') {
-    out.asrMode = u.asrMode
-  }
-  if (typeof u.live2dModelsDir === 'string' && u.live2dModelsDir.trim()) {
-    out.live2dModelsDir = u.live2dModelsDir.trim()
-  }
-  if (typeof u.live2dModelDict === 'string' && u.live2dModelDict.trim()) {
-    out.live2dModelDict = u.live2dModelDict.trim()
-  }
-  if (typeof u.live2dModelName === 'string' && u.live2dModelName.trim()) {
-    out.live2dModelName = u.live2dModelName.trim()
-  }
-  if (typeof u.live2dModel3Json === 'string' && u.live2dModel3Json.trim()) {
-    out.live2dModel3Json = u.live2dModel3Json.trim()
-  }
-  if (typeof u.voiceMicSpeechRmsThreshold === 'number' && Number.isFinite(u.voiceMicSpeechRmsThreshold)) {
-    const t = u.voiceMicSpeechRmsThreshold
-    if (t > 0 && t <= 0.35) out.voiceMicSpeechRmsThreshold = t
-  }
-  if (typeof u.voiceMicSilenceEndMs === 'number' && Number.isFinite(u.voiceMicSilenceEndMs)) {
-    const ms = Math.round(u.voiceMicSilenceEndMs)
-    if (ms >= 200 && ms <= 12000) out.voiceMicSilenceEndMs = ms
-  }
-  if (typeof u.voiceMicSuppressInterruptDuringTts === 'boolean') {
-    out.voiceMicSuppressInterruptDuringTts = u.voiceMicSuppressInterruptDuringTts
-  }
+  if (voiceMicSpeechRmsThreshold !== undefined) out.voiceMicSpeechRmsThreshold = voiceMicSpeechRmsThreshold
+  if (voiceMicSilenceEndMs !== undefined) out.voiceMicSilenceEndMs = voiceMicSilenceEndMs
   const se = u.spriteExpressions
-  if (se && typeof se === 'object') {
-    const s = se as Record<string, unknown>
-    const dir = typeof s.dir === 'string' && s.dir.trim() ? s.dir.trim() : undefined
-    const manifest = typeof s.manifest === 'string' && s.manifest.trim() ? s.manifest.trim() : undefined
+  const s = recordField(se)
+  if (s) {
+    const dir = stringField({ value: s.dir })
+    const manifest = stringField({ value: s.manifest })
     if (dir || manifest) {
       out.spriteExpressions = { ...(dir ? { dir } : {}), ...(manifest ? { manifest } : {}) }
     }
@@ -521,8 +591,7 @@ export async function saveConfig(input: SaveConfigInput): Promise<void> {
     ...(existing?.liveUi ? { liveUi: existing.liveUi } : {}),
     ...(existing?.tts ? { tts: existing.tts } : {}),
     ...(existing?.asr ? { asr: existing.asr } : {}),
-    ...(existing?.avatarGen ? { avatarGen: existing.avatarGen } : {}),
-    ...(existing?.snap ? { snap: existing.snap } : {}),
+    ...(existing?.image ? { image: existing.image } : {}),
     ...(existing?.seedance ? { seedance: existing.seedance } : {}),
   }
   const target = GLOBAL_CONFIG_PATH

@@ -17,6 +17,8 @@ export type OpenRouterImageGenOptions = {
   modalities?: ('text' | 'image')[]
   aspectRatio?: string
   imageSize?: string
+  quality?: 'auto' | 'high' | 'medium' | 'low'
+  transparentBackground?: boolean
   timeoutMs?: number
 }
 
@@ -49,10 +51,12 @@ export async function openRouterGenerateImageBuffer(opts: OpenRouterImageGenOpti
     modalities,
     stream: false,
   }
-  if (opts.aspectRatio || opts.imageSize) {
+  if (opts.aspectRatio || opts.imageSize || opts.quality || opts.transparentBackground) {
     body.image_config = {
       ...(opts.aspectRatio ? { aspect_ratio: opts.aspectRatio } : {}),
       ...(opts.imageSize ? { image_size: opts.imageSize } : {}),
+      ...(opts.quality ? { quality: opts.quality } : {}),
+      ...(opts.transparentBackground ? { background: 'transparent', output_format: 'png' } : {}),
     }
   }
 

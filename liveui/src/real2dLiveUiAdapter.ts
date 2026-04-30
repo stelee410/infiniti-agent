@@ -49,6 +49,7 @@ export class Real2dLiveUiAdapter {
   private runtime: AvatarRuntime | null = null
   private ready = false
   private figureZoom = 1
+  private stageScaleCompensation = 1
   private verticalOffsetPx = 0
   private pendingEmotion: Emotion = 'neutral'
   private pendingIntensity = 1
@@ -125,6 +126,12 @@ export class Real2dLiveUiAdapter {
     return this.verticalOffsetPx
   }
 
+  setStageScaleCompensation(value: number): void {
+    if (!Number.isFinite(value)) return
+    this.stageScaleCompensation = Math.max(0.7, Math.min(1.6, value))
+    this.applyContainerTransform()
+  }
+
   getVisualBounds(): DOMRect | null {
     const canvas = this.opts.container.querySelector('canvas.avr-avatar') as HTMLCanvasElement | null
     if (!canvas) return null
@@ -162,7 +169,8 @@ export class Real2dLiveUiAdapter {
   }
 
   private applyContainerTransform(): void {
-    this.opts.container.style.transform = `translateY(${this.verticalOffsetPx}px) scale(${this.figureZoom})`
+    const scale = this.figureZoom * this.stageScaleCompensation
+    this.opts.container.style.transform = `translateY(${this.verticalOffsetPx}px) scale(${scale})`
   }
 
   setEmotion(raw: string, intensity?: number): void {

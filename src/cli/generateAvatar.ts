@@ -1,20 +1,16 @@
 import { readdir, readFile, writeFile, mkdir } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { extname, join, resolve } from 'node:path'
-import type { InfinitiConfig } from '../config/types.js'
-import { resolveLlmProfile } from '../config/types.js'
+import OpenAI, { toFile } from 'openai'
 import { getInfinitiConfigPath, loadConfig } from '../config/io.js'
 import { localLinkyunRefDir } from '../paths.js'
 import { openRouterGenerateImageBuffer } from '../avatar/openRouterImageGen.js'
 import { transparentizeStudioBackgroundPng } from '../avatar/transparentizePngBackground.js'
+import { resolveAvatarGenImageProfile, type ResolvedImageProfile } from '../image/resolveImageProfile.js'
 import {
   defaultLunaStyleManifest,
   type SpriteExpressionManifestV1,
 } from '../liveui/spriteExpressionManifest.js'
-
-const DEFAULT_OPENROUTER = 'https://openrouter.ai/api/v1'
-/** OpenRouter：Nano Banana Pro（Gemini 3 Pro Image Preview），强于 2.5 Flash Image */
-const DEFAULT_IMAGE_MODEL = 'google/gemini-3-pro-image-preview'
 
 function mimeForPath(p: string): string {
   const e = extname(p).toLowerCase()
@@ -70,42 +66,71 @@ async function withElapsedProgress<T>(detail: string, run: () => Promise<T>): Pr
   }
 }
 
-function pickFirstNonEmpty(...vals: Array<string | undefined | null>): string {
-  for (const v of vals) {
-    const t = (v ?? '').trim()
-    if (t) return t
-  }
-  return ''
+function dataUrlToBuffer(dataUrl: string): Buffer | null {
+  const m = dataUrl.trim().match(/^data:[^;]+;base64,(.+)$/is)
+  return m ? Buffer.from(m[1]!, 'base64') : null
 }
 
-function resolveAvatarGenAuth(cfg: InfinitiConfig): { baseUrl: string; apiKey: string; model: string; aspectRatio?: string; imageSize?: string } {
-  const ag = cfg.avatarGen
-  const prof = resolveLlmProfile(cfg)
-  const apiKey = pickFirstNonEmpty(
-    ag?.apiKey,
-    process.env.INFINITI_OPENROUTER_API_KEY,
-    process.env.OPENROUTER_API_KEY,
-    prof.apiKey,
-    cfg.llm.apiKey,
-  )
-  if (!apiKey) {
-    throw new Error(
-      '缺少 OpenRouter API Key（会出现 Missing Authentication header）。请任选其一：\n' +
-        '  1) 在 .infiniti-agent/config.json 增加 "avatarGen": { "apiKey": "sk-or-v1-..." }\n' +
-        '  2) 保证 llm 默认 profile 的 apiKey 为 OpenRouter 的 sk-or-v1-…\n' +
-        '  3) 环境变量 INFINITI_OPENROUTER_API_KEY 或 OPENROUTER_API_KEY',
-    )
+function avatarBackgroundPrompt(auth: ResolvedImageProfile): string {
+  return auth.transparentBackground
+    ? 'Transparent background, no backdrop, no white canvas, true alpha-transparent PNG.'
+    : 'Pure solid white background, clean white studio backdrop, no shadows touching the border, no scenery, no texture; the background will be removed in post-processing.'
+}
+
+async function generateAvatarImageBuffer(
+  auth: ResolvedImageProfile,
+  prompt: string,
+  referenceImages: Array<{ mimeType: string; base64: string }>,
+): Promise<Buffer> {
+  if (auth.provider !== 'gpt-image-2') {
+    return await openRouterGenerateImageBuffer({
+      baseUrl: auth.baseUrl,
+      apiKey: auth.apiKey,
+      model: auth.model,
+      prompt,
+      referenceImages,
+      modalities: ['image', 'text'],
+      aspectRatio: auth.aspectRatio ?? '2:3',
+      ...(auth.imageSize ? { imageSize: auth.imageSize } : {}),
+      ...(auth.quality ? { quality: auth.quality } : {}),
+      transparentBackground: auth.transparentBackground,
+      timeoutMs: auth.timeoutMs,
+    })
   }
-  const baseUrl = (ag?.baseUrl ?? DEFAULT_OPENROUTER).trim()
-  const envModel = process.env.INFINITI_AVATAR_GEN_MODEL?.trim()
-  const model = pickFirstNonEmpty(ag?.model, envModel, DEFAULT_IMAGE_MODEL)
-  return {
-    baseUrl,
-    apiKey,
-    model,
-    ...(ag?.aspectRatio?.trim() ? { aspectRatio: ag.aspectRatio.trim() } : {}),
-    ...(ag?.imageSize?.trim() ? { imageSize: ag.imageSize.trim() } : {}),
+
+  const client = new OpenAI({ apiKey: auth.apiKey, baseURL: auth.baseUrl, timeout: auth.timeoutMs })
+  const common = {
+    model: auth.model,
+    prompt,
+    n: 1,
+    size: auth.imageSize ?? '1024x1536',
+    quality: auth.quality ?? 'high',
+    ...(auth.transparentBackground ? { background: 'transparent' } : {}),
+    output_format: 'png',
   }
+  const resp = referenceImages.length
+    ? await client.images.edit({
+      ...common,
+      image: await Promise.all(
+        referenceImages.map((r, idx) =>
+          toFile(Buffer.from(r.base64, 'base64'), `avatar-ref-${idx}.${r.mimeType.split('/')[1] ?? 'png'}`, { type: r.mimeType }),
+        ),
+      ),
+      ...(auth.inputFidelity ? { input_fidelity: auth.inputFidelity } : {}),
+    } as never)
+    : await client.images.generate(common as never)
+
+  const first = (resp as { data?: Array<{ b64_json?: string; url?: string }> }).data?.[0]
+  if (!first) throw new Error('OpenAI 图像响应为空')
+  if (first.b64_json) return Buffer.from(first.b64_json, 'base64')
+  if (first.url) {
+    const dataUrl = dataUrlToBuffer(first.url)
+    if (dataUrl) return dataUrl
+    const res = await fetch(first.url)
+    if (!res.ok) throw new Error(`OpenAI 图像 URL 下载失败: HTTP ${res.status}`)
+    return Buffer.from(await res.arrayBuffer())
+  }
+  throw new Error('OpenAI 图像响应没有 b64_json 或 url')
 }
 
 /** 各 exp 的绘画面部描述（英文，便于图像模型理解） */
@@ -153,9 +178,9 @@ export async function runGenerateAvatar(cwd: string, opts: GenerateAvatarOptions
 
   const cfgPath = getInfinitiConfigPath(cwd)
   const cfg = await loadConfig(cwd)
-  const auth = resolveAvatarGenAuth(cfg)
+  const auth = resolveAvatarGenImageProfile(cfg)
   console.error(`[generate_avatar] 配置: ${cfgPath}`)
-  console.error(`[generate_avatar] 模型: ${auth.model}`)
+  console.error(`[generate_avatar] 图像模型: ${auth.provider} / ${auth.model}`)
   if (process.env.INFINITI_AVATAR_GEN_MODEL?.trim() && !cfg.avatarGen?.model?.trim()) {
     console.error('[generate_avatar] 提示: 模型由环境变量 INFINITI_AVATAR_GEN_MODEL 覆盖；若需改用 config 请 unset 该变量')
   }
@@ -195,21 +220,12 @@ export async function runGenerateAvatar(cwd: string, opts: GenerateAvatarOptions
       : ''
     const halfPrompt =
       'Generate ONE anime-style half-body portrait (waist-up), same character identity as the reference face and outfit. ' +
-      'Soft studio lighting, plain light gray background, high detail, single character centered. ' +
+      `${avatarBackgroundPrompt(auth)} High detail, single character centered. ` +
       'Preserve hairstyle, eye color, clothing from references.' +
       specBlock
 
     const halfBuf = await withElapsedProgress(`${auth.model} 生成半身像`, () =>
-      openRouterGenerateImageBuffer({
-        baseUrl: auth.baseUrl,
-        apiKey: auth.apiKey,
-        model: auth.model,
-        prompt: halfPrompt,
-        referenceImages: refs,
-        modalities: ['image', 'text'],
-        aspectRatio: auth.aspectRatio ?? '2:3',
-        ...(auth.imageSize ? { imageSize: auth.imageSize } : {}),
-      }),
+      generateAvatarImageBuffer(auth, halfPrompt, refs),
     )
     await writeFile(halfBodyPath, halfBuf)
     console.error(`[generate_avatar] 已写入 ${halfBodyPath}`)
@@ -237,22 +253,12 @@ export async function runGenerateAvatar(cwd: string, opts: GenerateAvatarOptions
     const prompt =
       `Generate ONE anime-style half-body portrait (waist-up), SAME character as reference image. ` +
       `Change ONLY facial expression: ${vis}. ` +
-      `Keep same hairstyle, outfit, body pose, lighting and plain light gray background. ` +
+      `Keep same hairstyle, outfit, body pose and lighting. ${avatarBackgroundPrompt(auth)} ` +
       `Single character, high detail, no text, no watermark.`
 
     const buf = await withElapsedProgress(
       `${auth.model} 表情 ${ent.id} (${ent.label ?? ent.emotions[0]})`,
-      () =>
-        openRouterGenerateImageBuffer({
-          baseUrl: auth.baseUrl,
-          apiKey: auth.apiKey,
-          model: auth.model,
-          prompt,
-          referenceImages: halfRef,
-          modalities: ['image', 'text'],
-          aspectRatio: auth.aspectRatio ?? '2:3',
-          ...(auth.imageSize ? { imageSize: auth.imageSize } : {}),
-        }),
+      () => generateAvatarImageBuffer(auth, prompt, halfRef),
     )
     const dest = join(outRoot, `${ent.id}.png`)
     await writeFile(dest, buf)

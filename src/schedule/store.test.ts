@@ -5,8 +5,11 @@ import { tmpdir } from 'node:os'
 import {
   addScheduleTask,
   advanceScheduleTask,
+  clearCompletedScheduleTasks,
   dueScheduleTasks,
+  formatScheduleTask,
   loadScheduleStore,
+  saveScheduleStore,
 } from './store.js'
 
 let cwd: string
@@ -45,5 +48,57 @@ describe('schedule store', () => {
     }, new Date('2026-04-29T00:01:00.000Z'))
     expect(task.nextRunAt).toBe('2026-04-29T00:01:10.000Z')
     expect(task.runCount).toBe(1)
+  })
+
+  it('formats next run time in the user timezone', () => {
+    const line = formatScheduleTask({
+      version: 1,
+      id: 'sch_test_timezone',
+      enabled: true,
+      kind: 'once',
+      prompt: '休息',
+      createdAt: '2026-04-29T00:00:00.000Z',
+      nextRunAt: '2026-04-29T15:00:00.000Z',
+      runCount: 0,
+    }, { timeZone: 'Asia/Shanghai' })
+
+    expect(line).toContain('2026/04/29 23:00:00')
+    expect(line).toContain('Asia/Shanghai')
+  })
+
+  it('clears disabled tasks that will not run again', async () => {
+    await saveScheduleStore(cwd, {
+      version: 1,
+      tasks: [
+        {
+          version: 1,
+          id: 'sch_done',
+          enabled: false,
+          kind: 'once',
+          prompt: 'done',
+          createdAt: '2026-04-29T00:00:00.000Z',
+          nextRunAt: '2026-04-29T00:00:00.000Z',
+          runCount: 1,
+        },
+        {
+          version: 1,
+          id: 'sch_active',
+          enabled: true,
+          kind: 'daily',
+          prompt: 'active',
+          createdAt: '2026-04-29T00:00:00.000Z',
+          nextRunAt: '2026-04-30T00:00:00.000Z',
+          timeOfDay: '08:00',
+          runCount: 0,
+        },
+      ],
+    })
+
+    const result = await clearCompletedScheduleTasks(cwd)
+    expect(result.removed.map((t) => t.id)).toEqual(['sch_done'])
+    expect(result.remaining).toBe(1)
+
+    const store = await loadScheduleStore(cwd)
+    expect(store.tasks.map((t) => t.id)).toEqual(['sch_active'])
   })
 })

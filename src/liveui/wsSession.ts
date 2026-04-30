@@ -2,7 +2,7 @@ import { type ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
 import { createReadStream, statSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
-import { extname, isAbsolute } from 'node:path'
+import { extname, isAbsolute, relative, resolve } from 'node:path'
 import { WebSocketServer, WebSocket } from 'ws'
 import type {
   LiveUiActionMessage,
@@ -22,6 +22,7 @@ import type { TtsEngine } from '../tts/engine.js'
 import { markdownToTtsPlainText } from '../tts/markdownToTtsPlainText.js'
 import type { AsrEngine } from '../asr/whisperAsr.js'
 import { captureVisionSnapshotResult } from './visionCapture.js'
+import { parseLiveUiClientMessage, type LiveUiClientMessage } from './clientMessages.js'
 
 export type LiveUiConnectionListener = (connected: boolean) => void
 export type LiveUiUserLineListener = (line: string) => void
@@ -35,6 +36,14 @@ export type LiveUiInboxSaveAsListener = (sourcePath: string, destinationPath: st
 /** 渲染端点击 Live2D 头部 / 身体等，由 Node 转成一条合成用户消息请求模型回应 */
 export type LiveUiInteractionKind = 'head_pat' | 'body_poke'
 export type LiveUiInteractionListener = (kind: LiveUiInteractionKind) => void
+
+export function isAllowedLiveUiMediaPath(filePath: string, roots: string[]): boolean {
+  const target = resolve(filePath)
+  return roots.some((root) => {
+    const rel = relative(resolve(root), target)
+    return rel === '' || (!!rel && !rel.startsWith('..') && !isAbsolute(rel))
+  })
+}
 
 export class LiveUiSession {
   readonly port: number
@@ -63,8 +72,11 @@ export class LiveUiSession {
   private pendingVisionAttachment: LiveUiVisionAttachment | undefined
   private pendingFileAttachments: LiveUiFileAttachment[] = []
 
-  constructor(port: number) {
+  private readonly mediaRoots: string[]
+
+  constructor(port: number, opts: { mediaRoots?: string[] } = {}) {
     this.port = port
+    this.mediaRoots = (opts.mediaRoots ?? []).map((p) => resolve(p))
   }
 
   setTtsEnabled(enabled: boolean): void {
@@ -145,6 +157,12 @@ export class LiveUiSession {
     this.lastVisionCapture = undefined
     this.pendingFileAttachments = []
     this.broadcast({ type: 'VISION_ATTACHMENT_CLEAR', data: {} } as LiveUiMessage)
+    this.broadcast({ type: 'ATTACHMENT_CLEAR', data: {} } as LiveUiMessage)
+  }
+
+  clearFileAttachments(): void {
+    this.pendingFileAttachments = []
+    this.broadcast({ type: 'ATTACHMENT_CLEAR', data: {} } as LiveUiMessage)
   }
 
   /** 渲染端输入框内容变化（含空串，用于清空 TUI 草稿状态）。 */
@@ -267,115 +285,8 @@ export class LiveUiSession {
       ws.on('message', (buf) => {
         try {
           const raw = typeof buf === 'string' ? buf : buf.toString('utf8')
-          const parsed = JSON.parse(raw) as { type?: unknown; data?: unknown }
-          const t = parsed?.type
-          if (t === 'USER_INPUT' && parsed.data && typeof parsed.data === 'object') {
-            const d = parsed.data as { line?: unknown; attachments?: unknown }
-            const line = d.line
-            if (typeof line !== 'string' || !line.trim()) return
-            const trimmed = line.trimEnd()
-            const speakText = parseSpeakCommandLine(trimmed)
-            if (speakText !== undefined) {
-              if (speakText) {
-                this.resetAudio()
-                this.enqueueTts(speakText)
-              }
-              return
-            }
-            const attachments = parseFileAttachments(d.attachments)
-            if (attachments.length) {
-              this.pendingFileAttachments = attachments
-            }
-            this.emitUserLine(trimmed)
-            return
-          }
-          if (t === 'VISION_CAPTURE_REQUEST' && parsed.data && typeof parsed.data === 'object') {
-            void this.handleVisionCaptureRequest(ws, parsed.data)
-            return
-          }
-          if (t === 'VISION_CAPTURE_CONFIRM' && parsed.data && typeof parsed.data === 'object') {
-            const requestId = (parsed.data as { requestId?: unknown }).requestId
-            const localVision = parseVisionAttachment((parsed.data as { vision?: unknown }).vision)
-            if (typeof requestId === 'string' && localVision) {
-              this.pendingVisionAttachment = localVision
-              this.lastVisionCapture = { requestId, vision: localVision }
-              console.error(`[liveui] local vision attachment confirmed: ${requestId}`)
-            } else if (typeof requestId === 'string' && this.lastVisionCapture?.requestId === requestId) {
-              this.pendingVisionAttachment = this.lastVisionCapture.vision
-              console.error(`[liveui] vision attachment confirmed: ${requestId}`)
-            }
-            return
-          }
-          if (t === 'VISION_CAPTURE_CANCEL' && parsed.data && typeof parsed.data === 'object') {
-            const requestId = (parsed.data as { requestId?: unknown }).requestId
-            if (typeof requestId === 'string' && this.lastVisionCapture?.requestId === requestId) {
-              this.lastVisionCapture = undefined
-            }
-            return
-          }
-          if (t === 'VISION_ATTACHMENT_CLEAR') {
-            this.pendingVisionAttachment = undefined
-            this.pendingFileAttachments = []
-            return
-          }
-          if (t === 'ATTACHMENT_CLEAR') {
-            this.pendingFileAttachments = []
-            return
-          }
-          if (t === 'USER_COMPOSER' && parsed.data && typeof parsed.data === 'object') {
-            const text = (parsed.data as { text?: unknown }).text
-            if (typeof text !== 'string') return
-            this.emitUserComposer(text)
-            return
-          }
-          if (t === 'TTS_TOGGLE' && parsed.data && typeof parsed.data === 'object') {
-            const enabled = (parsed.data as { enabled?: unknown }).enabled
-            this.setTtsEnabled(!!enabled)
-            return
-          }
-          if (t === 'INTERRUPT') {
-            this.resetAudio()
-            this.emitInterrupt()
-            return
-          }
-          if (t === 'CONFIG_SAVE' && parsed.data && typeof parsed.data === 'object') {
-            this.emitConfigSave((parsed.data as { config?: unknown }).config)
-            return
-          }
-          if (t === 'INBOX_MARK_READ' && parsed.data && typeof parsed.data === 'object') {
-            const ids = (parsed.data as { ids?: unknown }).ids
-            if (Array.isArray(ids)) {
-              const clean = ids
-                .filter((x): x is string => typeof x === 'string' && !!x.trim())
-                .map((x) => x.trim())
-              if (clean.length > 0) this.emitInboxMarkRead(clean)
-            }
-            return
-          }
-          if (t === 'INBOX_SAVE_AS' && parsed.data && typeof parsed.data === 'object') {
-            const d = parsed.data as { sourcePath?: unknown; destinationPath?: unknown; requestId?: unknown }
-            if (typeof d.sourcePath === 'string' && typeof d.destinationPath === 'string') {
-              this.emitInboxSaveAs(
-                d.sourcePath,
-                d.destinationPath,
-                typeof d.requestId === 'string' ? d.requestId : undefined,
-              )
-            }
-            return
-          }
-          if (t === 'MIC_AUDIO' && parsed.data && typeof parsed.data === 'object') {
-            const d = parsed.data as { audioBase64?: string; format?: string }
-            if (typeof d.audioBase64 === 'string' && this.asrEngine) {
-              void this.handleMicAudio(d.audioBase64, d.format ?? 'webm', ws)
-            }
-            return
-          }
-          if (t === 'LIVEUI_INTERACTION' && parsed.data && typeof parsed.data === 'object') {
-            const kind = (parsed.data as { kind?: unknown }).kind
-            if (kind === 'head_pat' || kind === 'body_poke') {
-              this.emitInteraction(kind)
-            }
-          }
+          const message = parseLiveUiClientMessage(raw)
+          if (message) this.handleClientMessage(ws, message)
         } catch {
           /* ignore invalid client frames */
         }
@@ -395,6 +306,78 @@ export class LiveUiSession {
     })
   }
 
+  private handleClientMessage(ws: WebSocket, message: LiveUiClientMessage): void {
+    switch (message.type) {
+      case 'USER_INPUT': {
+        const speakText = parseSpeakCommandLine(message.line)
+        if (speakText !== undefined) {
+          if (speakText) {
+            this.resetAudio()
+            this.enqueueTts(speakText)
+          }
+          return
+        }
+        if (message.attachments.length) {
+          this.pendingFileAttachments = message.attachments
+        }
+        this.emitUserLine(message.line)
+        return
+      }
+      case 'VISION_CAPTURE_REQUEST':
+        void this.handleVisionCaptureRequest(ws, message)
+        return
+      case 'VISION_CAPTURE_CONFIRM':
+        if (message.vision) {
+          this.pendingVisionAttachment = message.vision
+          this.lastVisionCapture = { requestId: message.requestId, vision: message.vision }
+          console.error(`[liveui] local vision attachment confirmed: ${message.requestId}`)
+        } else if (this.lastVisionCapture?.requestId === message.requestId) {
+          this.pendingVisionAttachment = this.lastVisionCapture.vision
+          console.error(`[liveui] vision attachment confirmed: ${message.requestId}`)
+        }
+        return
+      case 'VISION_CAPTURE_CANCEL':
+        if (this.lastVisionCapture?.requestId === message.requestId) {
+          this.lastVisionCapture = undefined
+        }
+        return
+      case 'VISION_ATTACHMENT_CLEAR':
+        this.pendingVisionAttachment = undefined
+        this.pendingFileAttachments = []
+        return
+      case 'ATTACHMENT_CLEAR':
+        this.pendingFileAttachments = []
+        return
+      case 'USER_COMPOSER':
+        this.emitUserComposer(message.text)
+        return
+      case 'TTS_TOGGLE':
+        this.setTtsEnabled(message.enabled)
+        return
+      case 'INTERRUPT':
+        this.resetAudio()
+        this.emitInterrupt()
+        return
+      case 'CONFIG_SAVE':
+        this.emitConfigSave(message.config)
+        return
+      case 'INBOX_MARK_READ':
+        this.emitInboxMarkRead(message.ids)
+        return
+      case 'INBOX_SAVE_AS':
+        this.emitInboxSaveAs(message.sourcePath, message.destinationPath, message.requestId)
+        return
+      case 'MIC_AUDIO':
+        if (this.asrEngine) {
+          void this.handleMicAudio(message.audioBase64, message.format, ws)
+        }
+        return
+      case 'LIVEUI_INTERACTION':
+        this.emitInteraction(message.kind)
+        return
+    }
+  }
+
   private handleHttpRequest(req: IncomingMessage, res: ServerResponse): void {
     const method = req.method ?? 'GET'
     if (method !== 'GET' && method !== 'HEAD') {
@@ -412,6 +395,11 @@ export class LiveUiSession {
     if (!filePath || !isAbsolute(filePath)) {
       res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' })
       res.end('invalid media path')
+      return
+    }
+    if (!isAllowedLiveUiMediaPath(filePath, this.mediaRoots)) {
+      res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' })
+      res.end('media path forbidden')
       return
     }
 
@@ -575,33 +563,21 @@ export class LiveUiSession {
     })
   }
 
-  private async handleVisionCaptureRequest(ws: WebSocket, data: unknown): Promise<void> {
-    const requestId =
-      data && typeof data === 'object' && typeof (data as { requestId?: unknown }).requestId === 'string'
-        ? (data as { requestId: string }).requestId
-        : ''
-    if (!requestId) return
-    const location =
-      data && typeof data === 'object'
-        ? parseVisionLocation((data as { location?: unknown }).location)
-        : undefined
-    const rawDelay =
-      data && typeof data === 'object'
-        ? (data as { captureDelayMs?: unknown }).captureDelayMs
-        : undefined
-    const captureDelayMs =
-      typeof rawDelay === 'number' && Number.isFinite(rawDelay)
-        ? Math.max(0, Math.min(10_000, Math.round(rawDelay)))
-        : 0
-
-    console.error(`[liveui] vision capture requested: ${requestId}, captureDelayMs=${captureDelayMs}`)
-    const result = await captureVisionSnapshotResult({ location, captureDelayMs })
+  private async handleVisionCaptureRequest(
+    ws: WebSocket,
+    message: Extract<LiveUiClientMessage, { type: 'VISION_CAPTURE_REQUEST' }>,
+  ): Promise<void> {
+    console.error(`[liveui] vision capture requested: ${message.requestId}, captureDelayMs=${message.captureDelayMs}`)
+    const result = await captureVisionSnapshotResult({
+      location: message.location,
+      captureDelayMs: message.captureDelayMs,
+    })
     if (result.ok) {
-      this.lastVisionCapture = { requestId, vision: result.vision }
+      this.lastVisionCapture = { requestId: message.requestId, vision: result.vision }
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({
           type: 'VISION_CAPTURE_RESULT',
-          data: { requestId, ok: true, vision: result.vision },
+          data: { requestId: message.requestId, ok: true, vision: result.vision },
         } as LiveUiMessage))
       }
       return
@@ -609,7 +585,7 @@ export class LiveUiSession {
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({
         type: 'VISION_CAPTURE_RESULT',
-        data: { requestId, ok: false, error: result.error },
+        data: { requestId: message.requestId, ok: false, error: result.error },
       } as LiveUiMessage))
     }
   }
@@ -689,110 +665,4 @@ function mediaMimeType(filePath: string): string {
   if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg'
   if (ext === '.webp') return 'image/webp'
   return 'application/octet-stream'
-}
-
-function parseVisionLocation(raw: unknown): LiveUiVisionAttachment['location'] | undefined {
-  if (!raw || typeof raw !== 'object') return undefined
-  const loc = raw as { latitude?: unknown; longitude?: unknown; accuracy?: unknown }
-  if (
-    typeof loc.latitude !== 'number' ||
-    !Number.isFinite(loc.latitude) ||
-    typeof loc.longitude !== 'number' ||
-    !Number.isFinite(loc.longitude)
-  ) {
-    return undefined
-  }
-  const out: NonNullable<LiveUiVisionAttachment['location']> = {
-    latitude: loc.latitude,
-    longitude: loc.longitude,
-  }
-  if (typeof loc.accuracy === 'number' && Number.isFinite(loc.accuracy)) {
-    out.accuracy = loc.accuracy
-  }
-  return out
-}
-
-function parseVisionAttachment(raw: unknown): LiveUiVisionAttachment | undefined {
-  if (!raw || typeof raw !== 'object') return undefined
-  const v = raw as {
-    imageBase64?: unknown
-    mediaType?: unknown
-    capturedAt?: unknown
-    location?: unknown
-  }
-  if (
-    typeof v.imageBase64 !== 'string' ||
-    typeof v.capturedAt !== 'string' ||
-    (v.mediaType !== 'image/jpeg' && v.mediaType !== 'image/png' && v.mediaType !== 'image/webp')
-  ) {
-    return undefined
-  }
-  return {
-    imageBase64: v.imageBase64,
-    mediaType: v.mediaType,
-    capturedAt: v.capturedAt,
-    ...(parseVisionLocation(v.location) ? { location: parseVisionLocation(v.location) } : {}),
-  }
-}
-
-const MAX_ATTACHMENTS = 12
-const MAX_ATTACHMENT_BYTES = 12 * 1024 * 1024
-const ALLOWED_ATTACHMENT_TYPES = new Set([
-  'image/jpeg',
-  'image/png',
-  'image/webp',
-  'image/gif',
-  'application/pdf',
-  'text/markdown',
-  'text/csv',
-  'text/plain',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-])
-
-function parseFileAttachments(raw: unknown): LiveUiFileAttachment[] {
-  if (!Array.isArray(raw)) return []
-  const out: LiveUiFileAttachment[] = []
-  let imageCount = 0
-  for (const item of raw) {
-    if (!item || typeof item !== 'object') continue
-    const a = item as {
-      id?: unknown
-      name?: unknown
-      mediaType?: unknown
-      base64?: unknown
-      size?: unknown
-      kind?: unknown
-      capturedAt?: unknown
-      text?: unknown
-    }
-    if (
-      typeof a.id !== 'string' ||
-      typeof a.name !== 'string' ||
-      typeof a.mediaType !== 'string' ||
-      typeof a.base64 !== 'string' ||
-      typeof a.size !== 'number' ||
-      !Number.isFinite(a.size) ||
-      typeof a.capturedAt !== 'string'
-    ) {
-      continue
-    }
-    const kind = a.kind === 'image' ? 'image' : a.kind === 'document' ? 'document' : undefined
-    if (!kind || !ALLOWED_ATTACHMENT_TYPES.has(a.mediaType) || a.size > MAX_ATTACHMENT_BYTES) continue
-    if (kind === 'image') {
-      imageCount++
-      if (imageCount > 9) continue
-    }
-    out.push({
-      id: a.id,
-      name: a.name,
-      mediaType: a.mediaType,
-      base64: a.base64,
-      size: a.size,
-      kind,
-      capturedAt: a.capturedAt,
-      ...(typeof a.text === 'string' && a.text.trim() ? { text: a.text.slice(0, 80_000) } : {}),
-    })
-    if (out.length >= MAX_ATTACHMENTS) break
-  }
-  return out
 }

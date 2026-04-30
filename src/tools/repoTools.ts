@@ -133,6 +133,9 @@ export async function toolGlobFiles(
   if (!pattern) {
     return jsonErr('pattern 不能为空')
   }
+  if (path.isAbsolute(pattern) || pattern.split(/[\\/]+/).includes('..')) {
+    return jsonErr('pattern 必须位于工作区内，不能使用绝对路径或 ..')
+  }
   const root = path.resolve(sessionCwd)
   const ignore = Array.isArray(args.ignore)
     ? (args.ignore as unknown[]).map((x) => String(x))
@@ -147,11 +150,15 @@ export async function toolGlobFiles(
       followSymbolicLinks: false,
       stats: false,
     })
-    const slice = entries.slice(0, MAX_GLOB_RESULTS)
+    const insideEntries = entries.filter((entry) => {
+      const abs = path.resolve(root, entry)
+      return isPathInsideWorkspace(root, abs)
+    })
+    const slice = insideEntries.slice(0, MAX_GLOB_RESULTS)
     return jsonOk({
       pattern,
-      count: entries.length,
-      truncated: entries.length > slice.length,
+      count: insideEntries.length,
+      truncated: insideEntries.length > slice.length,
       files: slice,
     })
   } catch (e: unknown) {

@@ -98,6 +98,15 @@ export async function removeScheduleTask(cwd: string, idPrefix: string): Promise
   return removed ?? null
 }
 
+export async function clearCompletedScheduleTasks(cwd: string): Promise<{ removed: ScheduleTask[]; remaining: number }> {
+  const store = await loadScheduleStore(cwd)
+  const removed = store.tasks.filter((t) => !t.enabled)
+  if (!removed.length) return { removed: [], remaining: store.tasks.length }
+  store.tasks = store.tasks.filter((t) => t.enabled)
+  await saveScheduleStore(cwd, store)
+  return { removed, remaining: store.tasks.length }
+}
+
 export function dueScheduleTasks(store: ScheduleStore, now = new Date()): ScheduleTask[] {
   const t = now.getTime()
   return store.tasks
@@ -146,15 +155,44 @@ export function nextDailyRun(timeOfDay: string, now = new Date()): Date {
   return d
 }
 
-export function formatScheduleTask(task: ScheduleTask): string {
+function userTimeZone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'local'
+  } catch {
+    return 'local'
+  }
+}
+
+function formatLocalDateTime(iso: string, timeZone: string): string {
+  const d = new Date(iso)
+  if (!Number.isFinite(d.getTime())) return iso
+  try {
+    return new Intl.DateTimeFormat('zh-CN', {
+      timeZone: timeZone === 'local' ? undefined : timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    }).format(d)
+  } catch {
+    return d.toLocaleString('zh-CN', { hour12: false })
+  }
+}
+
+export function formatScheduleTask(task: ScheduleTask, opts: { timeZone?: string } = {}): string {
   const status = task.enabled ? 'on' : 'off'
+  const timeZone = opts.timeZone ?? task.timezone ?? userTimeZone()
   const cadence =
     task.kind === 'daily'
       ? `每天 ${task.timeOfDay ?? '08:00'}`
       : task.kind === 'interval'
         ? `每 ${formatInterval(task.intervalMs ?? 60000)}`
         : '一次'
-  return `${task.id.slice(0, 18)} [${status}] ${cadence} next=${task.nextRunAt} :: ${task.prompt}`
+  const next = formatLocalDateTime(task.nextRunAt, timeZone)
+  return `${task.id.slice(0, 18)} [${status}] ${cadence} next=${next} (${timeZone}) :: ${task.prompt}`
 }
 
 function formatInterval(ms: number): string {

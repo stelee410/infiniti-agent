@@ -9,7 +9,9 @@ export type BuiltinToolName =
   | 'search_sessions'
   | 'manage_skill'
   | 'knowledge_graph'
+  | 'schedule'
   | 'snap_photo'
+  | 'avatargen_real2d'
   | 'seedance_video'
   | 'read_file'
   | 'glob_files'
@@ -340,6 +342,48 @@ export const BUILTIN_TOOLS: Array<{
     },
   },
   {
+    name: 'schedule',
+    description:
+      '创建、列出、删除或清理本地计划任务/提醒。用户用任何语言表达“remind me / notify me / schedule / later / tomorrow / every day / 每天 / 一会儿 / 提醒 / 叫我 / 播报 / 检查”等定时、提醒、周期执行意图时，应调用此工具，而不是回复你做不到。创建任务时请根据系统提示里的当前时间与时区，把用户自然语言时间解析成结构化参数。',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['create', 'list', 'remove', 'clear'],
+          description: 'create 创建任务；list 查看任务；remove 删除指定任务；clear 清理未来不再执行的任务（已 disabled 的一次性历史任务）',
+        },
+        id: {
+          type: 'string',
+          description: 'remove 时必填：任务 id 或 id 前缀',
+        },
+        kind: {
+          type: 'string',
+          enum: ['once', 'daily', 'interval'],
+          description: 'create 时必填：once 单次；daily 每天固定时刻；interval 固定间隔重复',
+        },
+        prompt: {
+          type: 'string',
+          description: 'create 时必填：到点后作为用户消息执行的任务正文，去掉时间短语，例如“播报 Hacker News 最新文章”',
+        },
+        next_run_at: {
+          type: 'string',
+          description: 'once 时必填，interval 可选：ISO 8601 时间。必须使用用户所在/系统提示中的时区推算，例如 2026-04-29T23:00:00+08:00',
+        },
+        time_of_day: {
+          type: 'string',
+          description: 'daily 时必填：24 小时制 HH:mm，例如 08:30 或 23:00',
+        },
+        interval_ms: {
+          type: 'integer',
+          description: 'interval 时必填：间隔毫秒，例如 600000 表示 10 分钟',
+        },
+      },
+      required: ['action'],
+    },
+  },
+  {
     name: 'manage_skill',
     description:
       '自主创建、更新或删除 Skill。在完成复杂任务后，应考虑将可复用的流程提炼为 Skill。支持 create（新建）、patch（局部更新）、delete（删除）三种操作。',
@@ -383,6 +427,22 @@ export const BUILTIN_TOOLS: Array<{
         prompt: {
           type: 'string',
           description: '图片内容提示词。用自然语言描述场景、人物、风格、光线、构图等。',
+        },
+      },
+      required: ['prompt'],
+    },
+  },
+  {
+    name: 'avatargen_real2d',
+    description:
+      '异步生成 Real2D 头像表情 PNG 套装，并把完成/失败邮件放进你的邮箱。适合用户要求“用这张头像生成 real2d 表情集、生成 exp01 到 exp06 和 exp_open、做 2D avatar 表情素材”等请求。如果用户当前消息带有拍照图片或上传图片，工具会自动把这些图片作为身份参考图。此工具只支持 AvatarGen GPT-Image2；设置不对时会返回错误，不要改用其它图像模型。',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        prompt: {
+          type: 'string',
+          description: '对 Real2D 表情集的附加要求，例如角色风格、保持透明背景、输出用途等。工具固定生成 exp01.png..exp06.png 与 exp_open.png。',
         },
       },
       required: ['prompt'],

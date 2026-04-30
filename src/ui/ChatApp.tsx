@@ -41,11 +41,14 @@ import type { LiveUiInteractionKind, LiveUiSession } from '../liveui/wsSession.j
 import type { LiveUiFileAttachment, LiveUiStatusVariant, LiveUiVisionAttachment } from '../liveui/protocol.js'
 import { enqueueSnapPhotoJob } from '../snap/asyncSnap.js'
 import { enqueueSeedanceVideoJob, seedanceReferenceImagesFromLiveInputs } from '../video/asyncVideo.js'
+import { enqueueAvatarGenJob } from '../avatar/asyncAvatarGen.js'
+import { avatarGenReferenceImagesFromLiveInputs } from '../avatar/real2dAvatarGen.js'
 import { listInboxMessages, markInboxMessageRead, type InboxMessage } from '../inbox/store.js'
-import { looksLikeScheduleRequest, parseScheduleRequest } from '../schedule/parser.js'
+import { parseScheduleRequest } from '../schedule/parser.js'
 import {
   addScheduleTask,
   advanceScheduleTask,
+  clearCompletedScheduleTasks,
   dueScheduleTasks,
   failScheduleTask,
   formatScheduleTask,
@@ -65,6 +68,12 @@ import {
   stripLiveUiTagsFromMessages,
 } from '../liveui/emotionParse.js'
 import { SubconsciousAgent } from '../subconscious/agent.js'
+import {
+  finalizeQueuedMediaCommand,
+  parseQueuedMediaCommand,
+  queuedMediaEmptyPromptMessage,
+  queuedMediaNotice,
+} from './queuedMediaCommand.js'
 
 /**
  * Live 下 TTS 用的「干净正文」：与流式 onTextDelta 一致，先 `processAssistantStreamChunk` 得 `displayText`
@@ -135,6 +144,23 @@ async function polishVideoQueuedReply(config: InfinitiConfig, prompt: string, jo
       system:
         '你是 Infiniti Agent 的日常对话人格。请只输出中文正文，不要标题，不要列表，不要任务 ID，不要像系统通知。用户刚发出 /video 或 /seedance 视频生成命令；你的回复要像普通聊天里自然接话，亲近、轻松、简短。表达：你会在后台生成视频；用户可以继续聊天；完成后会下载到本地并放进你的邮箱，小信封亮起即可查看。',
       user: `用户想生成的视频：${prompt}\n内部任务 ID（不要输出）：${jobId}\n请给出一句或两句自然口语回复。参考但不要照抄：\n\n${fallback}`,
+    })
+    return out.trim() || fallback
+  } catch {
+    return fallback
+  }
+}
+
+async function polishAvatarGenQueuedReply(config: InfinitiConfig, prompt: string, jobId: string): Promise<string> {
+  const fallback =
+    `好，我把这套 Real2D 表情 PNG 放到后台生成。你可以继续聊，等 exp01 到 exp06 和 exp_open 都好了，我会把它们放进你的邮箱，小信封亮起来就能查看。`
+  try {
+    const out = await oneShotTextCompletion({
+      config,
+      maxOutTokens: 500,
+      system:
+        '你是 Infiniti Agent 的日常对话人格。请只输出中文正文，不要标题，不要列表，不要任务 ID，不要像系统通知。用户刚发出 /avatargen real2d 表情集生成命令；你的回复要像普通聊天里自然接话，亲近、轻松、简短。表达：你会在后台生成 exp01 到 exp06 和 exp_open；用户可以继续聊天；完成后会放进你的邮箱，小信封亮起即可查看。',
+      user: `用户对 Real2D 表情集的要求：${prompt}\n内部任务 ID（不要输出）：${jobId}\n请给出一句或两句自然口语回复。参考但不要照抄：\n\n${fallback}`,
     })
     return out.trim() || fallback
   } catch {
@@ -491,6 +517,25 @@ export function ChatApp({
     [cwd, expressionManifest, liveUi],
   )
 
+  const deliverLocalCommandExchange = useCallback(
+    (userLine: string, assistantText: string) => {
+      deliverAssistantText(assistantText)
+      void subconsciousRef.current?.observeUserInput(userLine)
+      void subconsciousRef.current?.observeAssistantOutput(assistantText)
+      setMessages((prev) => {
+        const next: PersistedMessage[] = [
+          ...prev,
+          { role: 'user', content: userLine },
+          { role: 'assistant', content: assistantText },
+        ]
+        messagesRef.current = next
+        void saveSession(cwd, next)
+        return next
+      })
+    },
+    [cwd, deliverAssistantText],
+  )
+
   const runScheduleTask = useCallback(
     async (task: ScheduleTask): Promise<void> => {
       const baseMessages = messagesRef.current
@@ -663,10 +708,22 @@ export function ChatApp({
       if (raw === '/schedule' || raw === '/schedule list') {
         const store = await loadScheduleStore(cwd)
         const lines = store.tasks.length
-          ? store.tasks.map(formatScheduleTask).join('\n')
+          ? `当前计划任务：\n${store.tasks.map((task) => formatScheduleTask(task)).join('\n')}`
           : '暂无计划任务'
-        setNotice(lines)
-        setTimeout(() => setNotice(null), 15000)
+        setError(null)
+        deliverLocalCommandExchange(raw, lines)
+        setInput('')
+        return
+      }
+      if (raw === '/schedule clear') {
+        const result = await clearCompletedScheduleTasks(cwd)
+        setError(null)
+        deliverLocalCommandExchange(
+          raw,
+          result.removed.length
+            ? `已清理 ${result.removed.length} 个未来不再执行的计划任务，剩余 ${result.remaining} 个。`
+            : '没有需要清理的计划任务。',
+        )
         setInput('')
         return
       }
@@ -678,16 +735,16 @@ export function ChatApp({
           return
         }
         const removed = await removeScheduleTask(cwd, id)
-        if (!removed) setError(`没有找到计划任务: ${id}`)
-        else {
+        if (!removed) {
+          setError(`没有找到计划任务: ${id}`)
+        } else {
           setError(null)
-          setNotice(`已删除计划任务：${removed.prompt}`)
-          setTimeout(() => setNotice(null), 5000)
+          deliverLocalCommandExchange(raw, `已删除计划任务：${removed.prompt}`)
         }
         setInput('')
         return
       }
-      if (raw.startsWith('/schedule add ') || looksLikeScheduleRequest(raw)) {
+      if (raw.startsWith('/schedule add ')) {
         const parsed = parseScheduleRequest(raw)
         if (!parsed || !parsed.prompt.trim()) {
           setError('计划格式暂支持：每天早上8点做某事、每分钟检查某事、每5分钟做某事、/schedule add 明天9点做某事')
@@ -696,8 +753,7 @@ export function ChatApp({
         }
         const task = await addScheduleTask(cwd, parsed)
         setError(null)
-        setNotice(`已创建计划任务：${formatScheduleTask(task)}`)
-        setTimeout(() => setNotice(null), 8000)
+        deliverLocalCommandExchange(raw, `已创建计划任务：${formatScheduleTask(task)}`)
         setInput('')
         return
       }
@@ -744,94 +800,70 @@ export function ChatApp({
       }
       if (raw === '/help') {
         setError(
-          '输入 / 可补全：斜杠命令与全部工具（↑↓ Tab）。命令: /exit /clear /reload /config /debug /schedule /memory /inbox /last_email /undo /roll /compact /permission /speak /snap /video — /schedule list 查看计划，/schedule add 每天早上8点做某事 创建计划；也可直接输入“每分钟检查一次邮箱”。/config 仅 Live 模式打开配置面板；/debug 切换 LiveUI 调试叠层；/last_email 打开最近一封邮箱消息；/speak 后接正文仅 TTS 朗读、不写会话；/snap 后接提示词异步生成合照/写实照片；/video 后接提示词异步生成 Seedance 视频，完成后写入你的邮箱。/roll 2 可按 LLM 输出层回滚对话。改文件/bash/HTTP 默认需确认（Y 允许 · A 本次会话始终允许该工具 · N 拒绝）；启动时加 --dangerously-skip-permissions 可跳过所有确认。/permission 查看当前状态。/compact 压缩较早历史。卡死排查：INFINITI_AGENT_DEBUG=1。',
+          '输入 / 可补全：斜杠命令与全部工具（↑↓ Tab）。命令: /exit /clear /reload /config /debug /schedule /memory /inbox /last_email /undo /roll /compact /permission /speak /snap /avatargen /video — /schedule list 查看计划，/schedule add 每天早上8点做某事 创建计划；自然语言提醒/定时会由模型调用 schedule 工具。/config 仅 Live 模式打开配置面板；/debug 切换 LiveUI 调试叠层；/last_email 打开最近一封邮箱消息；/speak 后接正文仅 TTS 朗读、不写会话；/snap 后接提示词异步生成合照/写实照片；/avatargen 后接要求并附带头像图，异步生成 real2d 的 exp01..exp06 与 exp_open；/video 后接提示词异步生成 Seedance 视频，完成后写入你的邮箱。/roll 2 可按 LLM 输出层回滚对话。改文件/bash/HTTP 默认需确认（Y 允许 · A 本次会话始终允许该工具 · N 拒绝）；启动时加 --dangerously-skip-permissions 可跳过所有确认。/permission 查看当前状态。/compact 压缩较早历史。卡死排查：INFINITI_AGENT_DEBUG=1。',
         )
         setInput('')
         return
       }
-      if (raw === '/video' || raw.startsWith('/video ') || raw === '/seedance' || raw.startsWith('/seedance ')) {
-        const prefix = raw.startsWith('/seedance') ? '/seedance' : '/video'
-        const prompt = raw.startsWith(`${prefix} `) ? raw.slice(prefix.length + 1).trim() : ''
+      const mediaCommand = parseQueuedMediaCommand(raw)
+      if (mediaCommand) {
+        const prompt = mediaCommand.prompt
         if (!prompt) {
-          setError(`${prefix} 后请输入提示词，例如：${prefix} 夕阳海边的电影感航拍，慢速推进`)
+          const msg = queuedMediaEmptyPromptMessage(mediaCommand)
           setInput('')
+          setError(msg)
+          if (mediaCommand.kind === 'avatargen') {
+            liveUi?.sendAssistantStream(msg, true, true)
+          }
           return
         }
         if (busyRef.current) return
         setError(null)
-        setNotice('视频任务已交给 Seedance 后台处理，完成后会放进你的邮箱')
+        setNotice(queuedMediaNotice(mediaCommand.kind))
         setInput('')
-        const videoVision = vision ?? liveUi?.consumePendingVisionAttachment()
-        const videoAttachments = liveUi?.consumePendingFileAttachments() ?? []
-        if (videoVision) liveUi?.clearVisionAttachment()
-        const referenceImages = seedanceReferenceImagesFromLiveInputs(videoVision, videoAttachments)
         try {
-          const job = await enqueueSeedanceVideoJob(cwd, config, prompt, referenceImages)
-          const content = await polishVideoQueuedReply(config, prompt, job.id)
-          void subconsciousRef.current?.observeAssistantOutput(content)
-          const next: PersistedMessage[] = [
-            ...messages,
-            { role: 'user', content: raw },
-            { role: 'assistant', content },
-          ]
-          setMessages(next)
-          await saveSession(cwd, next)
-          setNotice(content)
-          setTimeout(() => setNotice(null), 12000)
-          if (liveUi) {
-            liveUi.sendAssistantStream(content, true, true)
-            if (liveUi.hasTts) {
-              const clean = ttsDisplayCleanForLiveUi(content, expressionManifest)
-              liveUi.resetAudio()
-              for (const seg of splitTtsSegments(clean)) {
-                liveUi.enqueueTts(seg)
-              }
-            }
+          let content: string
+          if (mediaCommand.kind === 'avatargen') {
+            const avatarVision = vision ?? liveUi?.consumePendingVisionAttachment()
+            const avatarAttachments = liveUi?.consumePendingFileAttachments() ?? []
+            const referenceImages = avatarGenReferenceImagesFromLiveInputs(avatarVision, avatarAttachments)
+            const job = await enqueueAvatarGenJob(cwd, config, prompt, referenceImages)
+            if (avatarVision) liveUi?.clearVisionAttachment()
+            else if (avatarAttachments.length) liveUi?.clearFileAttachments()
+            content = await polishAvatarGenQueuedReply(config, prompt, job.id)
+          } else if (mediaCommand.kind === 'video') {
+            const videoVision = vision ?? liveUi?.consumePendingVisionAttachment()
+            const videoAttachments = liveUi?.consumePendingFileAttachments() ?? []
+            if (videoVision) liveUi?.clearVisionAttachment()
+            else if (videoAttachments.length) liveUi?.clearFileAttachments()
+            const referenceImages = seedanceReferenceImagesFromLiveInputs(videoVision, videoAttachments)
+            const job = await enqueueSeedanceVideoJob(cwd, config, prompt, referenceImages)
+            content = await polishVideoQueuedReply(config, prompt, job.id)
+          } else {
+            const snapVision = vision ?? liveUi?.consumePendingVisionAttachment()
+            if (snapVision) liveUi?.clearVisionAttachment()
+            const job = await enqueueSnapPhotoJob(cwd, config, prompt, snapVision)
+            content = await polishSnapQueuedReply(config, prompt, job.id)
           }
+          await finalizeQueuedMediaCommand({
+            cwd,
+            messages,
+            rawCommand: raw,
+            assistantContent: content,
+            liveUi,
+            cleanForTts: (text) => ttsDisplayCleanForLiveUi(text, expressionManifest),
+            observeAssistantOutput: (text) => subconsciousRef.current?.observeAssistantOutput(text),
+            saveSession,
+            setMessages,
+            setNotice,
+            clearNoticeLater: (ms) => setTimeout(() => setNotice(null), ms),
+          })
         } catch (e: unknown) {
-          setError(formatChatError(e))
-          setNotice(null)
-        }
-        return
-      }
-      if (raw === '/snap' || raw.startsWith('/snap ')) {
-        const prompt = raw.startsWith('/snap ') ? raw.slice('/snap '.length).trim() : ''
-        if (!prompt) {
-          setError('/snap 后请输入提示词，例如：/snap 在咖啡馆自拍，暖色灯光')
-          setInput('')
-          return
-        }
-        if (busyRef.current) return
-        setError(null)
-        setNotice('图片任务已交给后台处理，一会儿会放进你的邮箱')
-        setInput('')
-        const snapVision = vision ?? liveUi?.consumePendingVisionAttachment()
-        if (snapVision) liveUi?.clearVisionAttachment()
-        try {
-          const job = await enqueueSnapPhotoJob(cwd, config, prompt, snapVision)
-          const content = await polishSnapQueuedReply(config, prompt, job.id)
-          void subconsciousRef.current?.observeAssistantOutput(content)
-          const next: PersistedMessage[] = [
-            ...messages,
-            { role: 'user', content: raw },
-            { role: 'assistant', content },
-          ]
-          setMessages(next)
-          await saveSession(cwd, next)
-          setNotice(content)
-          setTimeout(() => setNotice(null), 12000)
-          if (liveUi) {
-            liveUi.sendAssistantStream(content, true, true)
-            if (liveUi.hasTts) {
-              const clean = ttsDisplayCleanForLiveUi(content, expressionManifest)
-              liveUi.resetAudio()
-              for (const seg of splitTtsSegments(clean)) {
-                liveUi.enqueueTts(seg)
-              }
-            }
+          const msg = formatChatError(e)
+          setError(msg)
+          if (mediaCommand.kind === 'avatargen') {
+            liveUi?.sendAssistantStream(msg, true, true)
           }
-        } catch (e: unknown) {
-          setError(formatChatError(e))
           setNotice(null)
         }
         return
@@ -1012,6 +1044,8 @@ export function ChatApp({
           ...(turnAttachments.length ? { attachments: turnAttachments } : {}),
         },
       ]
+      if (turnVision) liveUi?.clearVisionAttachment()
+      else if (turnAttachments.length) liveUi?.clearFileAttachments()
       setMessages(nextMsgs)
       setInput('')
       try {
