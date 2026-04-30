@@ -39,6 +39,11 @@ import {
   computeVadFrame as computeVadFrameFromSamples,
   resolveVoiceMicWire,
 } from './voiceMicUtils.ts'
+import {
+  PcmS16Coalescer,
+  base64ToArrayBuffer,
+  normalizePcmAudioMeta,
+} from './ttsAudioUtils.ts'
 import { adaptExpression, type RendererKind } from './expressionAdapter.ts'
 import { Real2dLiveUiAdapter, type Real2dExpressionSlot } from './real2dLiveUiAdapter.ts'
 
@@ -1928,9 +1933,8 @@ async function bootstrap(): Promise<void> {
   /** 合并 TTS 小块为约 50ms 再排程，减少 Web Audio BufferSource 数量，缓解长对话卡顿与块衔接裂音 */
   const PCM_S16_COALESCE_SEC = 0.05
   const PCM_S16_TAIL_FLUSH_MS = 10
-  let pcmS16Slop: Uint8Array | null = null
-  let pcmS16Meta: { sampleRate: number; channels: number } | null = null
   let pcmS16FlushTimer: ReturnType<typeof setTimeout> | null = null
+  const pcmS16Coalescer = new PcmS16Coalescer(PCM_S16_COALESCE_SEC)
   let pcmScheduleChain: Promise<void> = Promise.resolve()
   let activePcmSources = 0
   const activePcmSourceNodes: AudioBufferSourceNode[] = []
@@ -1951,14 +1955,6 @@ async function bootstrap(): Promise<void> {
       ttsPcmAnalyser.connect(ctx.destination)
     }
     return ttsPcmAnalyser
-  }
-
-  function base64ToArrayBuffer(b64: string): ArrayBuffer {
-    const bin = atob(b64)
-    const len = bin.length
-    const bytes = new Uint8Array(len)
-    for (let i = 0; i < len; i++) bytes[i] = bin.charCodeAt(i) & 0xff
-    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
   }
 
   /** MOSS generate-stream：pcm_s16le 交织 → AudioBuffer（不经过 decodeAudioData）。 */
@@ -1987,37 +1983,17 @@ async function bootstrap(): Promise<void> {
       clearTimeout(pcmS16FlushTimer)
       pcmS16FlushTimer = null
     }
-    pcmS16Slop = null
-    pcmS16Meta = null
-  }
-
-  const coalesceTargetBytes = (sampleRate: number, channels: number): number => {
-    const ch = Math.max(1, channels)
-    const frames = Math.max(1, Math.floor(PCM_S16_COALESCE_SEC * sampleRate))
-    return frames * 2 * ch
+    pcmS16Coalescer.reset()
   }
 
   const appendAndEmitPcmS16le = (ctx: AudioContext, pcm: Uint8Array, sampleRate: number, channels: number): void => {
-    const ch = Math.max(1, Math.min(8, channels))
-    if (pcmS16Meta && (pcmS16Meta.sampleRate !== sampleRate || pcmS16Meta.channels !== ch)) {
-      void flushPcmS16SpillToCtx(ctx, true)
-    }
-    pcmS16Meta = { sampleRate, channels: ch }
-    if (!pcmS16Slop) {
-      pcmS16Slop = pcm
-    } else {
-      const m = new Uint8Array(pcmS16Slop.length + pcm.length)
-      m.set(pcmS16Slop, 0)
-      m.set(pcm, pcmS16Slop.length)
-      pcmS16Slop = m
-    }
-    if (!pcmS16Meta) return
-    const fb = 2 * pcmS16Meta.channels
-    const need = coalesceTargetBytes(pcmS16Meta.sampleRate, pcmS16Meta.channels)
-    while (pcmS16Slop && pcmS16Slop.length >= need) {
-      const part = pcmS16Slop.subarray(0, need)
-      pcmS16Slop = pcmS16Slop.length > need ? pcmS16Slop.subarray(need) : null
-      const dec = pcmS16leToAudioBuffer(ctx, part.buffer.slice(part.byteOffset, part.byteOffset + part.byteLength), sampleRate, ch)
+    for (const part of pcmS16Coalescer.append(pcm, sampleRate, channels)) {
+      const dec = pcmS16leToAudioBuffer(
+        ctx,
+        part.pcm.buffer.slice(part.pcm.byteOffset, part.pcm.byteOffset + part.pcm.byteLength),
+        part.sampleRate,
+        part.channels,
+      )
       schedulePcmChunk(dec)
     }
     if (pcmS16FlushTimer != null) {
@@ -2031,34 +2007,14 @@ async function bootstrap(): Promise<void> {
   }
 
   function flushPcmS16SpillToCtx(ctx: AudioContext, forceAll: boolean): void {
-    if (!pcmS16Slop || !pcmS16Meta) {
-      if (forceAll) discardPcmS16Spill()
-      return
-    }
-    const { sampleRate, channels: ch } = pcmS16Meta
-    const fb = 2 * ch
-    if (pcmS16Slop.length < fb) {
-      if (forceAll) discardPcmS16Spill()
-      return
-    }
-    const n = Math.floor(pcmS16Slop.length / fb) * fb
-    if (n < fb) {
-      if (forceAll) discardPcmS16Spill()
-      return
-    }
-    const part = pcmS16Slop.subarray(0, n)
-    pcmS16Slop = pcmS16Slop.length > n ? pcmS16Slop.subarray(n) : null
-    const dec = pcmS16leToAudioBuffer(
-      ctx,
-      part.buffer.slice(part.byteOffset, part.byteOffset + part.byteLength),
-      sampleRate,
-      ch,
-    )
-    schedulePcmChunk(dec)
-    if (pcmS16Slop && pcmS16Slop.length >= fb) {
-      void flushPcmS16SpillToCtx(ctx, forceAll)
-    } else if (forceAll) {
-      discardPcmS16Spill()
+    for (const part of pcmS16Coalescer.flush(forceAll)) {
+      const dec = pcmS16leToAudioBuffer(
+        ctx,
+        part.pcm.buffer.slice(part.pcm.byteOffset, part.pcm.byteOffset + part.pcm.byteLength),
+        part.sampleRate,
+        part.channels,
+      )
+      schedulePcmChunk(dec)
     }
   }
 
@@ -2219,11 +2175,7 @@ async function bootstrap(): Promise<void> {
   const enqueueAudioChunk = (data: AudioChunkMsg['data']): void => {
     const ctx = ensureAudioCtx()
     if (data.format === 'pcm_s16le') {
-      const ch =
-        typeof data.channels === 'number' && data.channels >= 1 && data.channels <= 8
-          ? Math.floor(data.channels)
-          : 1
-      const sr = typeof data.sampleRate === 'number' && data.sampleRate > 0 && data.sampleRate < 1_000_000 ? data.sampleRate : 48_000
+      const { sampleRate: sr, channels: ch } = normalizePcmAudioMeta(data.sampleRate, data.channels)
       const u8 = new Uint8Array(base64ToArrayBuffer(data.audioBase64))
       console.debug(`[liveui] 收到 PCM 块: ${u8.byteLength} bytes, ch=${ch}, 队列: ${audioQueue.length}`)
       appendAndEmitPcmS16le(ctx, u8, sr, ch)
