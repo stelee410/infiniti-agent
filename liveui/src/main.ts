@@ -61,6 +61,10 @@ import {
   photoDataUrl,
   scaledCaptureSize,
 } from './cameraUtils.ts'
+import {
+  configPanelLayoutAction,
+  shouldRunDynamicFigureFit,
+} from './panelLayoutPolicy.ts'
 import { adaptExpression, type RendererKind } from './expressionAdapter.ts'
 import { Real2dLiveUiAdapter, type Real2dExpressionSlot } from './real2dLiveUiAdapter.ts'
 
@@ -646,16 +650,23 @@ async function bootstrap(): Promise<void> {
       })
     })
 
+  let configPanelOpen = false
   let syncMinimalWindowBounds = (): void => {}
   let dynamicWindowFitTimer: number | undefined
 
-  const scheduleDynamicWindowFit = (attempt = 0): void => {
+  const cancelDynamicWindowFit = (): void => {
     if (dynamicWindowFitTimer !== undefined) {
       window.clearTimeout(dynamicWindowFitTimer)
       dynamicWindowFitTimer = undefined
     }
+  }
+
+  const scheduleDynamicWindowFit = (attempt = 0): void => {
+    if (!shouldRunDynamicFigureFit({ minimalMode, configPanelOpen })) return
+    cancelDynamicWindowFit()
     dynamicWindowFitTimer = window.setTimeout(() => {
       dynamicWindowFitTimer = undefined
+      if (!shouldRunDynamicFigureFit({ minimalMode, configPanelOpen })) return
       if (minimalMode) {
         syncMinimalWindowBounds()
       } else {
@@ -1333,7 +1344,6 @@ async function bootstrap(): Promise<void> {
   const port = readPort()
   const wsUrl = `ws://127.0.0.1:${port}`
   const socket = new ReconnectingWebSocket(wsUrl)
-  let configPanelOpen = false
   const configPanel = initConfigPanel({
     socket,
     onOpenChange: (open) => {
@@ -1341,7 +1351,12 @@ async function bootstrap(): Promise<void> {
       document.body.classList.toggle('liveui-config-open', open)
       window.infinitiLiveUi?.setConfigPanelOpen?.(open)
       window.infinitiLiveUi?.setIgnoreMouseEvents?.(!open, { forward: true })
-      requestAnimationFrame(() => scheduleDynamicWindowFit())
+      if (configPanelLayoutAction(open) === 'suspend-fit') {
+        cancelDynamicWindowFit()
+        return
+      }
+      resetReal2dCompactScaleState()
+      requestAnimationFrame(() => refreshNormalWindowLayout())
     },
   })
 
