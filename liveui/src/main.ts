@@ -63,9 +63,12 @@ import {
 } from './cameraUtils.ts'
 import {
   configPanelLayoutAction,
+  isWindowSizeRestored,
   shouldApplyReal2dResizeLayout,
   shouldResetReal2dCompactScaleOnConfigClose,
   shouldRunDynamicFigureFit,
+  type ConfigPanelCloseReason,
+  type WindowSize,
 } from './panelLayoutPolicy.ts'
 import { adaptExpression, type RendererKind } from './expressionAdapter.ts'
 import { Real2dLiveUiAdapter, type Real2dExpressionSlot } from './real2dLiveUiAdapter.ts'
@@ -422,6 +425,8 @@ async function bootstrap(): Promise<void> {
   let real2dPlacementTimer: ReturnType<typeof window.setTimeout> | null = null
   let pendingReal2dCompactHeight: number | null = null
   let real2dCompactBaseStageHeight: number | null = null
+  let configPanelReturnWindowSize: WindowSize | null = null
+  let pendingConfigPanelCloseWindowSize: WindowSize | null = null
   let debugOverlayEnabled = false
   let debugEmotion = 'neutral'
   let debugEmotionIntensity = 0
@@ -1284,11 +1289,18 @@ async function bootstrap(): Promise<void> {
 
   window.addEventListener('resize', () => {
     app.renderer.resize(window.innerWidth, window.innerHeight)
+    const closeWindowRestored = isWindowSizeRestored(
+      { width: window.innerWidth, height: window.innerHeight },
+      pendingConfigPanelCloseWindowSize,
+    )
     if (!shouldApplyReal2dResizeLayout({
       configPanelOpen,
+      pendingConfigPanelCloseRestore: pendingConfigPanelCloseWindowSize != null,
+      closeWindowRestored,
     })) {
       return
     }
+    if (closeWindowRestored) pendingConfigPanelCloseWindowSize = null
     if (real2dAvatar) {
       if (minimalMode) {
         resetReal2dCompactScaleState()
@@ -1328,10 +1340,35 @@ async function bootstrap(): Promise<void> {
     })
   }
 
+  const refreshConfigPanelClosedLayout = (reason: ConfigPanelCloseReason | undefined, attempt = 0): void => {
+    requestAnimationFrame(() => {
+      const current = { width: window.innerWidth, height: window.innerHeight }
+      if (!isWindowSizeRestored(current, pendingConfigPanelCloseWindowSize) && attempt < 20) {
+        window.setTimeout(() => refreshConfigPanelClosedLayout(reason, attempt + 1), 50)
+        return
+      }
+      pendingConfigPanelCloseWindowSize = null
+      if (shouldResetReal2dCompactScaleOnConfigClose(false, reason)) {
+        resetReal2dCompactScaleState()
+      }
+      refreshNormalWindowLayout()
+    })
+  }
+
   const dockEl = document.getElementById('liveui-bottom-dock')
   if (dockEl && typeof ResizeObserver !== 'undefined') {
     const ro = new ResizeObserver(() => {
       requestAnimationFrame(() => {
+        if (!shouldApplyReal2dResizeLayout({
+          configPanelOpen,
+          pendingConfigPanelCloseRestore: pendingConfigPanelCloseWindowSize != null,
+          closeWindowRestored: isWindowSizeRestored(
+            { width: window.innerWidth, height: window.innerHeight },
+            pendingConfigPanelCloseWindowSize,
+          ),
+        })) {
+          return
+        }
         layoutFigureInStage()
         applyReal2dStageLayout()
         positionBubbleOverFigure()
@@ -1354,6 +1391,13 @@ async function bootstrap(): Promise<void> {
   const configPanel = initConfigPanel({
     socket,
     onOpenChange: (open, reason) => {
+      if (open) {
+        configPanelReturnWindowSize = { width: window.innerWidth, height: window.innerHeight }
+        pendingConfigPanelCloseWindowSize = null
+      } else {
+        pendingConfigPanelCloseWindowSize = configPanelReturnWindowSize
+        configPanelReturnWindowSize = null
+      }
       configPanelOpen = open
       document.body.classList.toggle('liveui-config-open', open)
       window.infinitiLiveUi?.setConfigPanelOpen?.(open)
@@ -1362,10 +1406,7 @@ async function bootstrap(): Promise<void> {
         cancelDynamicWindowFit()
         return
       }
-      if (shouldResetReal2dCompactScaleOnConfigClose(open, reason)) {
-        resetReal2dCompactScaleState()
-      }
-      requestAnimationFrame(() => refreshNormalWindowLayout())
+      refreshConfigPanelClosedLayout(reason)
     },
   })
 

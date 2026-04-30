@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   configPanelLayoutAction,
+  isWindowSizeRestored,
   shouldApplyReal2dResizeLayout,
   shouldResetReal2dCompactScaleOnConfigClose,
   shouldRunDynamicFigureFit,
@@ -24,10 +25,25 @@ describe('panelLayoutPolicy', () => {
   it('ignores config-panel resize noise until the panel is closing back to the avatar window', () => {
     expect(shouldApplyReal2dResizeLayout({
       configPanelOpen: true,
+      pendingConfigPanelCloseRestore: false,
+      closeWindowRestored: false,
     })).toBe(false)
     expect(shouldApplyReal2dResizeLayout({
       configPanelOpen: false,
+      pendingConfigPanelCloseRestore: true,
+      closeWindowRestored: false,
+    })).toBe(false)
+    expect(shouldApplyReal2dResizeLayout({
+      configPanelOpen: false,
+      pendingConfigPanelCloseRestore: true,
+      closeWindowRestored: true,
     })).toBe(true)
+  })
+
+  it('detects when the config panel close has restored the avatar window size', () => {
+    expect(isWindowSizeRestored({ width: 954, height: 768 }, { width: 954, height: 768 })).toBe(true)
+    expect(isWindowSizeRestored({ width: 956, height: 765 }, { width: 954, height: 768 })).toBe(true)
+    expect(isWindowSizeRestored({ width: 954, height: 720 }, { width: 954, height: 768 })).toBe(false)
   })
 
   it('uses saved-close layout reset semantics when cancel closes the config panel', () => {
