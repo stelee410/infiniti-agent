@@ -29,6 +29,17 @@ import {
   type SpriteExpressionManifestV1,
 } from '../../src/liveui/spriteExpressionManifestCore.ts'
 import { initConfigPanel } from './configPanel.ts'
+import {
+  createLiveInboxController,
+  filePathToUrl,
+  filenameFromPath,
+} from './inboxController.ts'
+import {
+  attachmentChipLabel,
+  attachmentKindForMediaType,
+  attachmentMediaType,
+  shouldReadAttachmentText,
+} from './attachmentUtils.ts'
 import { adaptExpression, type RendererKind } from './expressionAdapter.ts'
 import { Real2dLiveUiAdapter, type Real2dExpressionSlot } from './real2dLiveUiAdapter.ts'
 
@@ -146,21 +157,6 @@ type VisionCaptureResultMsg = {
     vision?: unknown
     error?: unknown
   }
-}
-
-type InboxAttachment = {
-  kind?: unknown
-  path?: unknown
-  mimeType?: unknown
-  label?: unknown
-}
-
-type InboxItem = {
-  id?: unknown
-  createdAt?: unknown
-  subject?: unknown
-  body?: unknown
-  attachments?: unknown
 }
 
 type InboxUpdateMsg = {
@@ -1342,235 +1338,16 @@ async function bootstrap(): Promise<void> {
   const slashMenuEl = document.getElementById('liveui-slash-menu')
   const slashHintEl = document.getElementById('liveui-slash-menu-hint')
   const slashListEl = document.getElementById('liveui-slash-menu-list')
-  type RenderInboxAttachment = { kind: 'image' | 'file'; path: string; mimeType?: string; label?: string }
-  type RenderInboxItem = {
-    id: string
-    createdAt: string
-    subject: string
-    body: string
-    attachments: RenderInboxAttachment[]
-  }
-  let unreadInboxItems: RenderInboxItem[] = []
-  let openInboxItems: RenderInboxItem[] = []
-  let inboxPanelOpen = false
-  let inboxRenderSignature = ''
-  let inboxMarkTimer: number | undefined
-  const inboxIconSvg = '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2Zm0 4.2-8 5-8-5V6l8 5 8-5v2.2Z"/></svg>'
-  const closeIconSvg = '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M18.3 5.71 12 12l6.3 6.29-1.41 1.41L10.59 13.41 4.29 19.7 2.88 18.29 9.17 12 2.88 5.71 4.29 4.3l6.3 6.29 6.3-6.29 1.41 1.41z"/></svg>'
-
-  const filePathToUrl = (p: string): string => {
-    if (/^file:/i.test(p) || /^https?:/i.test(p) || /^data:/i.test(p)) return p
-    return `file://${p.split('/').map((part) => encodeURIComponent(part)).join('/')}`
-  }
-
-  const filePathToMediaUrl = (p: string): string => {
-    if (/^https?:/i.test(p) || /^data:/i.test(p)) return p
-    const port = window.infinitiLiveUi?.port || new URLSearchParams(window.location.search).get('port') || '8080'
-    return `http://127.0.0.1:${encodeURIComponent(port)}/media?path=${encodeURIComponent(p)}`
-  }
-
-  const filenameFromPath = (p: string): string => {
-    const parts = p.split(/[\\/]/)
-    return parts[parts.length - 1] || 'attachment'
-  }
-
-  const parseInboxAttachment = (raw: InboxAttachment): RenderInboxAttachment | null => {
-    if (!raw || typeof raw !== 'object') return null
-    if (raw.kind !== 'image' && raw.kind !== 'file') return null
-    if (typeof raw.path !== 'string' || !raw.path.trim()) return null
-    const out: RenderInboxAttachment = { kind: raw.kind, path: raw.path }
-    if (typeof raw.mimeType === 'string') out.mimeType = raw.mimeType
-    if (typeof raw.label === 'string') out.label = raw.label
-    return out
-  }
-
-  const parseInboxItem = (raw: InboxItem): RenderInboxItem | null => {
-    if (!raw || typeof raw !== 'object') return null
-    if (
-      typeof raw.id !== 'string' ||
-      typeof raw.createdAt !== 'string' ||
-      typeof raw.subject !== 'string' ||
-      typeof raw.body !== 'string' ||
-      !Array.isArray(raw.attachments)
-    ) {
-      return null
-    }
-    return {
-      id: raw.id,
-      createdAt: raw.createdAt,
-      subject: raw.subject,
-      body: raw.body,
-      attachments: raw.attachments
-        .map((a) => parseInboxAttachment(a as InboxAttachment))
-        .filter((a): a is RenderInboxAttachment => a != null),
-    }
-  }
-
-  const isVideoAttachment = (attachment: RenderInboxAttachment): boolean => {
-    const mt = attachment.mimeType?.toLowerCase() ?? ''
-    if (mt.startsWith('video/')) return true
-    return /\.(mp4|webm|mov|m4v)$/i.test(attachment.path)
-  }
-
-  const inboxItemsSignature = (items: RenderInboxItem[]): string => {
-    return items
-      .map((item) => {
-        const attachments = item.attachments
-          .map((attachment) => [
-            attachment.kind,
-            attachment.path,
-            attachment.mimeType ?? '',
-            attachment.label ?? '',
-          ].join('\u001f'))
-          .join('\u001e')
-        return [item.id, item.createdAt, item.subject, item.body, attachments].join('\u001d')
-      })
-      .join('\u001c')
-  }
-
-  const hydrateInboxVideo = async (video: HTMLVideoElement, attachment: RenderInboxAttachment): Promise<void> => {
-    video.src = filePathToMediaUrl(attachment.path)
-    video.load()
-  }
-
-  const appendInboxSaveAction = (wrap: HTMLElement, attachment: RenderInboxAttachment): void => {
-    const actions = document.createElement('div')
-    actions.className = 'liveui-inbox-actions'
-    const saveBtn = document.createElement('button')
-    saveBtn.type = 'button'
-    saveBtn.className = 'liveui-inbox-action'
-    saveBtn.title = '另存为'
-    saveBtn.setAttribute('aria-label', '另存为')
-    saveBtn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M5 20h14v-2H5v2ZM19 9h-4V3H9v6H5l7 7 7-7Z"/></svg>'
-    saveBtn.addEventListener('click', async (ev) => {
-      ev.stopPropagation()
-      const defaultPath = attachment.path.split(/[\\/]/).pop() || filenameFromPath(attachment.path)
-      const dest = await window.infinitiLiveUi?.savePath?.({ defaultPath })
-      if (dest) {
-        sendSocketMessage(socket, 'INBOX_SAVE_AS', {
-          sourcePath: attachment.path,
-          destinationPath: dest,
-        })
-      }
-    })
-    actions.appendChild(saveBtn)
-    wrap.appendChild(actions)
-  }
-
-  const renderInbox = (): void => {
-    if (!inboxRoot || !inboxPanel) return
-    if (!inboxPanelOpen) positionInboxAtComposer()
-    const items = inboxPanelOpen ? openInboxItems : unreadInboxItems
-    const visible = inboxPanelOpen || unreadInboxItems.length > 0
-    inboxRoot.classList.toggle('liveui-inbox--visible', visible)
-    inboxRoot.classList.toggle('liveui-inbox--open', inboxPanelOpen)
-    inboxRoot.setAttribute('aria-hidden', visible ? 'false' : 'true')
-    const nextSignature = [
-      visible ? 'visible' : 'hidden',
-      inboxPanelOpen ? 'open' : 'closed',
-      inboxItemsSignature(items),
-    ].join('\u001b')
-    if (nextSignature === inboxRenderSignature) return
-    inboxRenderSignature = nextSignature
-    inboxPanel.replaceChildren()
-    if (!visible || items.length === 0) {
-      return
-    }
-    for (const item of items) {
-      const mail = document.createElement('section')
-      mail.className = 'liveui-inbox-mail'
-
-      const subject = document.createElement('div')
-      subject.className = 'liveui-inbox-subject'
-      subject.textContent = item.subject
-      mail.appendChild(subject)
-
-      const time = document.createElement('div')
-      time.className = 'liveui-inbox-time'
-      time.textContent = new Date(item.createdAt).toLocaleString()
-      mail.appendChild(time)
-
-      const body = document.createElement('div')
-      body.className = 'liveui-inbox-body'
-      body.textContent = item.body
-      mail.appendChild(body)
-
-      for (const attachment of item.attachments) {
-        if (attachment.kind === 'image') {
-          const wrap = document.createElement('div')
-          wrap.className = 'liveui-inbox-media-wrap'
-          const img = document.createElement('img')
-          img.className = 'liveui-inbox-image'
-          img.alt = attachment.label ?? 'generated image'
-          img.src = filePathToUrl(attachment.path)
-          wrap.appendChild(img)
-          appendInboxSaveAction(wrap, attachment)
-          mail.appendChild(wrap)
-        } else if (isVideoAttachment(attachment)) {
-          const wrap = document.createElement('div')
-          wrap.className = 'liveui-inbox-media-wrap'
-          const video = document.createElement('video')
-          video.className = 'liveui-inbox-video'
-          video.controls = true
-          video.preload = 'metadata'
-          video.playsInline = true
-          video.title = attachment.label ?? filenameFromPath(attachment.path)
-          video.addEventListener('loadedmetadata', () => {
-            console.debug(`[liveui] inbox video metadata loaded: ${attachment.path}`)
-          }, { once: true })
-          video.addEventListener('error', () => {
-            console.warn(`[liveui] inbox video load error: ${attachment.path}`)
-            wrap.classList.add('liveui-inbox-media-wrap--error')
-          }, { once: true })
-          wrap.appendChild(video)
-          const hint = document.createElement('div')
-          hint.className = 'liveui-inbox-media-hint'
-          hint.textContent = filenameFromPath(attachment.path)
-          wrap.appendChild(hint)
-          void hydrateInboxVideo(video, attachment)
-          appendInboxSaveAction(wrap, attachment)
-          mail.appendChild(wrap)
-        }
-      }
-
-      inboxPanel.appendChild(mail)
-    }
-  }
-
-  const markVisibleInboxReadSoon = (): void => {
-    if (inboxMarkTimer) window.clearTimeout(inboxMarkTimer)
-    const ids = unreadInboxItems.map((m) => m.id)
-    if (ids.length === 0) return
-    inboxMarkTimer = window.setTimeout(() => {
-      sendSocketMessage(socket, 'INBOX_MARK_READ', { ids })
-    }, 1500)
-  }
-
-  const setInboxOpen = (open: boolean, preferOpenItems = false): void => {
-    if (!inboxRoot || !inboxToggle) return
-    if (open && unreadInboxItems.length === 0 && openInboxItems.length === 0) return
-    inboxPanelOpen = open
-    if (open) {
-      openInboxItems = !preferOpenItems && unreadInboxItems.length > 0 ? [...unreadInboxItems] : [...openInboxItems]
-    } else {
-      openInboxItems = []
-      if (inboxMarkTimer) {
-        window.clearTimeout(inboxMarkTimer)
-        inboxMarkTimer = undefined
-      }
-    }
-    document.body.classList.toggle('liveui-inbox-open', open)
-    inboxToggle.innerHTML = open ? closeIconSvg : inboxIconSvg
-    inboxToggle.title = open ? '关闭你的邮箱' : '你的邮箱'
-    inboxToggle.setAttribute('aria-label', open ? '关闭你的邮箱' : '你的邮箱')
-    window.infinitiLiveUi?.setConfigPanelOpen?.(open)
-    window.infinitiLiveUi?.setIgnoreMouseEvents?.(!open, { forward: true })
-    renderInbox()
-    if (open) markVisibleInboxReadSoon()
-  }
-
-  inboxToggle?.addEventListener('click', () => {
-    setInboxOpen(!inboxPanelOpen)
+  const inboxController = createLiveInboxController({
+    root: inboxRoot,
+    toggle: inboxToggle,
+    panel: inboxPanel,
+    socket,
+    positionAtComposer: positionInboxAtComposer,
+    setConfigPanelOpen: (open) => window.infinitiLiveUi?.setConfigPanelOpen?.(open),
+    setIgnoreMouseEvents: (ignore, options) => window.infinitiLiveUi?.setIgnoreMouseEvents?.(ignore, options),
+    savePath: (request) => window.infinitiLiveUi?.savePath?.(request),
+    getPort: () => window.infinitiLiveUi?.port || new URLSearchParams(window.location.search).get('port') || '8080',
   })
 
   const loadInputHistory = (): string[] => {
@@ -2510,17 +2287,9 @@ async function bootstrap(): Promise<void> {
         setVisualMouth(Math.max(0, Math.min(1, Number(msg.data.value) || 0)))
       }
     } else if (msg.type === 'INBOX_UPDATE') {
-      const raw = msg.data?.unread
-      unreadInboxItems = Array.isArray(raw)
-        ? raw.map((it) => parseInboxItem(it as InboxItem)).filter((it): it is RenderInboxItem => it != null)
-        : []
-      renderInbox()
+      inboxController.setUnreadRaw(msg.data?.unread)
     } else if (msg.type === 'INBOX_OPEN') {
-      const raw = msg.data?.items
-      openInboxItems = Array.isArray(raw)
-        ? raw.map((it) => parseInboxItem(it as InboxItem)).filter((it): it is RenderInboxItem => it != null)
-        : []
-      setInboxOpen(openInboxItems.length > 0, true)
+      inboxController.openRaw(msg.data?.items)
     } else if (msg.type === 'INBOX_SAVE_RESULT') {
       const text = typeof msg.data?.message === 'string' ? msg.data.message : ''
       if (msg.data?.ok) {
@@ -3316,19 +3085,6 @@ async function bootstrap(): Promise<void> {
   const photoDataUrl = (vision: LiveUiVisionAttachment): string =>
     `data:${vision.mediaType};base64,${vision.imageBase64}`
 
-  const attachmentMediaType = (path: string): string | null => {
-    const name = filenameFromPath(path).toLowerCase()
-    if (/\.(jpe?g)$/.test(name)) return 'image/jpeg'
-    if (/\.png$/.test(name)) return 'image/png'
-    if (/\.webp$/.test(name)) return 'image/webp'
-    if (/\.gif$/.test(name)) return 'image/gif'
-    if (/\.pdf$/.test(name)) return 'application/pdf'
-    if (/\.md$|\.markdown$/.test(name)) return 'text/markdown'
-    if (/\.csv$/.test(name)) return 'text/csv'
-    if (/\.docx$/.test(name)) return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-    return null
-  }
-
   const readBlobBase64 = (blob: Blob): Promise<string> =>
     new Promise((resolve, reject) => {
       const reader = new FileReader()
@@ -3354,7 +3110,7 @@ async function bootstrap(): Promise<void> {
         chip.appendChild(img)
       } else {
         const icon = document.createElement('span')
-        icon.textContent = file.mediaType === 'application/pdf' ? 'PDF' : file.name.toLowerCase().endsWith('.docx') ? 'DOC' : 'TXT'
+        icon.textContent = attachmentChipLabel(file.mediaType, file.name)
         chip.appendChild(icon)
       }
       const name = document.createElement('span')
@@ -3382,7 +3138,7 @@ async function bootstrap(): Promise<void> {
     for (const path of paths) {
       const mediaType = attachmentMediaType(path)
       if (!mediaType) continue
-      const kind: ChatAttachment['kind'] = mediaType.startsWith('image/') ? 'image' : 'document'
+      const kind: ChatAttachment['kind'] = attachmentKindForMediaType(mediaType)
       if (kind === 'image') {
         imageCount += 1
         if (imageCount > 9) continue
@@ -3391,9 +3147,7 @@ async function bootstrap(): Promise<void> {
       const blob = await response.blob()
       if (blob.size > 12 * 1024 * 1024) continue
       const base64 = await readBlobBase64(blob)
-      const text = mediaType === 'text/markdown' || mediaType === 'text/csv'
-        ? (await blob.text()).slice(0, 80_000)
-        : undefined
+      const text = shouldReadAttachmentText(mediaType) ? (await blob.text()).slice(0, 80_000) : undefined
       attachedFiles.push({
         id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
         name: filenameFromPath(path),
@@ -3625,7 +3379,7 @@ async function bootstrap(): Promise<void> {
     }
 
     const isOverInteractive = (ex: number, ey: number): boolean => {
-      if (configPanelOpen || inboxPanelOpen) return true
+      if (configPanelOpen || inboxController.isOpen) return true
       const dom = document.elementFromPoint(ex, ey)
       if (
         dom &&
