@@ -16,21 +16,15 @@ import {
   buildLiveUiExpressionNudgeFromManifest,
   tryReadSpriteExpressionManifestSync,
 } from '../liveui/spriteExpressionManifest.js'
-import { compactSessionMessages } from '../llm/compactSession.js'
-import { resolvedCompactionSettings } from '../llm/compactionSettings.js'
-import { estimateMessagesTokens } from '../llm/estimateTokens.js'
 import { runToolLoop } from '../llm/runLoop.js'
 import type { PersistedMessage } from '../llm/persisted.js'
 import { oneShotTextCompletion } from '../llm/oneShotCompletion.js'
 import { saveSession, loadSession } from '../session/file.js'
-import { archiveSession } from '../session/archive.js'
-import { rollMessages } from '../session/roll.js'
 import { localInboxDir, localSkillsDir } from '../paths.js'
 import type { McpManager } from '../mcp/manager.js'
 import { loadConfig, saveProjectConfig } from '../config/io.js'
 import { formatChatError } from '../utils/formatError.js'
 import { EditHistory } from '../session/editHistory.js'
-import { restoreEditSnapshot } from '../tools/repoTools.js'
 import {
   buildSlashItems,
   filterSlashItems,
@@ -44,16 +38,12 @@ import { enqueueSeedanceVideoJob, seedanceReferenceImagesFromLiveInputs } from '
 import { enqueueAvatarGenJob } from '../avatar/asyncAvatarGen.js'
 import { avatarGenReferenceImagesFromLiveInputs } from '../avatar/real2dAvatarGen.js'
 import { listInboxMessages, markInboxMessageRead, type InboxMessage } from '../inbox/store.js'
-import { parseScheduleRequest } from '../schedule/parser.js'
 import {
-  addScheduleTask,
   advanceScheduleTask,
-  clearCompletedScheduleTasks,
   dueScheduleTasks,
   failScheduleTask,
   formatScheduleTask,
   loadScheduleStore,
-  removeScheduleTask,
   saveScheduleStore,
   type ScheduleTask,
 } from '../schedule/store.js'
@@ -73,7 +63,26 @@ import {
   parseQueuedMediaCommand,
   queuedMediaEmptyPromptMessage,
   queuedMediaNotice,
+  runQueuedMediaCommand,
 } from './queuedMediaCommand.js'
+import { parseChatSlashCommand } from './chatSlashCommands.js'
+import {
+  handleClearSlashCommand,
+  handleConfigSlashCommand,
+  handleCompactSlashCommand,
+  handleDebugSlashCommand,
+  handleExitSlashCommand,
+  handleHelpSlashCommand,
+  handleInboxSlashCommand,
+  handleMemorySlashCommand,
+  handlePermissionSlashCommand,
+  handleReloadSlashCommand,
+  handleRollSlashCommand,
+  handleScheduleSlashCommand,
+  handleSpeakSlashCommand,
+  handleUndoSlashCommand,
+} from './chatCommandHandlers.js'
+import { maybeStartAutoCompaction } from './chatAutoCompaction.js'
 
 /**
  * Live 下 TTS 用的「干净正文」：与流式 onTextDelta 一致，先 `processAssistantStreamChunk` 得 `displayText`
@@ -634,176 +643,138 @@ export function ChatApp({
 
       const speakText = parseSpeakCommandLine(raw)
       if (speakText !== undefined) {
-        if (!liveUi) {
-          setError('当前不是 Live 模式，无法使用 /speak（请用 infiniti-agent live）')
-          setInput('')
-          return
-        }
-        if (!liveUi.hasTts) {
-          setError('未配置 TTS，无法 /speak')
-          setInput('')
-          return
-        }
-        if (!speakText.trim()) {
-          setError('/speak 后请输入要朗读的文本，例如：/speak 你好，这是音色测试')
-          setInput('')
-          return
-        }
-        liveUi.resetAudio()
-        for (const seg of splitTtsSegments(speakText.trim())) {
-          liveUi.enqueueTts(seg)
-        }
-        setInput('')
+        handleSpeakSlashCommand(speakText, liveUi, { setError, setInput })
         return
       }
 
       if (busyRef.current) return
 
-      if (raw === '/exit' || raw === '/quit') {
-        await saveSession(cwd, messages)
-        exit()
-        return
-      }
-      if (raw === '/clear' || raw === '/new') {
-        if (messages.length > 0) {
-          await archiveSession(cwd, messages).catch(() => {})
+      const slashCommand = parseChatSlashCommand(raw)
+      if (slashCommand) {
+        switch (slashCommand.kind) {
+          case 'exit':
+            await handleExitSlashCommand(cwd, messages, exit)
+            return
+          case 'clear':
+            await handleClearSlashCommand(cwd, messages, { setMessages, setInput })
+            return
+          case 'reload':
+            await handleReloadSlashCommand(reloadAll, { setInput })
+            return
+          case 'config':
+            handleConfigSlashCommand(cwd, config, liveUi, {
+              setError,
+              setInput,
+              setNotice,
+              clearNoticeLater: (ms) => setTimeout(() => setNotice(null), ms),
+            })
+            return
+          case 'debug': {
+            handleDebugSlashCommand(
+              liveUi,
+              debugOverlayEnabled,
+              setDebugOverlayEnabled,
+              subconsciousRef.current,
+              {
+                setError,
+                setInput,
+                setNotice,
+                clearNoticeLater: (ms) => setTimeout(() => setNotice(null), ms),
+              },
+            )
+            return
+          }
+          case 'scheduleList': {
+            await handleScheduleSlashCommand(cwd, raw, slashCommand, {
+              setError,
+              setInput,
+              deliverLocalCommandExchange,
+            })
+            return
+          }
+          case 'scheduleClear': {
+            await handleScheduleSlashCommand(cwd, raw, slashCommand, {
+              setError,
+              setInput,
+              deliverLocalCommandExchange,
+            })
+            return
+          }
+          case 'scheduleRemove': {
+            await handleScheduleSlashCommand(cwd, raw, slashCommand, {
+              setError,
+              setInput,
+              deliverLocalCommandExchange,
+            })
+            return
+          }
+          case 'scheduleAdd': {
+            await handleScheduleSlashCommand(cwd, raw, slashCommand, {
+              setError,
+              setInput,
+              deliverLocalCommandExchange,
+            })
+            return
+          }
+          case 'memory':
+            handleMemorySlashCommand({ setError, setInput })
+            return
+          case 'inbox': {
+            await handleInboxSlashCommand(cwd, slashCommand, liveUi, {
+              setInput,
+              setNotice,
+              clearNoticeLater: (ms) => setTimeout(() => setNotice(null), ms),
+            })
+            return
+          }
+          case 'lastEmail': {
+            await handleInboxSlashCommand(cwd, slashCommand, liveUi, {
+              setInput,
+              setNotice,
+              clearNoticeLater: (ms) => setTimeout(() => setNotice(null), ms),
+            })
+            return
+          }
+          case 'help':
+            handleHelpSlashCommand({ setError, setInput })
+            return
+          case 'compact':
+            handleCompactSlashCommand(cwd, config, messages, slashCommand, subconsciousRef.current, {
+              setError,
+              setInput,
+              setNotice,
+              setMessages,
+              setCompacting,
+              clearNoticeLater: (ms) => setTimeout(() => setNotice(null), ms),
+            })
+            return
+          case 'permission': {
+            handlePermissionSlashCommand(slashCommand, dangerouslySkipPermissions, {
+              setInput,
+              setNotice,
+              clearNoticeLater: (ms) => setTimeout(() => setNotice(null), ms),
+            })
+            return
+          }
+          case 'undo':
+            await handleUndoSlashCommand(cwd, editHistoryRef.current, {
+              setError,
+              setInput,
+              setNotice,
+              clearNoticeLater: (ms) => setTimeout(() => setNotice(null), ms),
+            })
+            return
+          case 'roll': {
+            await handleRollSlashCommand(cwd, messages, slashCommand, {
+              setError,
+              setInput,
+              setNotice,
+              setMessages,
+              clearNoticeLater: (ms) => setTimeout(() => setNotice(null), ms),
+            })
+            return
+          }
         }
-        setMessages([])
-        await saveSession(cwd, [])
-        setInput('')
-        return
-      }
-      if (raw === '/reload' || raw === '/reload-skills') {
-        await reloadAll()
-        setInput('')
-        return
-      }
-      if (raw === '/config') {
-        if (!liveUi) {
-          setError('/config 暂不支持当前模式；请使用 infiniti-agent live 后在 Live 窗口输入 /config')
-          setInput('')
-          return
-        }
-        liveUi.openConfigPanel(cwd, config)
-        setNotice('已打开 Live 配置面板')
-        setTimeout(() => setNotice(null), 3000)
-        setInput('')
-        return
-      }
-      if (raw === '/debug') {
-        if (!liveUi) {
-          setError('/debug 仅在 live 模式可用')
-          setInput('')
-          return
-        }
-        const next = !debugOverlayEnabled
-        setDebugOverlayEnabled(next)
-        void subconsciousRef.current?.setDebugOverlayEnabled(next)
-        setError(null)
-        setNotice(next ? 'LiveUI debug 已开启' : 'LiveUI debug 已关闭')
-        setTimeout(() => setNotice(null), 4000)
-        setInput('')
-        return
-      }
-      if (raw === '/schedule' || raw === '/schedule list') {
-        const store = await loadScheduleStore(cwd)
-        const lines = store.tasks.length
-          ? `当前计划任务：\n${store.tasks.map((task) => formatScheduleTask(task)).join('\n')}`
-          : '暂无计划任务'
-        setError(null)
-        deliverLocalCommandExchange(raw, lines)
-        setInput('')
-        return
-      }
-      if (raw === '/schedule clear') {
-        const result = await clearCompletedScheduleTasks(cwd)
-        setError(null)
-        deliverLocalCommandExchange(
-          raw,
-          result.removed.length
-            ? `已清理 ${result.removed.length} 个未来不再执行的计划任务，剩余 ${result.remaining} 个。`
-            : '没有需要清理的计划任务。',
-        )
-        setInput('')
-        return
-      }
-      if (raw.startsWith('/schedule remove ') || raw.startsWith('/schedule rm ')) {
-        const id = raw.replace(/^\/schedule\s+(remove|rm)\s+/i, '').trim()
-        if (!id) {
-          setError('请提供计划任务 id 前缀，例如 /schedule remove sch_2026')
-          setInput('')
-          return
-        }
-        const removed = await removeScheduleTask(cwd, id)
-        if (!removed) {
-          setError(`没有找到计划任务: ${id}`)
-        } else {
-          setError(null)
-          deliverLocalCommandExchange(raw, `已删除计划任务：${removed.prompt}`)
-        }
-        setInput('')
-        return
-      }
-      if (raw.startsWith('/schedule add ')) {
-        const parsed = parseScheduleRequest(raw)
-        if (!parsed || !parsed.prompt.trim()) {
-          setError('计划格式暂支持：每天早上8点做某事、每分钟检查某事、每5分钟做某事、/schedule add 明天9点做某事')
-          setInput('')
-          return
-        }
-        const task = await addScheduleTask(cwd, parsed)
-        setError(null)
-        deliverLocalCommandExchange(raw, `已创建计划任务：${formatScheduleTask(task)}`)
-        setInput('')
-        return
-      }
-      if (raw === '/memory') {
-        setError('记忆系统：memory.json（结构化记忆）+ user_profile.json（用户画像）— 在 .infiniti-agent/ 下')
-        setInput('')
-        return
-      }
-      if (raw === '/inbox' || raw.startsWith('/inbox ')) {
-        const unreadOnly = !raw.includes('--all')
-        const inbox = await listInboxMessages(cwd, { unreadOnly, limit: 8 })
-        const scope = unreadOnly ? '未读' : '最近'
-        if (!inbox.length) {
-          setNotice(`${scope}你的邮箱为空`)
-          setTimeout(() => setNotice(null), 5000)
-        } else {
-          setNotice(
-            inbox.map((m) => `${m.createdAt} ${m.subject} (${m.id})`).join('\n'),
-          )
-          setTimeout(() => setNotice(null), 15000)
-        }
-        setInput('')
-        return
-      }
-      if (raw === '/last_email') {
-        const inbox = await listInboxMessages(cwd, { limit: 1 })
-        const last = inbox[0]
-        if (!last) {
-          setNotice('你的邮箱为空')
-          setTimeout(() => setNotice(null), 5000)
-        } else if (liveUi) {
-          liveUi.openInbox([inboxMessageToLiveUiItem(last)])
-          setNotice(`已打开上一封信：${last.subject}`)
-          setTimeout(() => setNotice(null), 5000)
-        } else {
-          const attachments = last.attachments.length
-            ? `\n附件：${last.attachments.map((a) => a.path).join('\n')}`
-            : ''
-          setNotice(`${last.createdAt} ${last.subject}\n\n${last.body}${attachments}`)
-          setTimeout(() => setNotice(null), 15000)
-        }
-        setInput('')
-        return
-      }
-      if (raw === '/help') {
-        setError(
-          '输入 / 可补全：斜杠命令与全部工具（↑↓ Tab）。命令: /exit /clear /reload /config /debug /schedule /memory /inbox /last_email /undo /roll /compact /permission /speak /snap /avatargen /video — /schedule list 查看计划，/schedule add 每天早上8点做某事 创建计划；自然语言提醒/定时会由模型调用 schedule 工具。/config 仅 Live 模式打开配置面板；/debug 切换 LiveUI 调试叠层；/last_email 打开最近一封邮箱消息；/speak 后接正文仅 TTS 朗读、不写会话；/snap 后接提示词异步生成合照/写实照片；/avatargen 后接要求并附带头像图，异步生成 real2d 的 exp01..exp06 与 exp_open；/video 后接提示词异步生成 Seedance 视频，完成后写入你的邮箱。/roll 2 可按 LLM 输出层回滚对话。改文件/bash/HTTP 默认需确认（Y 允许 · A 本次会话始终允许该工具 · N 拒绝）；启动时加 --dangerously-skip-permissions 可跳过所有确认。/permission 查看当前状态。/compact 压缩较早历史。卡死排查：INFINITI_AGENT_DEBUG=1。',
-        )
-        setInput('')
-        return
       }
       const mediaCommand = parseQueuedMediaCommand(raw)
       if (mediaCommand) {
@@ -822,29 +793,24 @@ export function ChatApp({
         setNotice(queuedMediaNotice(mediaCommand.kind))
         setInput('')
         try {
-          let content: string
-          if (mediaCommand.kind === 'avatargen') {
-            const avatarVision = vision ?? liveUi?.consumePendingVisionAttachment()
-            const avatarAttachments = liveUi?.consumePendingFileAttachments() ?? []
-            const referenceImages = avatarGenReferenceImagesFromLiveInputs(avatarVision, avatarAttachments)
-            const job = await enqueueAvatarGenJob(cwd, config, prompt, referenceImages)
-            if (avatarVision) liveUi?.clearVisionAttachment()
-            else if (avatarAttachments.length) liveUi?.clearFileAttachments()
-            content = await polishAvatarGenQueuedReply(config, prompt, job.id)
-          } else if (mediaCommand.kind === 'video') {
-            const videoVision = vision ?? liveUi?.consumePendingVisionAttachment()
-            const videoAttachments = liveUi?.consumePendingFileAttachments() ?? []
-            if (videoVision) liveUi?.clearVisionAttachment()
-            else if (videoAttachments.length) liveUi?.clearFileAttachments()
-            const referenceImages = seedanceReferenceImagesFromLiveInputs(videoVision, videoAttachments)
-            const job = await enqueueSeedanceVideoJob(cwd, config, prompt, referenceImages)
-            content = await polishVideoQueuedReply(config, prompt, job.id)
-          } else {
-            const snapVision = vision ?? liveUi?.consumePendingVisionAttachment()
-            if (snapVision) liveUi?.clearVisionAttachment()
-            const job = await enqueueSnapPhotoJob(cwd, config, prompt, snapVision)
-            content = await polishSnapQueuedReply(config, prompt, job.id)
-          }
+          const content = await runQueuedMediaCommand({
+            command: mediaCommand,
+            getVision: () => vision ?? liveUi?.consumePendingVisionAttachment(),
+            getFileAttachments: () => liveUi?.consumePendingFileAttachments() ?? [],
+            clearVisionAttachment: () => liveUi?.clearVisionAttachment(),
+            clearFileAttachments: () => liveUi?.clearFileAttachments(),
+            avatarReferences: avatarGenReferenceImagesFromLiveInputs,
+            videoReferences: seedanceReferenceImagesFromLiveInputs,
+            enqueueAvatar: (queuedPrompt, referenceImages) =>
+              enqueueAvatarGenJob(cwd, config, queuedPrompt, referenceImages),
+            enqueueVideo: (queuedPrompt, referenceImages) =>
+              enqueueSeedanceVideoJob(cwd, config, queuedPrompt, referenceImages),
+            enqueueSnap: (queuedPrompt, queuedVision) =>
+              enqueueSnapPhotoJob(cwd, config, queuedPrompt, queuedVision),
+            polishAvatar: (queuedPrompt, jobId) => polishAvatarGenQueuedReply(config, queuedPrompt, jobId),
+            polishVideo: (queuedPrompt, jobId) => polishVideoQueuedReply(config, queuedPrompt, jobId),
+            polishSnap: (queuedPrompt, jobId) => polishSnapQueuedReply(config, queuedPrompt, jobId),
+          })
           await finalizeQueuedMediaCommand({
             cwd,
             messages,
@@ -868,108 +834,6 @@ export function ChatApp({
         }
         return
       }
-      if (raw === '/compact' || raw.startsWith('/compact ')) {
-        const instr = raw.startsWith('/compact ')
-          ? raw.slice('/compact '.length).trim()
-          : ''
-        if (messages.length < 2) {
-          setError('消息过少，无需压缩')
-          setInput('')
-          return
-        }
-        setCompacting(true)
-        setError(null)
-        setNotice('已提交后台压缩；期间记忆写入会排队等待…')
-        const cs = resolvedCompactionSettings(config)
-        const runCompact = subconsciousRef.current
-          ? subconsciousRef.current.compactSessionAsync({
-              messages,
-              minTailMessages: cs.minTailMessages,
-              maxToolSnippetChars: cs.maxToolSnippetChars,
-              customInstructions: instr || undefined,
-              preCompactHook: cs.preCompactHook,
-            })
-          : compactSessionMessages({
-              config,
-              cwd,
-              messages,
-              minTailMessages: cs.minTailMessages,
-              maxToolSnippetChars: cs.maxToolSnippetChars,
-              customInstructions: instr || undefined,
-              preCompactHook: cs.preCompactHook,
-            }).then(async (next) => {
-              await saveSession(cwd, next)
-              return next
-            })
-        void runCompact
-          .then((next) => {
-            setMessages(next)
-            setNotice(`后台压缩完成：保留最近约 ${cs.minTailMessages} 条消息起的上下文`)
-            setTimeout(() => setNotice(null), 5000)
-          })
-          .catch((e: unknown) => {
-            setError(formatChatError(e))
-            setNotice(null)
-          })
-          .finally(() => setCompacting(false))
-        setInput('')
-        return
-      }
-      if (raw === '/permission') {
-        const mode = dangerouslySkipPermissions
-          ? '全部跳过（--dangerously-skip-permissions）'
-          : 'meta-agent 自动评估（规则引擎 + LLM 兜底，blocked 走对话确认）'
-        setNotice(`权限模式: ${mode}`)
-        setTimeout(() => setNotice(null), 8000)
-        setInput('')
-        return
-      }
-      if (raw === '/undo') {
-        const snap = editHistoryRef.current.peek()
-        if (!snap) {
-          setError('没有可撤销的编辑（仅记录本会话内成功的 write_file / str_replace）')
-          setInput('')
-          return
-        }
-        try {
-          const out = await restoreEditSnapshot(cwd, snap)
-          const j = JSON.parse(out) as { ok?: boolean; error?: string }
-          if (!j.ok) {
-            setError(j.error ?? '撤销失败')
-          } else {
-            editHistoryRef.current.pop()
-            setError(null)
-            setNotice(`已撤销: ${snap.relPath}`)
-            setTimeout(() => setNotice(null), 4000)
-          }
-        } catch (e: unknown) {
-          setError(formatChatError(e))
-        }
-        setInput('')
-        return
-      }
-      if (raw === '/roll' || raw.startsWith('/roll ')) {
-        const arg = raw.startsWith('/roll ') ? raw.slice('/roll '.length).trim() : ''
-        const layers = arg ? Number(arg) : 1
-        if (!Number.isInteger(layers) || layers < 1) {
-          setError('/roll 后请输入正整数，例如 /roll 2')
-          setInput('')
-          return
-        }
-        const res = rollMessages(messages, layers)
-        if (res.layers === 0) {
-          setError('没有可回滚的 LLM 输出层')
-          setInput('')
-          return
-        }
-        setMessages(res.messages)
-        await saveSession(cwd, res.messages)
-        setError(null)
-        setNotice(`已回滚 ${res.layers} 层，删除 ${res.removed} 条消息`)
-        setTimeout(() => setNotice(null), 5000)
-        setInput('')
-        return
-      }
 
       setBusy(true)
       setError(null)
@@ -982,54 +846,20 @@ export function ChatApp({
       const userLine = raw
 
       let baseMessages = messages
-      const cs = resolvedCompactionSettings(config)
-      if (
-        cs.autoThresholdTokens > 0 &&
-        estimateMessagesTokens(baseMessages) >= cs.autoThresholdTokens
-      ) {
-        setCompacting(true)
-        setNotice('历史较长，正在自动压缩上下文（非流式）…')
-        try {
-          const compactPromise = subconsciousRef.current
-            ? subconsciousRef.current.compactSessionAsync({
-                messages: baseMessages,
-                minTailMessages: cs.minTailMessages,
-                maxToolSnippetChars: cs.maxToolSnippetChars,
-                preCompactHook: cs.preCompactHook,
-              })
-            : (async () => {
-                if (baseMessages.length > 0) await archiveSession(cwd, baseMessages).catch(() => {})
-                const next = await compactSessionMessages({
-                  config,
-                  cwd,
-                  messages: baseMessages,
-                  minTailMessages: cs.minTailMessages,
-                  maxToolSnippetChars: cs.maxToolSnippetChars,
-                  preCompactHook: cs.preCompactHook,
-                })
-                await saveSession(cwd, next)
-                return next
-              })()
-          void compactPromise
-            .then((next) => {
-              setMessages(next)
-              setNotice('已自动后台压缩上下文')
-              setTimeout(() => setNotice(null), 5000)
-            })
-            .catch((e: unknown) => {
-              setError(formatChatError(e))
-              setNotice(null)
-            })
-            .finally(() => setCompacting(false))
-          setNotice('历史较长，已提交后台压缩；本轮继续使用当前上下文…')
-        } catch (e: unknown) {
-          setError(formatChatError(e))
-          setNotice(null)
-          setCompacting(false)
-          setBusy(false)
-          return
-        }
-      }
+      maybeStartAutoCompaction({
+        cwd,
+        config,
+        messages: baseMessages,
+        controller: subconsciousRef.current,
+        ui: {
+          setCompacting,
+          setNotice,
+          setError,
+          setBusy,
+          setMessages,
+          clearNoticeLater: (ms) => setTimeout(() => setNotice(null), ms),
+        },
+      })
 
       const turnVision = vision ?? liveUi?.consumePendingVisionAttachment()
       const turnAttachments = liveUi?.consumePendingFileAttachments() ?? []

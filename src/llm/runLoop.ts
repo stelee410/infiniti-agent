@@ -19,6 +19,15 @@ import {
 } from './formatToolConfirm.js'
 import { evaluateToolSafety } from './toolGateAgent.js'
 import { agentDebug } from '../utils/agentDebug.js'
+import {
+  appendAssistantToolCalls,
+  appendPendingToolResults,
+  appendToolResult,
+  failedToolResultJson,
+  type PendingToolExecution,
+} from './toolExecutionMessages.js'
+import { OpenAiToolAccumulator } from './openAiToolAccumulator.js'
+import { extractGeminiResponseParts } from './geminiResponseParts.js'
 
 const MAX_TOOL_STEPS = 48
 const DRY_RUN_SAFE_TOOLS = new Set<string>(['write_file', 'str_replace'])
@@ -437,14 +446,7 @@ async function runAnthropic(
     })
 
     // ── 流式工具执行状态 ──
-    interface PendingTool {
-      id: string
-      name: string
-      inputJson: string
-      input: Record<string, unknown>
-      resultPromise: Promise<string>
-    }
-    const pendingTools: PendingTool[] = []
+    const pendingTools: PendingToolExecution[] = []
     let curBlockType: 'tool_use' | 'thinking' | 'text' | null = null
     let curToolId = ''
     let curToolName = ''
@@ -513,8 +515,6 @@ async function runAnthropic(
       if (event.type === 'content_block_stop') {
         if (curBlockType === 'tool_use' && curToolId) {
           const inputJson = curToolInput || '{}'
-          let input: Record<string, unknown>
-          try { input = JSON.parse(inputJson) as Record<string, unknown> } catch { input = {} }
 
           agentDebug('streaming tool exec start', curToolName, curToolId)
           opts.stream?.onToolExecStart?.(curToolName)
@@ -523,8 +523,7 @@ async function runAnthropic(
           pendingTools.push({
             id: curToolId,
             name: curToolName,
-            inputJson,
-            input,
+            argumentsJson: inputJson,
             resultPromise: dispatch(curToolName, inputJson),
           })
         }
@@ -547,33 +546,12 @@ async function runAnthropic(
     } catch (e) {
       if (pendingTools.length) {
         const error = e instanceof Error ? e.message : String(e)
-        working.push({
-          role: 'assistant',
-          content: null,
-          toolCalls: pendingTools.map((pt) => ({
-            id: pt.id,
-            name: pt.name,
-            argumentsJson: JSON.stringify(pt.input),
-          })),
-        })
-        for (const pt of pendingTools) {
-          let result: string
-          try {
-            result = await pt.resultPromise
-          } catch (toolError) {
-            result = JSON.stringify({
-              ok: false,
-              status: 'tool_failed_after_stream_error',
-              error: toolError instanceof Error ? toolError.message : String(toolError),
-            })
-          }
-          working.push({
-            role: 'tool',
-            toolCallId: pt.id,
-            name: pt.name,
-            content: result,
-          })
-        }
+        appendAssistantToolCalls(working, null, pendingTools)
+        await appendPendingToolResults(
+          working,
+          pendingTools,
+          (toolError) => failedToolResultJson('tool_failed_after_stream_error', toolError),
+        )
         working.push({
           role: 'assistant',
           content: `Anthropic stream failed after tool dispatch: ${error}`,
@@ -614,26 +592,10 @@ async function runAnthropic(
       break
     }
 
-    working.push({
-      role: 'assistant',
-      content: mergedText,
-      toolCalls: pendingTools.map((pt) => ({
-        id: pt.id,
-        name: pt.name,
-        argumentsJson: JSON.stringify(pt.input),
-      })),
-    })
+    appendAssistantToolCalls(working, mergedText, pendingTools)
 
     // ── 等待所有工具结果（大部分已在流式期间完成） ──
-    for (const pt of pendingTools) {
-      const result = await pt.resultPromise
-      working.push({
-        role: 'tool',
-        toolCallId: pt.id,
-        name: pt.name,
-        content: result,
-      })
-    }
+    await appendPendingToolResults(working, pendingTools)
   }
 
   return { messages: working }
@@ -752,10 +714,7 @@ async function runOpenAI(
     })
 
     let content = ''
-    const toolAcc = new Map<
-      number,
-      { id: string; name: string; arguments: string }
-    >()
+    const toolAcc = new OpenAiToolAccumulator()
 
     await withDeadline(
       (async () => {
@@ -772,22 +731,7 @@ async function runOpenAI(
           }
           if (d.tool_calls) {
             for (const tc of d.tool_calls) {
-              const i = tc.index
-              const cur = toolAcc.get(i) ?? {
-                id: '',
-                name: '',
-                arguments: '',
-              }
-              if (tc.id) {
-                cur.id = tc.id
-              }
-              if (tc.function?.name) {
-                cur.name = tc.function.name
-              }
-              if (tc.function?.arguments) {
-                cur.arguments += tc.function.arguments
-              }
-              toolAcc.set(i, cur)
+              toolAcc.add(tc)
             }
           }
         }
@@ -801,10 +745,7 @@ async function runOpenAI(
       break
     }
 
-    const sorted = [...toolAcc.entries()]
-      .sort((a, b) => a[0] - b[0])
-      .map(([, v]) => v)
-    const fnCalls = sorted.filter((v) => v.id && v.name)
+    const fnCalls = toolAcc.toToolCalls()
     agentDebug(
       'openai step',
       step,
@@ -821,24 +762,15 @@ async function runOpenAI(
       break
     }
 
-    working.push({
-      role: 'assistant',
-      content: content.trim() ? content : null,
-      toolCalls: fnCalls.map((c) => ({
-        id: c.id,
-        name: c.name,
-        argumentsJson: c.arguments || '{}',
-      })),
-    })
+    appendAssistantToolCalls(
+      working,
+      content.trim() ? content : null,
+      fnCalls,
+    )
 
     for (const c of fnCalls) {
-      const out = await dispatch(c.name, c.arguments || '{}')
-      working.push({
-        role: 'tool',
-        toolCallId: c.id,
-        name: c.name,
-        content: out,
-      })
+      const out = await dispatch(c.name, c.argumentsJson)
+      appendToolResult(working, c, out)
     }
   }
 
@@ -1000,23 +932,7 @@ async function runGemini(
     const response = await streamResult.response
     const parts = response.candidates?.[0]?.content?.parts ?? []
 
-    const textChunks: string[] = []
-    const calls: { name: string; args: Record<string, unknown> }[] = []
-
-    for (const p of parts) {
-      const part = p as { text?: string; functionCall?: { name: string; args?: Record<string, unknown> } }
-      if (part.text) {
-        textChunks.push(part.text)
-      }
-      if (part.functionCall?.name) {
-        calls.push({
-          name: part.functionCall.name,
-          args: part.functionCall.args ?? {},
-        })
-      }
-    }
-
-    const mergedText = textChunks.join('').trim() || null
+    const { mergedText, calls } = extractGeminiResponseParts(parts)
     agentDebug(
       'gemini step',
       step,
@@ -1036,22 +952,13 @@ async function runGemini(
       argumentsJson: JSON.stringify(c.args ?? {}),
     }))
 
-    working.push({
-      role: 'assistant',
-      content: mergedText,
-      toolCalls,
-    })
+    appendAssistantToolCalls(working, mergedText, toolCalls)
 
     for (let j = 0; j < calls.length; j++) {
       const c = calls[j]!
       const tc = toolCalls[j]!
       const out = await dispatch(c.name, JSON.stringify(c.args ?? {}))
-      working.push({
-        role: 'tool',
-        toolCallId: tc.id,
-        name: c.name,
-        content: out,
-      })
+      appendToolResult(working, tc, out)
     }
   }
 

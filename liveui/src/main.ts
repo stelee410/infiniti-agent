@@ -7,12 +7,6 @@ import {
   type StreamLiveUiState,
 } from '../../src/liveui/emotionParse.ts'
 import type { LiveUiStatusVariant, LiveUiVisionAttachment } from '../../src/liveui/protocol.ts'
-import type { LiveUiVoiceMicWire } from '../../src/liveui/voiceMicEnv.ts'
-import {
-  VOICE_MIC_DEFAULT_SILENCE_END_MS,
-  VOICE_MIC_DEFAULT_SPEECH_RMS_THRESHOLD,
-  VOICE_MIC_DEFAULT_SUPPRESS_INTERRUPT_DURING_TTS,
-} from '../../src/liveui/voiceMicEnv.ts'
 import { renderLiveUiBubbleMarkdown } from './bubbleMarkdown.ts'
 import { ReconnectingWebSocket } from './reconnectingWebSocket.ts'
 import { isSocketOpen, sendSocketMessage } from './socketMessages.ts'
@@ -29,6 +23,53 @@ import {
   type SpriteExpressionManifestV1,
 } from '../../src/liveui/spriteExpressionManifestCore.ts'
 import { initConfigPanel } from './configPanel.ts'
+import {
+  createLiveInboxController,
+  filePathToUrl,
+  filenameFromPath,
+} from './inboxController.ts'
+import {
+  attachmentChipLabel,
+  attachmentKindForMediaType,
+  attachmentMediaType,
+  shouldReadAttachmentText,
+} from './attachmentUtils.ts'
+import {
+  VAD_FFT_SIZE,
+  computeVadFrame as computeVadFrameFromSamples,
+  resolveVoiceMicWire,
+} from './voiceMicUtils.ts'
+import {
+  PcmS16Coalescer,
+  base64ToArrayBuffer,
+  normalizePcmAudioMeta,
+} from './ttsAudioUtils.ts'
+import {
+  canNavigateInputHistory as canNavigateHistoryValue,
+  navigateInputHistory as navigateHistoryValue,
+  parseInputHistory,
+  rememberInput,
+} from './inputHistory.ts'
+import {
+  slashInsertText,
+  slashMenuHintText,
+  slashMenuWindow,
+  type SlashRow,
+} from './slashMenuModel.ts'
+import {
+  describeCameraError,
+  photoDataUrl,
+  scaledCaptureSize,
+} from './cameraUtils.ts'
+import {
+  configPanelLayoutAction,
+  isWindowSizeRestored,
+  shouldApplyReal2dResizeLayout,
+  shouldResetReal2dCompactScaleOnConfigClose,
+  shouldRunDynamicFigureFit,
+  type ConfigPanelCloseReason,
+  type WindowSize,
+} from './panelLayoutPolicy.ts'
 import { adaptExpression, type RendererKind } from './expressionAdapter.ts'
 import { Real2dLiveUiAdapter, type Real2dExpressionSlot } from './real2dLiveUiAdapter.ts'
 
@@ -146,21 +187,6 @@ type VisionCaptureResultMsg = {
     vision?: unknown
     error?: unknown
   }
-}
-
-type InboxAttachment = {
-  kind?: unknown
-  path?: unknown
-  mimeType?: unknown
-  label?: unknown
-}
-
-type InboxItem = {
-  id?: unknown
-  createdAt?: unknown
-  subject?: unknown
-  body?: unknown
-  attachments?: unknown
 }
 
 type InboxUpdateMsg = {
@@ -399,6 +425,8 @@ async function bootstrap(): Promise<void> {
   let real2dPlacementTimer: ReturnType<typeof window.setTimeout> | null = null
   let pendingReal2dCompactHeight: number | null = null
   let real2dCompactBaseStageHeight: number | null = null
+  let configPanelReturnWindowSize: WindowSize | null = null
+  let pendingConfigPanelCloseWindowSize: WindowSize | null = null
   let debugOverlayEnabled = false
   let debugEmotion = 'neutral'
   let debugEmotionIntensity = 0
@@ -629,16 +657,23 @@ async function bootstrap(): Promise<void> {
       })
     })
 
+  let configPanelOpen = false
   let syncMinimalWindowBounds = (): void => {}
   let dynamicWindowFitTimer: number | undefined
 
-  const scheduleDynamicWindowFit = (attempt = 0): void => {
+  const cancelDynamicWindowFit = (): void => {
     if (dynamicWindowFitTimer !== undefined) {
       window.clearTimeout(dynamicWindowFitTimer)
       dynamicWindowFitTimer = undefined
     }
+  }
+
+  const scheduleDynamicWindowFit = (attempt = 0): void => {
+    if (!shouldRunDynamicFigureFit({ minimalMode, configPanelOpen })) return
+    cancelDynamicWindowFit()
     dynamicWindowFitTimer = window.setTimeout(() => {
       dynamicWindowFitTimer = undefined
+      if (!shouldRunDynamicFigureFit({ minimalMode, configPanelOpen })) return
       if (minimalMode) {
         syncMinimalWindowBounds()
       } else {
@@ -1254,6 +1289,18 @@ async function bootstrap(): Promise<void> {
 
   window.addEventListener('resize', () => {
     app.renderer.resize(window.innerWidth, window.innerHeight)
+    const closeWindowRestored = isWindowSizeRestored(
+      { width: window.innerWidth, height: window.innerHeight },
+      pendingConfigPanelCloseWindowSize,
+    )
+    if (!shouldApplyReal2dResizeLayout({
+      configPanelOpen,
+      pendingConfigPanelCloseRestore: pendingConfigPanelCloseWindowSize != null,
+      closeWindowRestored,
+    })) {
+      return
+    }
+    if (closeWindowRestored) pendingConfigPanelCloseWindowSize = null
     if (real2dAvatar) {
       if (minimalMode) {
         resetReal2dCompactScaleState()
@@ -1293,10 +1340,35 @@ async function bootstrap(): Promise<void> {
     })
   }
 
+  const refreshConfigPanelClosedLayout = (reason: ConfigPanelCloseReason | undefined, attempt = 0): void => {
+    requestAnimationFrame(() => {
+      const current = { width: window.innerWidth, height: window.innerHeight }
+      if (!isWindowSizeRestored(current, pendingConfigPanelCloseWindowSize) && attempt < 20) {
+        window.setTimeout(() => refreshConfigPanelClosedLayout(reason, attempt + 1), 50)
+        return
+      }
+      pendingConfigPanelCloseWindowSize = null
+      if (shouldResetReal2dCompactScaleOnConfigClose(false, reason)) {
+        resetReal2dCompactScaleState()
+      }
+      refreshNormalWindowLayout()
+    })
+  }
+
   const dockEl = document.getElementById('liveui-bottom-dock')
   if (dockEl && typeof ResizeObserver !== 'undefined') {
     const ro = new ResizeObserver(() => {
       requestAnimationFrame(() => {
+        if (!shouldApplyReal2dResizeLayout({
+          configPanelOpen,
+          pendingConfigPanelCloseRestore: pendingConfigPanelCloseWindowSize != null,
+          closeWindowRestored: isWindowSizeRestored(
+            { width: window.innerWidth, height: window.innerHeight },
+            pendingConfigPanelCloseWindowSize,
+          ),
+        })) {
+          return
+        }
         layoutFigureInStage()
         applyReal2dStageLayout()
         positionBubbleOverFigure()
@@ -1316,22 +1388,31 @@ async function bootstrap(): Promise<void> {
   const port = readPort()
   const wsUrl = `ws://127.0.0.1:${port}`
   const socket = new ReconnectingWebSocket(wsUrl)
-  let configPanelOpen = false
   const configPanel = initConfigPanel({
     socket,
-    onOpenChange: (open) => {
+    onOpenChange: (open, reason) => {
+      if (open) {
+        configPanelReturnWindowSize = { width: window.innerWidth, height: window.innerHeight }
+        pendingConfigPanelCloseWindowSize = null
+      } else {
+        pendingConfigPanelCloseWindowSize = configPanelReturnWindowSize
+        configPanelReturnWindowSize = null
+      }
       configPanelOpen = open
       document.body.classList.toggle('liveui-config-open', open)
       window.infinitiLiveUi?.setConfigPanelOpen?.(open)
       window.infinitiLiveUi?.setIgnoreMouseEvents?.(!open, { forward: true })
-      requestAnimationFrame(() => scheduleDynamicWindowFit())
+      if (configPanelLayoutAction(open) === 'suspend-fit') {
+        cancelDynamicWindowFit()
+        return
+      }
+      refreshConfigPanelClosedLayout(reason)
     },
   })
 
   const INPUT_HISTORY_STORAGE_KEY = 'infiniti-liveui-input-history-v1'
   const INPUT_HISTORY_MAX = 100
   const SLASH_MENU_MAX_ROWS = 10
-  type SlashRow = { id: string; kind: string; label: string; desc: string; insert: string }
   let slashMenuOpenLive = false
   let slashRows: SlashRow[] = []
   let slashSel = 0
@@ -1342,245 +1423,21 @@ async function bootstrap(): Promise<void> {
   const slashMenuEl = document.getElementById('liveui-slash-menu')
   const slashHintEl = document.getElementById('liveui-slash-menu-hint')
   const slashListEl = document.getElementById('liveui-slash-menu-list')
-  type RenderInboxAttachment = { kind: 'image' | 'file'; path: string; mimeType?: string; label?: string }
-  type RenderInboxItem = {
-    id: string
-    createdAt: string
-    subject: string
-    body: string
-    attachments: RenderInboxAttachment[]
-  }
-  let unreadInboxItems: RenderInboxItem[] = []
-  let openInboxItems: RenderInboxItem[] = []
-  let inboxPanelOpen = false
-  let inboxRenderSignature = ''
-  let inboxMarkTimer: number | undefined
-  const inboxIconSvg = '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2Zm0 4.2-8 5-8-5V6l8 5 8-5v2.2Z"/></svg>'
-  const closeIconSvg = '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M18.3 5.71 12 12l6.3 6.29-1.41 1.41L10.59 13.41 4.29 19.7 2.88 18.29 9.17 12 2.88 5.71 4.29 4.3l6.3 6.29 6.3-6.29 1.41 1.41z"/></svg>'
-
-  const filePathToUrl = (p: string): string => {
-    if (/^file:/i.test(p) || /^https?:/i.test(p) || /^data:/i.test(p)) return p
-    return `file://${p.split('/').map((part) => encodeURIComponent(part)).join('/')}`
-  }
-
-  const filePathToMediaUrl = (p: string): string => {
-    if (/^https?:/i.test(p) || /^data:/i.test(p)) return p
-    const port = window.infinitiLiveUi?.port || new URLSearchParams(window.location.search).get('port') || '8080'
-    return `http://127.0.0.1:${encodeURIComponent(port)}/media?path=${encodeURIComponent(p)}`
-  }
-
-  const filenameFromPath = (p: string): string => {
-    const parts = p.split(/[\\/]/)
-    return parts[parts.length - 1] || 'attachment'
-  }
-
-  const parseInboxAttachment = (raw: InboxAttachment): RenderInboxAttachment | null => {
-    if (!raw || typeof raw !== 'object') return null
-    if (raw.kind !== 'image' && raw.kind !== 'file') return null
-    if (typeof raw.path !== 'string' || !raw.path.trim()) return null
-    const out: RenderInboxAttachment = { kind: raw.kind, path: raw.path }
-    if (typeof raw.mimeType === 'string') out.mimeType = raw.mimeType
-    if (typeof raw.label === 'string') out.label = raw.label
-    return out
-  }
-
-  const parseInboxItem = (raw: InboxItem): RenderInboxItem | null => {
-    if (!raw || typeof raw !== 'object') return null
-    if (
-      typeof raw.id !== 'string' ||
-      typeof raw.createdAt !== 'string' ||
-      typeof raw.subject !== 'string' ||
-      typeof raw.body !== 'string' ||
-      !Array.isArray(raw.attachments)
-    ) {
-      return null
-    }
-    return {
-      id: raw.id,
-      createdAt: raw.createdAt,
-      subject: raw.subject,
-      body: raw.body,
-      attachments: raw.attachments
-        .map((a) => parseInboxAttachment(a as InboxAttachment))
-        .filter((a): a is RenderInboxAttachment => a != null),
-    }
-  }
-
-  const isVideoAttachment = (attachment: RenderInboxAttachment): boolean => {
-    const mt = attachment.mimeType?.toLowerCase() ?? ''
-    if (mt.startsWith('video/')) return true
-    return /\.(mp4|webm|mov|m4v)$/i.test(attachment.path)
-  }
-
-  const inboxItemsSignature = (items: RenderInboxItem[]): string => {
-    return items
-      .map((item) => {
-        const attachments = item.attachments
-          .map((attachment) => [
-            attachment.kind,
-            attachment.path,
-            attachment.mimeType ?? '',
-            attachment.label ?? '',
-          ].join('\u001f'))
-          .join('\u001e')
-        return [item.id, item.createdAt, item.subject, item.body, attachments].join('\u001d')
-      })
-      .join('\u001c')
-  }
-
-  const hydrateInboxVideo = async (video: HTMLVideoElement, attachment: RenderInboxAttachment): Promise<void> => {
-    video.src = filePathToMediaUrl(attachment.path)
-    video.load()
-  }
-
-  const appendInboxSaveAction = (wrap: HTMLElement, attachment: RenderInboxAttachment): void => {
-    const actions = document.createElement('div')
-    actions.className = 'liveui-inbox-actions'
-    const saveBtn = document.createElement('button')
-    saveBtn.type = 'button'
-    saveBtn.className = 'liveui-inbox-action'
-    saveBtn.title = '另存为'
-    saveBtn.setAttribute('aria-label', '另存为')
-    saveBtn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M5 20h14v-2H5v2ZM19 9h-4V3H9v6H5l7 7 7-7Z"/></svg>'
-    saveBtn.addEventListener('click', async (ev) => {
-      ev.stopPropagation()
-      const defaultPath = attachment.path.split(/[\\/]/).pop() || filenameFromPath(attachment.path)
-      const dest = await window.infinitiLiveUi?.savePath?.({ defaultPath })
-      if (dest) {
-        sendSocketMessage(socket, 'INBOX_SAVE_AS', {
-          sourcePath: attachment.path,
-          destinationPath: dest,
-        })
-      }
-    })
-    actions.appendChild(saveBtn)
-    wrap.appendChild(actions)
-  }
-
-  const renderInbox = (): void => {
-    if (!inboxRoot || !inboxPanel) return
-    if (!inboxPanelOpen) positionInboxAtComposer()
-    const items = inboxPanelOpen ? openInboxItems : unreadInboxItems
-    const visible = inboxPanelOpen || unreadInboxItems.length > 0
-    inboxRoot.classList.toggle('liveui-inbox--visible', visible)
-    inboxRoot.classList.toggle('liveui-inbox--open', inboxPanelOpen)
-    inboxRoot.setAttribute('aria-hidden', visible ? 'false' : 'true')
-    const nextSignature = [
-      visible ? 'visible' : 'hidden',
-      inboxPanelOpen ? 'open' : 'closed',
-      inboxItemsSignature(items),
-    ].join('\u001b')
-    if (nextSignature === inboxRenderSignature) return
-    inboxRenderSignature = nextSignature
-    inboxPanel.replaceChildren()
-    if (!visible || items.length === 0) {
-      return
-    }
-    for (const item of items) {
-      const mail = document.createElement('section')
-      mail.className = 'liveui-inbox-mail'
-
-      const subject = document.createElement('div')
-      subject.className = 'liveui-inbox-subject'
-      subject.textContent = item.subject
-      mail.appendChild(subject)
-
-      const time = document.createElement('div')
-      time.className = 'liveui-inbox-time'
-      time.textContent = new Date(item.createdAt).toLocaleString()
-      mail.appendChild(time)
-
-      const body = document.createElement('div')
-      body.className = 'liveui-inbox-body'
-      body.textContent = item.body
-      mail.appendChild(body)
-
-      for (const attachment of item.attachments) {
-        if (attachment.kind === 'image') {
-          const wrap = document.createElement('div')
-          wrap.className = 'liveui-inbox-media-wrap'
-          const img = document.createElement('img')
-          img.className = 'liveui-inbox-image'
-          img.alt = attachment.label ?? 'generated image'
-          img.src = filePathToUrl(attachment.path)
-          wrap.appendChild(img)
-          appendInboxSaveAction(wrap, attachment)
-          mail.appendChild(wrap)
-        } else if (isVideoAttachment(attachment)) {
-          const wrap = document.createElement('div')
-          wrap.className = 'liveui-inbox-media-wrap'
-          const video = document.createElement('video')
-          video.className = 'liveui-inbox-video'
-          video.controls = true
-          video.preload = 'metadata'
-          video.playsInline = true
-          video.title = attachment.label ?? filenameFromPath(attachment.path)
-          video.addEventListener('loadedmetadata', () => {
-            console.debug(`[liveui] inbox video metadata loaded: ${attachment.path}`)
-          }, { once: true })
-          video.addEventListener('error', () => {
-            console.warn(`[liveui] inbox video load error: ${attachment.path}`)
-            wrap.classList.add('liveui-inbox-media-wrap--error')
-          }, { once: true })
-          wrap.appendChild(video)
-          const hint = document.createElement('div')
-          hint.className = 'liveui-inbox-media-hint'
-          hint.textContent = filenameFromPath(attachment.path)
-          wrap.appendChild(hint)
-          void hydrateInboxVideo(video, attachment)
-          appendInboxSaveAction(wrap, attachment)
-          mail.appendChild(wrap)
-        }
-      }
-
-      inboxPanel.appendChild(mail)
-    }
-  }
-
-  const markVisibleInboxReadSoon = (): void => {
-    if (inboxMarkTimer) window.clearTimeout(inboxMarkTimer)
-    const ids = unreadInboxItems.map((m) => m.id)
-    if (ids.length === 0) return
-    inboxMarkTimer = window.setTimeout(() => {
-      sendSocketMessage(socket, 'INBOX_MARK_READ', { ids })
-    }, 1500)
-  }
-
-  const setInboxOpen = (open: boolean, preferOpenItems = false): void => {
-    if (!inboxRoot || !inboxToggle) return
-    if (open && unreadInboxItems.length === 0 && openInboxItems.length === 0) return
-    inboxPanelOpen = open
-    if (open) {
-      openInboxItems = !preferOpenItems && unreadInboxItems.length > 0 ? [...unreadInboxItems] : [...openInboxItems]
-    } else {
-      openInboxItems = []
-      if (inboxMarkTimer) {
-        window.clearTimeout(inboxMarkTimer)
-        inboxMarkTimer = undefined
-      }
-    }
-    document.body.classList.toggle('liveui-inbox-open', open)
-    inboxToggle.innerHTML = open ? closeIconSvg : inboxIconSvg
-    inboxToggle.title = open ? '关闭你的邮箱' : '你的邮箱'
-    inboxToggle.setAttribute('aria-label', open ? '关闭你的邮箱' : '你的邮箱')
-    window.infinitiLiveUi?.setConfigPanelOpen?.(open)
-    window.infinitiLiveUi?.setIgnoreMouseEvents?.(!open, { forward: true })
-    renderInbox()
-    if (open) markVisibleInboxReadSoon()
-  }
-
-  inboxToggle?.addEventListener('click', () => {
-    setInboxOpen(!inboxPanelOpen)
+  const inboxController = createLiveInboxController({
+    root: inboxRoot,
+    toggle: inboxToggle,
+    panel: inboxPanel,
+    socket,
+    positionAtComposer: positionInboxAtComposer,
+    setConfigPanelOpen: (open) => window.infinitiLiveUi?.setConfigPanelOpen?.(open),
+    setIgnoreMouseEvents: (ignore, options) => window.infinitiLiveUi?.setIgnoreMouseEvents?.(ignore, options),
+    savePath: (request) => window.infinitiLiveUi?.savePath?.(request),
+    getPort: () => window.infinitiLiveUi?.port || new URLSearchParams(window.location.search).get('port') || '8080',
   })
 
   const loadInputHistory = (): string[] => {
     try {
-      const raw = window.localStorage.getItem(INPUT_HISTORY_STORAGE_KEY)
-      const parsed = raw ? JSON.parse(raw) : []
-      if (!Array.isArray(parsed)) return []
-      return parsed
-        .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
-        .slice(-INPUT_HISTORY_MAX)
+      return parseInputHistory(window.localStorage.getItem(INPUT_HISTORY_STORAGE_KEY), INPUT_HISTORY_MAX)
     } catch {
       return []
     }
@@ -1598,17 +1455,14 @@ async function bootstrap(): Promise<void> {
   }
 
   const rememberInputHistory = (raw: string): void => {
-    const value = raw.trimEnd()
-    if (!value.trim()) return
-    if (inputHistory[inputHistory.length - 1] !== value) {
-      inputHistory.push(value)
-      if (inputHistory.length > INPUT_HISTORY_MAX) {
-        inputHistory = inputHistory.slice(-INPUT_HISTORY_MAX)
-      }
+    const prev = inputHistory
+    const next = rememberInput(inputHistory, raw, INPUT_HISTORY_MAX)
+    inputHistory = next.items
+    inputHistoryIndex = next.index
+    inputHistoryDraft = next.draft
+    if (inputHistory !== prev) {
       saveInputHistory()
     }
-    inputHistoryIndex = inputHistory.length
-    inputHistoryDraft = ''
   }
 
   inputHistory = loadInputHistory()
@@ -1629,22 +1483,22 @@ async function bootstrap(): Promise<void> {
   }
 
   const canNavigateInputHistory = (direction: 'up' | 'down'): boolean => {
-    if (!userLineInput || inputHistory.length === 0) return false
-    const pos = userLineInput.selectionStart ?? userLineInput.value.length
-    if (direction === 'up') return !userLineInput.value.slice(0, pos).includes('\n')
-    return !userLineInput.value.slice(pos).includes('\n')
+    if (!userLineInput) return false
+    return canNavigateHistoryValue(direction, userLineInput.value, userLineInput.selectionStart, inputHistory.length)
   }
 
   const navigateInputHistory = (direction: 'up' | 'down'): boolean => {
     if (!userLineInput || !canNavigateInputHistory(direction)) return false
-    if (inputHistoryIndex === inputHistory.length) {
-      inputHistoryDraft = userLineInput.value
-    }
-    const delta = direction === 'up' ? -1 : 1
-    const next = Math.max(0, Math.min(inputHistory.length, inputHistoryIndex + delta))
-    if (next === inputHistoryIndex) return true
-    inputHistoryIndex = next
-    setComposerValue(next === inputHistory.length ? inputHistoryDraft : inputHistory[next]!)
+    const next = navigateHistoryValue(
+      { items: inputHistory, index: inputHistoryIndex, draft: inputHistoryDraft },
+      direction,
+      userLineInput.value,
+    )
+    inputHistory = next.items
+    inputHistoryIndex = next.index
+    inputHistoryDraft = next.draft
+    if (!next.changed) return true
+    setComposerValue(next.value)
     return true
   }
 
@@ -1652,8 +1506,7 @@ async function bootstrap(): Promise<void> {
     if (!userLineInput || slashRows.length === 0) return
     const item = slashRows[slashSel]
     if (!item) return
-    const ins = item.insert.endsWith(' ') ? item.insert : `${item.insert} `
-    userLineInput.value = ins
+    userLineInput.value = slashInsertText(item.insert)
     pushComposerDraft()
   }
 
@@ -1669,25 +1522,14 @@ async function bootstrap(): Promise<void> {
     slashMenuEl.setAttribute('aria-hidden', 'false')
     const total = slashRows.length
     if (slashHintEl) {
-      slashHintEl.textContent =
-        total === 0
-          ? '无匹配项，继续输入或退格'
-          : `↑↓ 选择 · Tab 写入 — 共 ${total} 项`
+      slashHintEl.textContent = slashMenuHintText(total)
     }
-    const n = slashRows.length
-    slashSel = n === 0 ? 0 : Math.max(0, Math.min(slashSel, n - 1))
-    let start = 0
-    if (total > SLASH_MENU_MAX_ROWS) {
-      start = Math.max(
-        0,
-        Math.min(slashSel - Math.floor(SLASH_MENU_MAX_ROWS / 2), total - SLASH_MENU_MAX_ROWS),
-      )
-    }
-    const visible = slashRows.slice(start, start + SLASH_MENU_MAX_ROWS)
+    const windowed = slashMenuWindow(slashRows, slashSel, SLASH_MENU_MAX_ROWS)
+    slashSel = windowed.selected
     slashListEl.replaceChildren()
-    for (let i = 0; i < visible.length; i++) {
-      const item = visible[i]!
-      const globalIdx = start + i
+    for (let i = 0; i < windowed.visible.length; i++) {
+      const item = windowed.visible[i]!
+      const globalIdx = windowed.start + i
       const row = document.createElement('li')
       row.className = `liveui-slash-row${globalIdx === slashSel ? ' liveui-slash-row--active' : ''}`
       row.setAttribute('role', 'option')
@@ -1762,32 +1604,6 @@ async function bootstrap(): Promise<void> {
     })
   }
 
-  const describeCameraError = (e: unknown): string => {
-    if (e === undefined) return 'thrown value is undefined'
-    if (e === null) return 'thrown value is null'
-    const maybe = e as { name?: unknown; message?: unknown; stack?: unknown }
-    const name = typeof maybe?.name === 'string' ? maybe.name : ''
-    const message = typeof maybe?.message === 'string' ? maybe.message : ''
-    const stack = typeof maybe?.stack === 'string' ? maybe.stack : ''
-    const friendly =
-      name === 'NotAllowedError' || name === 'SecurityError'
-        ? '摄像头权限被系统拒绝'
-        : name === 'NotFoundError' || name === 'DevicesNotFoundError'
-          ? '没有找到可用摄像头'
-          : name === 'NotReadableError' || name === 'TrackStartError'
-            ? '摄像头被其他应用占用'
-            : ''
-    const parts = [friendly, name, message, stack].filter(Boolean)
-    if (parts.length) return parts.join(' | ')
-    try {
-      const json = JSON.stringify(e)
-      if (json && json !== '{}') return `${Object.prototype.toString.call(e)} ${json}`
-    } catch {
-      /* ignore */
-    }
-    return String(e)
-  }
-
   const stopMediaStream = (stream: MediaStream): void => {
     for (const track of stream.getTracks()) {
       try {
@@ -1846,10 +1662,7 @@ async function bootstrap(): Promise<void> {
     srcH: number,
     location: LiveUiVisionAttachment['location'] | undefined,
   ): LiveUiVisionAttachment => {
-    const maxSide = 640
-    const scale = Math.min(1, maxSide / Math.max(srcW, srcH))
-    const w = Math.max(1, Math.round(srcW * scale))
-    const h = Math.max(1, Math.round(srcH * scale))
+    const { width: w, height: h } = scaledCaptureSize(srcW, srcH)
     const canvasEl = document.createElement('canvas')
     canvasEl.width = w
     canvasEl.height = h
@@ -2152,9 +1965,8 @@ async function bootstrap(): Promise<void> {
   /** 合并 TTS 小块为约 50ms 再排程，减少 Web Audio BufferSource 数量，缓解长对话卡顿与块衔接裂音 */
   const PCM_S16_COALESCE_SEC = 0.05
   const PCM_S16_TAIL_FLUSH_MS = 10
-  let pcmS16Slop: Uint8Array | null = null
-  let pcmS16Meta: { sampleRate: number; channels: number } | null = null
   let pcmS16FlushTimer: ReturnType<typeof setTimeout> | null = null
+  const pcmS16Coalescer = new PcmS16Coalescer(PCM_S16_COALESCE_SEC)
   let pcmScheduleChain: Promise<void> = Promise.resolve()
   let activePcmSources = 0
   const activePcmSourceNodes: AudioBufferSourceNode[] = []
@@ -2175,14 +1987,6 @@ async function bootstrap(): Promise<void> {
       ttsPcmAnalyser.connect(ctx.destination)
     }
     return ttsPcmAnalyser
-  }
-
-  function base64ToArrayBuffer(b64: string): ArrayBuffer {
-    const bin = atob(b64)
-    const len = bin.length
-    const bytes = new Uint8Array(len)
-    for (let i = 0; i < len; i++) bytes[i] = bin.charCodeAt(i) & 0xff
-    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
   }
 
   /** MOSS generate-stream：pcm_s16le 交织 → AudioBuffer（不经过 decodeAudioData）。 */
@@ -2211,37 +2015,17 @@ async function bootstrap(): Promise<void> {
       clearTimeout(pcmS16FlushTimer)
       pcmS16FlushTimer = null
     }
-    pcmS16Slop = null
-    pcmS16Meta = null
-  }
-
-  const coalesceTargetBytes = (sampleRate: number, channels: number): number => {
-    const ch = Math.max(1, channels)
-    const frames = Math.max(1, Math.floor(PCM_S16_COALESCE_SEC * sampleRate))
-    return frames * 2 * ch
+    pcmS16Coalescer.reset()
   }
 
   const appendAndEmitPcmS16le = (ctx: AudioContext, pcm: Uint8Array, sampleRate: number, channels: number): void => {
-    const ch = Math.max(1, Math.min(8, channels))
-    if (pcmS16Meta && (pcmS16Meta.sampleRate !== sampleRate || pcmS16Meta.channels !== ch)) {
-      void flushPcmS16SpillToCtx(ctx, true)
-    }
-    pcmS16Meta = { sampleRate, channels: ch }
-    if (!pcmS16Slop) {
-      pcmS16Slop = pcm
-    } else {
-      const m = new Uint8Array(pcmS16Slop.length + pcm.length)
-      m.set(pcmS16Slop, 0)
-      m.set(pcm, pcmS16Slop.length)
-      pcmS16Slop = m
-    }
-    if (!pcmS16Meta) return
-    const fb = 2 * pcmS16Meta.channels
-    const need = coalesceTargetBytes(pcmS16Meta.sampleRate, pcmS16Meta.channels)
-    while (pcmS16Slop && pcmS16Slop.length >= need) {
-      const part = pcmS16Slop.subarray(0, need)
-      pcmS16Slop = pcmS16Slop.length > need ? pcmS16Slop.subarray(need) : null
-      const dec = pcmS16leToAudioBuffer(ctx, part.buffer.slice(part.byteOffset, part.byteOffset + part.byteLength), sampleRate, ch)
+    for (const part of pcmS16Coalescer.append(pcm, sampleRate, channels)) {
+      const dec = pcmS16leToAudioBuffer(
+        ctx,
+        part.pcm.buffer.slice(part.pcm.byteOffset, part.pcm.byteOffset + part.pcm.byteLength),
+        part.sampleRate,
+        part.channels,
+      )
       schedulePcmChunk(dec)
     }
     if (pcmS16FlushTimer != null) {
@@ -2255,34 +2039,14 @@ async function bootstrap(): Promise<void> {
   }
 
   function flushPcmS16SpillToCtx(ctx: AudioContext, forceAll: boolean): void {
-    if (!pcmS16Slop || !pcmS16Meta) {
-      if (forceAll) discardPcmS16Spill()
-      return
-    }
-    const { sampleRate, channels: ch } = pcmS16Meta
-    const fb = 2 * ch
-    if (pcmS16Slop.length < fb) {
-      if (forceAll) discardPcmS16Spill()
-      return
-    }
-    const n = Math.floor(pcmS16Slop.length / fb) * fb
-    if (n < fb) {
-      if (forceAll) discardPcmS16Spill()
-      return
-    }
-    const part = pcmS16Slop.subarray(0, n)
-    pcmS16Slop = pcmS16Slop.length > n ? pcmS16Slop.subarray(n) : null
-    const dec = pcmS16leToAudioBuffer(
-      ctx,
-      part.buffer.slice(part.byteOffset, part.byteOffset + part.byteLength),
-      sampleRate,
-      ch,
-    )
-    schedulePcmChunk(dec)
-    if (pcmS16Slop && pcmS16Slop.length >= fb) {
-      void flushPcmS16SpillToCtx(ctx, forceAll)
-    } else if (forceAll) {
-      discardPcmS16Spill()
+    for (const part of pcmS16Coalescer.flush(forceAll)) {
+      const dec = pcmS16leToAudioBuffer(
+        ctx,
+        part.pcm.buffer.slice(part.pcm.byteOffset, part.pcm.byteOffset + part.pcm.byteLength),
+        part.sampleRate,
+        part.channels,
+      )
+      schedulePcmChunk(dec)
     }
   }
 
@@ -2443,11 +2207,7 @@ async function bootstrap(): Promise<void> {
   const enqueueAudioChunk = (data: AudioChunkMsg['data']): void => {
     const ctx = ensureAudioCtx()
     if (data.format === 'pcm_s16le') {
-      const ch =
-        typeof data.channels === 'number' && data.channels >= 1 && data.channels <= 8
-          ? Math.floor(data.channels)
-          : 1
-      const sr = typeof data.sampleRate === 'number' && data.sampleRate > 0 && data.sampleRate < 1_000_000 ? data.sampleRate : 48_000
+      const { sampleRate: sr, channels: ch } = normalizePcmAudioMeta(data.sampleRate, data.channels)
       const u8 = new Uint8Array(base64ToArrayBuffer(data.audioBase64))
       console.debug(`[liveui] 收到 PCM 块: ${u8.byteLength} bytes, ch=${ch}, 队列: ${audioQueue.length}`)
       appendAndEmitPcmS16le(ctx, u8, sr, ch)
@@ -2510,17 +2270,9 @@ async function bootstrap(): Promise<void> {
         setVisualMouth(Math.max(0, Math.min(1, Number(msg.data.value) || 0)))
       }
     } else if (msg.type === 'INBOX_UPDATE') {
-      const raw = msg.data?.unread
-      unreadInboxItems = Array.isArray(raw)
-        ? raw.map((it) => parseInboxItem(it as InboxItem)).filter((it): it is RenderInboxItem => it != null)
-        : []
-      renderInbox()
+      inboxController.setUnreadRaw(msg.data?.unread)
     } else if (msg.type === 'INBOX_OPEN') {
-      const raw = msg.data?.items
-      openInboxItems = Array.isArray(raw)
-        ? raw.map((it) => parseInboxItem(it as InboxItem)).filter((it): it is RenderInboxItem => it != null)
-        : []
-      setInboxOpen(openInboxItems.length > 0, true)
+      inboxController.openRaw(msg.data?.items)
     } else if (msg.type === 'INBOX_SAVE_RESULT') {
       const text = typeof msg.data?.message === 'string' ? msg.data.message : ''
       if (msg.data?.ok) {
@@ -2587,7 +2339,7 @@ async function bootstrap(): Promise<void> {
       const ok = !!msg.data?.ok
       configPanel.setStatus(ok, typeof msg.data?.message === 'string' ? msg.data.message : '')
       if (ok) {
-        configPanel.close()
+        configPanel.close('saved')
         requestAnimationFrame(() => scheduleDynamicWindowFit())
       }
     } else if (msg.type === 'VISION_CAPTURE_RESULT') {
@@ -2902,33 +2654,7 @@ async function bootstrap(): Promise<void> {
   })
 
   // ── 麦克风按钮：默认按住空格说话；`infiniti-agent live --auto` 使用连续 VAD 模式 ──
-  const resolveVoiceMicWire = (): LiveUiVoiceMicWire => {
-    const vm = window.infinitiLiveUi?.voiceMic
-    const speech =
-      typeof vm?.speechRmsThreshold === 'number' &&
-      Number.isFinite(vm.speechRmsThreshold) &&
-      vm.speechRmsThreshold > 0
-        ? Math.min(0.35, Math.max(0.001, vm.speechRmsThreshold))
-        : VOICE_MIC_DEFAULT_SPEECH_RMS_THRESHOLD
-    const silence =
-      typeof vm?.silenceEndMs === 'number' && Number.isFinite(vm.silenceEndMs)
-        ? Math.min(12000, Math.max(200, Math.round(vm.silenceEndMs)))
-        : VOICE_MIC_DEFAULT_SILENCE_END_MS
-    const suppress =
-      vm?.suppressInterruptDuringTts === false
-        ? false
-        : VOICE_MIC_DEFAULT_SUPPRESS_INTERRUPT_DURING_TTS
-    const mode = vm?.mode === 'auto' ? 'auto' : 'push_to_talk'
-    return {
-      speechRmsThreshold: speech,
-      silenceEndMs: silence,
-      suppressInterruptDuringTts: suppress,
-      mode,
-      ttsAutoEnabled: vm?.ttsAutoEnabled !== false,
-      asrAutoEnabled: vm?.asrAutoEnabled === true,
-    }
-  }
-  const voiceMic = resolveVoiceMicWire()
+  const voiceMic = resolveVoiceMicWire(window.infinitiLiveUi?.voiceMic)
   const voiceMicAuto = voiceMic.mode === 'auto'
   /** 已进入说话段后略低于 speech 门限，避免字间弱音被当成静音 */
   const vadRmsRelease = Math.max(0.004, Math.min(voiceMic.speechRmsThreshold * 0.48, voiceMic.speechRmsThreshold - 1e-6))
@@ -2977,26 +2703,11 @@ async function bootstrap(): Promise<void> {
     if (micIconRecording) micIconRecording.style.display = recordingNow ? '' : 'none'
   }
 
-  /** 须与 AnalyserNode.fftSize 一致，否则 getFloatTimeDomainData 行为未定义 */
-  const VAD_FFT_SIZE = 512
   const vadTimeDomain = new Float32Array(VAD_FFT_SIZE)
   const vadFreqBytes = new Uint8Array(VAD_FFT_SIZE / 2)
 
-  /** 人声大致集中频段（Hz），用于相对全带的能量占比 */
-  const VAD_SPEECH_FMIN = 300
-  const VAD_SPEECH_FMAX = 3400
-  /** 频段能量占全带比例下限：过低多为低频轰鸣或高频嘶声 */
-  const VAD_MIN_SPEECH_BAND_RATIO = 0.33
-  /**
-   * 语音带内频谱平坦度上限（几何均值/算术均值）。
-   * 接近 1 多为宽带噪声；人声有共振峰，通常更低。
-   */
-  const VAD_MAX_SPEECH_FLATNESS = 0.62
   /** 安静时语音带能量 EMA；用于简易「相对噪声底」判别 */
   let vadNoiseSpeechBandEma = 1e-10
-  const VAD_NOISE_EMA = 0.06
-  /** 当前帧语音带功率相对噪声底的最小倍数（线性） */
-  const VAD_MIN_SPEECH_TO_NOISE = 2.0
 
   /**
    * 单帧：时域 RMS + 频谱人声特征（频段占比、平坦度、相对噪声底）。
@@ -3006,57 +2717,18 @@ async function bootstrap(): Promise<void> {
     if (!micAnalyser || !micAudioCtx) return { rms: 0, spectralOk: false }
 
     micAnalyser.getFloatTimeDomainData(vadTimeDomain)
-    let sumSq = 0
-    for (let i = 0; i < vadTimeDomain.length; i++) {
-      const s = vadTimeDomain[i]!
-      sumSq += s * s
-    }
-    const rms = Math.sqrt(sumSq / vadTimeDomain.length)
-
-    const sr = micAudioCtx.sampleRate
     const n = micAnalyser.frequencyBinCount
-    if (vadFreqBytes.length < n) return { rms, spectralOk: false }
+    if (vadFreqBytes.length < n) return { rms: 0, spectralOk: false }
     micAnalyser.getByteFrequencyData(vadFreqBytes.subarray(0, n))
-
-    const binFromHz = (hz: number) => Math.floor((hz * VAD_FFT_SIZE) / sr)
-    const start = Math.max(1, binFromHz(VAD_SPEECH_FMIN))
-    const end = Math.min(n - 1, binFromHz(VAD_SPEECH_FMAX))
-    if (end <= start) return { rms, spectralOk: true }
-
-    let totalPow = 0
-    for (let i = 1; i < n; i++) {
-      const v = vadFreqBytes[i]! / 255
-      totalPow += v * v
-    }
-    if (totalPow < 1e-8) return { rms, spectralOk: false }
-
-    let speechPow = 0
-    let logSum = 0
-    const bandBins = end - start + 1
-    for (let i = start; i <= end; i++) {
-      const v = vadFreqBytes[i]! / 255
-      const p = v * v + 1e-12
-      speechPow += p
-      logSum += Math.log(p)
-    }
-    const amean = speechPow / bandBins
-    const gmean = Math.exp(logSum / bandBins)
-    const flatness = amean > 0 ? gmean / amean : 1
-    if (!Number.isFinite(flatness)) return { rms, spectralOk: false }
-
-    const bandRatio = speechPow / totalPow
-    const ratioOk = bandRatio >= VAD_MIN_SPEECH_BAND_RATIO
-    const flatOk = flatness <= VAD_MAX_SPEECH_FLATNESS
-
-    if (rms < voiceMic.speechRmsThreshold * 0.55) {
-      vadNoiseSpeechBandEma =
-        (1 - VAD_NOISE_EMA) * vadNoiseSpeechBandEma + VAD_NOISE_EMA * speechPow
-    }
-    const snrOk =
-      speechPow >= VAD_MIN_SPEECH_TO_NOISE * vadNoiseSpeechBandEma ||
-      vadNoiseSpeechBandEma < 1e-6
-
-    return { rms, spectralOk: ratioOk && flatOk && snrOk }
+    const frame = computeVadFrameFromSamples({
+      timeDomain: vadTimeDomain,
+      freqBytes: vadFreqBytes.subarray(0, n),
+      sampleRate: micAudioCtx.sampleRate,
+      speechRmsThreshold: voiceMic.speechRmsThreshold,
+      noiseSpeechBandEma: vadNoiseSpeechBandEma,
+    })
+    vadNoiseSpeechBandEma = frame.noiseSpeechBandEma
+    return { rms: frame.rms, spectralOk: frame.spectralOk }
   }
 
   const sendRecordedAudio = (): void => {
@@ -3313,22 +2985,6 @@ async function bootstrap(): Promise<void> {
   const attachmentList = document.getElementById('liveui-attachment-list')
   const CAMERA_COUNTDOWN_CAPTURE_DELAY_MS = 3 * 720 + 120
 
-  const photoDataUrl = (vision: LiveUiVisionAttachment): string =>
-    `data:${vision.mediaType};base64,${vision.imageBase64}`
-
-  const attachmentMediaType = (path: string): string | null => {
-    const name = filenameFromPath(path).toLowerCase()
-    if (/\.(jpe?g)$/.test(name)) return 'image/jpeg'
-    if (/\.png$/.test(name)) return 'image/png'
-    if (/\.webp$/.test(name)) return 'image/webp'
-    if (/\.gif$/.test(name)) return 'image/gif'
-    if (/\.pdf$/.test(name)) return 'application/pdf'
-    if (/\.md$|\.markdown$/.test(name)) return 'text/markdown'
-    if (/\.csv$/.test(name)) return 'text/csv'
-    if (/\.docx$/.test(name)) return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-    return null
-  }
-
   const readBlobBase64 = (blob: Blob): Promise<string> =>
     new Promise((resolve, reject) => {
       const reader = new FileReader()
@@ -3354,7 +3010,7 @@ async function bootstrap(): Promise<void> {
         chip.appendChild(img)
       } else {
         const icon = document.createElement('span')
-        icon.textContent = file.mediaType === 'application/pdf' ? 'PDF' : file.name.toLowerCase().endsWith('.docx') ? 'DOC' : 'TXT'
+        icon.textContent = attachmentChipLabel(file.mediaType, file.name)
         chip.appendChild(icon)
       }
       const name = document.createElement('span')
@@ -3382,7 +3038,7 @@ async function bootstrap(): Promise<void> {
     for (const path of paths) {
       const mediaType = attachmentMediaType(path)
       if (!mediaType) continue
-      const kind: ChatAttachment['kind'] = mediaType.startsWith('image/') ? 'image' : 'document'
+      const kind: ChatAttachment['kind'] = attachmentKindForMediaType(mediaType)
       if (kind === 'image') {
         imageCount += 1
         if (imageCount > 9) continue
@@ -3391,9 +3047,7 @@ async function bootstrap(): Promise<void> {
       const blob = await response.blob()
       if (blob.size > 12 * 1024 * 1024) continue
       const base64 = await readBlobBase64(blob)
-      const text = mediaType === 'text/markdown' || mediaType === 'text/csv'
-        ? (await blob.text()).slice(0, 80_000)
-        : undefined
+      const text = shouldReadAttachmentText(mediaType) ? (await blob.text()).slice(0, 80_000) : undefined
       attachedFiles.push({
         id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
         name: filenameFromPath(path),
@@ -3625,7 +3279,7 @@ async function bootstrap(): Promise<void> {
     }
 
     const isOverInteractive = (ex: number, ey: number): boolean => {
-      if (configPanelOpen || inboxPanelOpen) return true
+      if (configPanelOpen || inboxController.isOpen) return true
       const dom = document.elementFromPoint(ex, ey)
       if (
         dom &&

@@ -72,6 +72,49 @@ export type FinalizeQueuedMediaCommandArgs = {
   clearNoticeLater?: (ms: number) => void
 }
 
+export type QueuedMediaJob = { id: string }
+
+export type RunQueuedMediaCommandArgs<TVision, TAttachment, TAvatarRef, TVideoRef> = {
+  command: ParsedQueuedMediaCommand
+  getVision(): TVision | undefined
+  getFileAttachments(): TAttachment[]
+  clearVisionAttachment(): void
+  clearFileAttachments(): void
+  avatarReferences(vision: TVision | undefined, attachments: TAttachment[]): TAvatarRef[]
+  videoReferences(vision: TVision | undefined, attachments: TAttachment[]): TVideoRef[]
+  enqueueAvatar(prompt: string, references: TAvatarRef[]): Promise<QueuedMediaJob>
+  enqueueVideo(prompt: string, references: TVideoRef[]): Promise<QueuedMediaJob>
+  enqueueSnap(prompt: string, vision: TVision | undefined): Promise<QueuedMediaJob>
+  polishAvatar(prompt: string, jobId: string): Promise<string>
+  polishVideo(prompt: string, jobId: string): Promise<string>
+  polishSnap(prompt: string, jobId: string): Promise<string>
+}
+
+export async function runQueuedMediaCommand<TVision, TAttachment, TAvatarRef, TVideoRef>(
+  args: RunQueuedMediaCommandArgs<TVision, TAttachment, TAvatarRef, TVideoRef>,
+): Promise<string> {
+  const prompt = args.command.prompt
+  if (args.command.kind === 'avatargen') {
+    const vision = args.getVision()
+    const attachments = args.getFileAttachments()
+    const job = await args.enqueueAvatar(prompt, args.avatarReferences(vision, attachments))
+    clearConsumedMediaInputs(args, vision, attachments)
+    return args.polishAvatar(prompt, job.id)
+  }
+  if (args.command.kind === 'video') {
+    const vision = args.getVision()
+    const attachments = args.getFileAttachments()
+    const job = await args.enqueueVideo(prompt, args.videoReferences(vision, attachments))
+    clearConsumedMediaInputs(args, vision, attachments)
+    return args.polishVideo(prompt, job.id)
+  }
+
+  const vision = args.getVision()
+  const job = await args.enqueueSnap(prompt, vision)
+  if (vision) args.clearVisionAttachment()
+  return args.polishSnap(prompt, job.id)
+}
+
 export async function finalizeQueuedMediaCommand(
   args: FinalizeQueuedMediaCommandArgs,
 ): Promise<PersistedMessage[]> {
@@ -96,4 +139,13 @@ export async function finalizeQueuedMediaCommand(
     }
   }
   return next
+}
+
+function clearConsumedMediaInputs<TVision, TAttachment>(
+  args: Pick<RunQueuedMediaCommandArgs<TVision, TAttachment, unknown, unknown>, 'clearVisionAttachment' | 'clearFileAttachments'>,
+  vision: TVision | undefined,
+  attachments: TAttachment[],
+): void {
+  if (vision) args.clearVisionAttachment()
+  else if (attachments.length) args.clearFileAttachments()
 }
