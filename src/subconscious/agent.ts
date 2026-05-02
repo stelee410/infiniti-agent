@@ -247,6 +247,14 @@ export class SubconsciousAgent {
   }): Promise<PersistedMessage[]> {
     return this.enqueueMemoryWork(async () => {
       this.compacting = true
+      const startedAt = Date.now()
+      agentDebug('[subconscious-agent] compact start', {
+        messages: opts.messages.length,
+        minTailMessages: opts.minTailMessages,
+        maxToolSnippetChars: opts.maxToolSnippetChars,
+        customInstructions: Boolean(opts.customInstructions?.trim()),
+        preCompactHook: Boolean(opts.preCompactHook),
+      })
       try {
         if (opts.messages.length > 0) {
           await archiveSession(this.cwd, opts.messages).catch(() => {})
@@ -263,7 +271,15 @@ export class SubconsciousAgent {
         await saveSession(this.cwd, next)
         await this.consolidateFromMessages(next)
         await this.consolidateDurableMemory('compact-session', messagesToTranscript(opts.messages.slice(-80)))
+        agentDebug('[subconscious-agent] compact complete', {
+          beforeMessages: opts.messages.length,
+          afterMessages: next.length,
+          durationMs: Date.now() - startedAt,
+        })
         return next
+      } catch (e) {
+        agentDebug('[subconscious-agent] compact failed', e)
+        throw e
       } finally {
         this.compacting = false
       }

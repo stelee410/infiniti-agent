@@ -4,6 +4,7 @@ import type { InfinitiConfig } from '../config/types.js'
 import { messagesToCompactTranscript, truncateTranscriptAtBoundary } from './messagesTranscript.js'
 import { oneShotTextCompletion } from './oneShotCompletion.js'
 import type { PersistedMessage } from './persisted.js'
+import { agentDebug } from '../utils/agentDebug.js'
 
 const PRECOMPACT_TIMEOUT_MS = 15_000
 const MAX_TRANSCRIPT_CHARS = 400_000
@@ -168,8 +169,13 @@ export type CompactSessionOptions = {
 export async function compactSessionMessages(
   opts: CompactSessionOptions,
 ): Promise<PersistedMessage[]> {
+  const startedAt = Date.now()
   const split = findSafeCompactSplitIndex(opts.messages, opts.minTailMessages)
   if (split === null) {
+    agentDebug('[compact-session] no safe split', {
+      messages: opts.messages.length,
+      minTailMessages: opts.minTailMessages,
+    })
     throw new Error(
       '无法安全压缩：历史过短，或无法在保留工具链的前提下分割（可调大 compaction.minTailMessages 再试）',
     )
@@ -177,11 +183,22 @@ export async function compactSessionMessages(
   const head = opts.messages.slice(0, split)
   const tail = opts.messages.slice(split)
   if (head.length === 0) {
+    agentDebug('[compact-session] empty head', { messages: opts.messages.length, split })
     throw new Error('没有可摘要的历史')
   }
 
   let transcript = messagesToCompactTranscript(head, opts.maxToolSnippetChars)
   transcript = truncateTranscriptAtBoundary(transcript, MAX_TRANSCRIPT_CHARS)
+  agentDebug('[compact-session] request summary', {
+    messages: opts.messages.length,
+    split,
+    headMessages: head.length,
+    tailMessages: tail.length,
+    transcriptChars: transcript.length,
+    maxToolSnippetChars: opts.maxToolSnippetChars,
+    customInstructions: Boolean(opts.customInstructions?.trim()),
+    preCompactHook: Boolean(opts.preCompactHook),
+  })
 
   let hookAddendum = ''
   if (opts.preCompactHook) {
@@ -215,6 +232,7 @@ export async function compactSessionMessages(
     summary = `${summary.slice(0, MAX_SUMMARY_CHARS)}\n…（摘要已截断）`
   }
   if (!summary.trim()) {
+    agentDebug('[compact-session] empty summary')
     throw new Error('模型返回空摘要')
   }
 
@@ -223,15 +241,21 @@ export async function compactSessionMessages(
     summary.trim() +
     '\n\n（以上为此前轮次摘要；下接最近对话与工具链，可直接继续任务。）'
 
-  if (tail[0]?.role === 'user') {
-    return [
+  const next: PersistedMessage[] = tail[0]?.role === 'user'
+    ? [
       {
         role: 'user',
         content: `${header}\n\n---\n\n${tail[0].content}`,
       },
       ...tail.slice(1),
     ]
-  }
+    : [{ role: 'user', content: header }, ...tail]
 
-  return [{ role: 'user', content: header }, ...tail]
+  agentDebug('[compact-session] summary complete', {
+    beforeMessages: opts.messages.length,
+    afterMessages: next.length,
+    summaryChars: summary.length,
+    durationMs: Date.now() - startedAt,
+  })
+  return next
 }

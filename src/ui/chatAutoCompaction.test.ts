@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { InfinitiConfig } from '../config/types.js'
 import type { PersistedMessage } from '../llm/persisted.js'
-import { maybeStartAutoCompaction } from './chatAutoCompaction.js'
+import { maybeStartAutoCompaction, mergeCompactedPrefixWithLatest } from './chatAutoCompaction.js'
 
 function config(autoThresholdTokens: number): InfinitiConfig {
   return {
@@ -62,9 +62,9 @@ describe('maybeStartAutoCompaction', () => {
       controller,
       ui: u,
     })).toBe(true)
-    await Promise.resolve()
-    await Promise.resolve()
-    await Promise.resolve()
+    await vi.waitFor(() => {
+      expect(u.setMessages).toHaveBeenCalledWith(next)
+    })
 
     expect(controller.compactSessionAsync).toHaveBeenCalledWith({
       messages,
@@ -74,7 +74,6 @@ describe('maybeStartAutoCompaction', () => {
     })
     expect(u.setCompacting).toHaveBeenNthCalledWith(1, true)
     expect(u.setNotice).toHaveBeenCalledWith('历史较长，已提交后台压缩；本轮继续使用当前上下文…')
-    expect(u.setMessages).toHaveBeenCalledWith(next)
     expect(u.clearNoticeLater).toHaveBeenCalledWith(5000)
     expect(u.setCompacting).toHaveBeenLastCalledWith(false)
   })
@@ -90,13 +89,70 @@ describe('maybeStartAutoCompaction', () => {
       controller,
       ui: u,
     })).toBe(true)
-    await Promise.resolve()
-    await Promise.resolve()
-    await Promise.resolve()
+    await vi.waitFor(() => {
+      expect(u.setError).toHaveBeenCalledWith('boom')
+    })
 
-    expect(u.setError).toHaveBeenCalledWith('boom')
     expect(u.setNotice).toHaveBeenLastCalledWith(null)
     expect(u.setBusy).not.toHaveBeenCalled()
     expect(u.setCompacting).toHaveBeenLastCalledWith(false)
+  })
+
+  it('does not start another compaction while one is already running', () => {
+    const u = ui()
+    const controller = { compactSessionAsync: vi.fn() }
+
+    expect(maybeStartAutoCompaction({
+      cwd: '/tmp/project',
+      config: config(1),
+      messages,
+      controller,
+      compacting: true,
+      ui: u,
+    })).toBe(false)
+
+    expect(controller.compactSessionAsync).not.toHaveBeenCalled()
+    expect(u.setCompacting).not.toHaveBeenCalled()
+  })
+
+  it('does not immediately compact an already compacted tail-sized session again', () => {
+    const u = ui()
+    const compacted: PersistedMessage[] = [
+      { role: 'user', content: '## [会话压缩摘要]\n\nsummary' },
+      { role: 'assistant', content: 'recent 1' },
+      { role: 'user', content: 'recent 2' },
+      { role: 'assistant', content: 'recent 3' },
+    ]
+
+    expect(maybeStartAutoCompaction({
+      cwd: '/tmp/project',
+      config: config(1),
+      messages: compacted,
+      controller: { compactSessionAsync: vi.fn() },
+      ui: u,
+    })).toBe(false)
+
+    expect(u.setCompacting).not.toHaveBeenCalled()
+  })
+
+  it('merges a compacted prefix with messages added while compaction was running', () => {
+    const originalBase: PersistedMessage[] = [
+      { role: 'user', content: 'old 1' },
+      { role: 'assistant', content: 'old 2' },
+    ]
+    const compactedBase: PersistedMessage[] = [
+      { role: 'user', content: '## [会话压缩摘要]\n\nold summary' },
+    ]
+    const latest: PersistedMessage[] = [
+      ...originalBase,
+      { role: 'user', content: 'new question' },
+      { role: 'assistant', content: 'new answer' },
+    ]
+
+    expect(mergeCompactedPrefixWithLatest(compactedBase, originalBase, latest)).toEqual([
+      ...compactedBase,
+      { role: 'user', content: 'new question' },
+      { role: 'assistant', content: 'new answer' },
+    ])
   })
 })

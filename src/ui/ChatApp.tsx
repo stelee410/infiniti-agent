@@ -82,7 +82,7 @@ import {
   handleSpeakSlashCommand,
   handleUndoSlashCommand,
 } from './chatCommandHandlers.js'
-import { maybeStartAutoCompaction } from './chatAutoCompaction.js'
+import { maybeStartAutoCompaction, mergeCompactedPrefixWithLatest } from './chatAutoCompaction.js'
 
 /**
  * Live 下 TTS 用的「干净正文」：与流式 onTextDelta 一致，先 `processAssistantStreamChunk` 得 `displayText`
@@ -265,6 +265,12 @@ export function ChatApp({
   const liveUiInteractionCooldownRef = useRef(0)
   const [notice, setNotice] = useState<string | null>(null)
   const [compacting, setCompacting] = useState(false)
+  const compactingRef = useRef(false)
+  compactingRef.current = compacting
+  const lastAutoCompactionRef = useRef<{
+    compactedBase: PersistedMessage[]
+    originalBase: PersistedMessage[]
+  } | null>(null)
   const busySubtextRef = useRef<string | null>(null)
   const thinkingTextRef = useRef('')
   const lastStreamDeltaAtRef = useRef<number | null>(null)
@@ -851,11 +857,16 @@ export function ChatApp({
         config,
         messages: baseMessages,
         controller: subconsciousRef.current,
+        compacting: compactingRef.current,
+        onCompactedBase: (compactedBase, originalBase) => {
+          lastAutoCompactionRef.current = { compactedBase, originalBase }
+        },
         ui: {
           setCompacting,
           setNotice,
           setError,
           setBusy,
+          getMessages: () => messagesRef.current,
           setMessages,
           clearNoticeLater: (ms) => setTimeout(() => setNotice(null), ms),
         },
@@ -961,7 +972,16 @@ export function ChatApp({
             void subconsciousRef.current?.observeAssistantOutput(lastMsg.content)
           }
         }
-        const displayOut = stripTransientVision(out)
+        const displayOutRaw = stripTransientVision(out)
+        const compactedForThisTurn = lastAutoCompactionRef.current
+        const displayOut = compactedForThisTurn
+          ? mergeCompactedPrefixWithLatest(
+              compactedForThisTurn.compactedBase,
+              compactedForThisTurn.originalBase,
+              displayOutRaw,
+            )
+          : displayOutRaw
+        if (compactedForThisTurn) lastAutoCompactionRef.current = null
         setMessages(displayOut)
         await saveSession(cwd, displayOut)
       } catch (e: unknown) {
@@ -1139,12 +1159,12 @@ export function ChatApp({
     if (!sessionReady) {
       label = '加载中…'
       variant = 'loading'
-    } else if (compacting) {
-      label = '压缩中…'
-      variant = 'busy'
     } else if (busy) {
       label = '处理中…'
       variant = 'busy'
+    } else if (compacting) {
+      label = '就绪 · 后台压缩'
+      variant = 'warn'
     } else if (!liveUiConnected) {
       label = '就绪 · 渲染未连'
       variant = 'warn'
