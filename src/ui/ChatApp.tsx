@@ -35,7 +35,10 @@ import type { LiveUiFileAttachment, LiveUiStatusVariant, LiveUiVisionAttachment 
 import { enqueueSnapPhotoJob } from '../snap/asyncSnap.js'
 import { enqueueSeedanceVideoJob, seedanceReferenceImagesFromLiveInputs } from '../video/asyncVideo.js'
 import { enqueueAvatarGenJob } from '../avatar/asyncAvatarGen.js'
-import { avatarGenReferenceImagesFromLiveInputs } from '../avatar/real2dAvatarGen.js'
+import {
+  avatarGenReferenceImagesFromLiveInputs,
+  avatarGenReferenceImagesFromMessages,
+} from '../avatar/real2dAvatarGen.js'
 import { listInboxMessages, markInboxMessageRead, type InboxMessage } from '../inbox/store.js'
 import {
   advanceScheduleTask,
@@ -801,7 +804,10 @@ export function ChatApp({
             getFileAttachments: () => liveUi?.consumePendingFileAttachments() ?? [],
             clearVisionAttachment: () => liveUi?.clearVisionAttachment(),
             clearFileAttachments: () => liveUi?.clearFileAttachments(),
-            avatarReferences: avatarGenReferenceImagesFromLiveInputs,
+            avatarReferences: (queuedVision, queuedAttachments) => {
+              const liveRefs = avatarGenReferenceImagesFromLiveInputs(queuedVision, queuedAttachments)
+              return liveRefs.length ? liveRefs : avatarGenReferenceImagesFromMessages(messagesRef.current)
+            },
             videoReferences: seedanceReferenceImagesFromLiveInputs,
             enqueueAvatar: (queuedPrompt, referenceImages) =>
               enqueueAvatarGenJob(cwd, config, queuedPrompt, referenceImages),
