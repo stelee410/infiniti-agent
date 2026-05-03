@@ -1,8 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { basename, isAbsolute, relative, resolve, join } from 'node:path'
 import { copyFile } from 'node:fs/promises'
-import { Box, Text, useApp, useInput } from 'ink'
-import TextInput from 'ink-text-input'
+import { Box, Text, useApp, useInput, useWindowSize } from 'ink'
 import chokidar from 'chokidar'
 import type { InfinitiConfig } from '../config/types.js'
 import { loadSkillsForCwd, skillsToSystemBlock } from '../skills/loader.js'
@@ -36,7 +35,10 @@ import type { LiveUiFileAttachment, LiveUiStatusVariant, LiveUiVisionAttachment 
 import { enqueueSnapPhotoJob } from '../snap/asyncSnap.js'
 import { enqueueSeedanceVideoJob, seedanceReferenceImagesFromLiveInputs } from '../video/asyncVideo.js'
 import { enqueueAvatarGenJob } from '../avatar/asyncAvatarGen.js'
-import { avatarGenReferenceImagesFromLiveInputs } from '../avatar/real2dAvatarGen.js'
+import {
+  avatarGenReferenceImagesFromLiveInputs,
+  avatarGenReferenceImagesFromMessages,
+} from '../avatar/real2dAvatarGen.js'
 import { listInboxMessages, markInboxMessageRead, type InboxMessage } from '../inbox/store.js'
 import {
   advanceScheduleTask,
@@ -82,7 +84,8 @@ import {
   handleSpeakSlashCommand,
   handleUndoSlashCommand,
 } from './chatCommandHandlers.js'
-import { maybeStartAutoCompaction } from './chatAutoCompaction.js'
+import { maybeStartAutoCompaction, mergeCompactedPrefixWithLatest } from './chatAutoCompaction.js'
+import { StableTextInput } from './StableTextInput.js'
 
 /**
  * Live 下 TTS 用的「干净正文」：与流式 onTextDelta 一致，先 `processAssistantStreamChunk` 得 `displayText`
@@ -237,7 +240,7 @@ export function ChatApp({
   onConfigReload,
 }: Props): React.ReactElement {
   const { exit } = useApp()
-  const rows = process.stdout.rows ?? 24
+  const { columns, rows } = useWindowSize()
   const [config, setConfig] = useState(initialConfig)
   const [cwd, setCwd] = useState(process.cwd())
   const [messages, setMessages] = useState<PersistedMessage[]>([])
@@ -265,6 +268,12 @@ export function ChatApp({
   const liveUiInteractionCooldownRef = useRef(0)
   const [notice, setNotice] = useState<string | null>(null)
   const [compacting, setCompacting] = useState(false)
+  const compactingRef = useRef(false)
+  compactingRef.current = compacting
+  const lastAutoCompactionRef = useRef<{
+    compactedBase: PersistedMessage[]
+    originalBase: PersistedMessage[]
+  } | null>(null)
   const busySubtextRef = useRef<string | null>(null)
   const thinkingTextRef = useRef('')
   const lastStreamDeltaAtRef = useRef<number | null>(null)
@@ -291,11 +300,7 @@ export function ChatApp({
     [cwd, config.liveUi, promptEpoch],
   )
 
-  const visibleStreamText = useMemo(() => {
-    if (!streamText) return null
-    const lastNl = streamText.lastIndexOf('\n')
-    return lastNl >= 0 ? streamText.substring(0, lastNl + 1) : null
-  }, [streamText])
+  const visibleStreamText = streamText || null
 
   const slashMenuOpen =
     sessionReady &&
@@ -799,7 +804,10 @@ export function ChatApp({
             getFileAttachments: () => liveUi?.consumePendingFileAttachments() ?? [],
             clearVisionAttachment: () => liveUi?.clearVisionAttachment(),
             clearFileAttachments: () => liveUi?.clearFileAttachments(),
-            avatarReferences: avatarGenReferenceImagesFromLiveInputs,
+            avatarReferences: (queuedVision, queuedAttachments) => {
+              const liveRefs = avatarGenReferenceImagesFromLiveInputs(queuedVision, queuedAttachments)
+              return liveRefs.length ? liveRefs : avatarGenReferenceImagesFromMessages(messagesRef.current)
+            },
             videoReferences: seedanceReferenceImagesFromLiveInputs,
             enqueueAvatar: (queuedPrompt, referenceImages) =>
               enqueueAvatarGenJob(cwd, config, queuedPrompt, referenceImages),
@@ -851,11 +859,16 @@ export function ChatApp({
         config,
         messages: baseMessages,
         controller: subconsciousRef.current,
+        compacting: compactingRef.current,
+        onCompactedBase: (compactedBase, originalBase) => {
+          lastAutoCompactionRef.current = { compactedBase, originalBase }
+        },
         ui: {
           setCompacting,
           setNotice,
           setError,
           setBusy,
+          getMessages: () => messagesRef.current,
           setMessages,
           clearNoticeLater: (ms) => setTimeout(() => setNotice(null), ms),
         },
@@ -961,7 +974,16 @@ export function ChatApp({
             void subconsciousRef.current?.observeAssistantOutput(lastMsg.content)
           }
         }
-        const displayOut = stripTransientVision(out)
+        const displayOutRaw = stripTransientVision(out)
+        const compactedForThisTurn = lastAutoCompactionRef.current
+        const displayOut = compactedForThisTurn
+          ? mergeCompactedPrefixWithLatest(
+              compactedForThisTurn.compactedBase,
+              compactedForThisTurn.originalBase,
+              displayOutRaw,
+            )
+          : displayOutRaw
+        if (compactedForThisTurn) lastAutoCompactionRef.current = null
         setMessages(displayOut)
         await saveSession(cwd, displayOut)
       } catch (e: unknown) {
@@ -1139,12 +1161,12 @@ export function ChatApp({
     if (!sessionReady) {
       label = '加载中…'
       variant = 'loading'
-    } else if (compacting) {
-      label = '压缩中…'
-      variant = 'busy'
     } else if (busy) {
       label = '处理中…'
       variant = 'busy'
+    } else if (compacting) {
+      label = '就绪 · 后台压缩'
+      variant = 'warn'
     } else if (!liveUiConnected) {
       label = '就绪 · 渲染未连'
       variant = 'warn'
@@ -1234,7 +1256,7 @@ export function ChatApp({
         {visible.map((m, i) => (
           <MessageLine key={`${i}-${m.role}`} m={m} />
         ))}
-        {thinkingSnap && !visibleStreamText ? (
+        {thinkingSnap ? (
           <Box
             flexDirection="column"
             marginTop={1}
@@ -1247,9 +1269,7 @@ export function ChatApp({
               💭 Thinking…
             </Text>
             <Text dimColor wrap="wrap">
-              {thinkingSnap.length > 600
-                ? `…${thinkingSnap.slice(-600)}`
-                : thinkingSnap}
+              {thinkingSnap}
             </Text>
           </Box>
         ) : null}
@@ -1265,20 +1285,18 @@ export function ChatApp({
             <Text bold color="magenta">
               Assistant · 流式
             </Text>
-            <Text dimColor wrap="wrap">
-              {visibleStreamText}
-            </Text>
+            <MarkdownText text={visibleStreamText} />
           </Box>
         ) : null}
       </Box>
 
       {!sessionReady ? (
-        <Box marginTop={1}>
+        <Box marginTop={1} flexShrink={0}>
           <Text dimColor>正在加载会话…</Text>
         </Box>
       ) : null}
       {busy ? (
-        <Box marginTop={1}>
+        <Box marginTop={1} flexShrink={0}>
           <Text color="yellow">
             {compacting
               ? '◆ 正在压缩会话历史（非流式）…'
@@ -1294,24 +1312,31 @@ export function ChatApp({
         />
       ) : null}
 
-      <Box marginTop={1} borderStyle="single" borderColor="cyan" paddingX={1}>
+      <Box
+        marginTop={1}
+        borderStyle="single"
+        borderColor="cyan"
+        paddingX={1}
+        height={3}
+        flexShrink={0}
+        overflow="hidden"
+      >
         {liveUi ? (
           <Text dimColor wrap="wrap">
             输入已移至桌面 Live 窗口底部；此处不再接收键盘输入（仍显示状态与历史）。斜杠命令在窗口输入框输入 / 可调出补全（Tab 写入 · ↑↓ 选择），例如 /help /clear。
           </Text>
         ) : (
-          <>
-            <Text color="cyan" bold>{'› '}</Text>
-            <TextInput
-              value={input}
-              focus={!busy && sessionReady}
-              onChange={setInput}
-              onSubmit={(v) => {
-                void handleSubmit(v)
-              }}
-              placeholder="输入…"
-            />
-          </>
+          <StableTextInput
+            value={input}
+            focus={!busy && sessionReady}
+            onChange={setInput}
+            onSubmit={(v) => {
+              void handleSubmit(v)
+            }}
+            placeholder="输入…"
+            columns={Math.max(1, columns - 6)}
+            nativeCursorY={Math.max(0, rows - 1)}
+          />
         )}
       </Box>
     </Box>
@@ -1417,7 +1442,7 @@ const MessageLine = React.memo(function MessageLine({ m }: { m: PersistedMessage
           Assistant
         </Text>
         {(m.content ?? '').trim() ? (
-          <Text wrap="wrap">{(m.content ?? '').trim()}</Text>
+          <MarkdownText text={(m.content ?? '').trim()} />
         ) : null}
         {toolHint ? <Text dimColor>{toolHint}</Text> : null}
       </Box>
@@ -1442,3 +1467,94 @@ const MessageLine = React.memo(function MessageLine({ m }: { m: PersistedMessage
     </Box>
   )
 })
+
+function MarkdownText({ text }: { text: string }): React.ReactElement {
+  return <Text wrap="wrap">{formatMarkdownForTui(text)}</Text>
+}
+
+const ANSI_BOLD = '\x1b[1m'
+const ANSI_BOLD_OFF = '\x1b[22m'
+const ANSI_DIM = '\x1b[2m'
+const ANSI_DIM_OFF = '\x1b[22m'
+const ANSI_CYAN = '\x1b[36m'
+const ANSI_MAGENTA = '\x1b[35m'
+const ANSI_UNDERLINE = '\x1b[4m'
+const ANSI_UNDERLINE_OFF = '\x1b[24m'
+const ANSI_INVERSE = '\x1b[7m'
+const ANSI_INVERSE_OFF = '\x1b[27m'
+
+function formatMarkdownForTui(markdown: string): string {
+  const lines = markdown.replace(/\r\n/g, '\n').split('\n')
+  const out: string[] = []
+  let inFence = false
+  let fenceLanguage = ''
+
+  for (const line of lines) {
+    const fence = line.match(/^```+\s*([\w.+-]+)?\s*$/)
+    if (fence) {
+      inFence = !inFence
+      fenceLanguage = inFence ? fence[1] ?? '' : ''
+      out.push(
+        inFence
+          ? `${ANSI_DIM}┌─ ${fenceLanguage || 'code'}${ANSI_DIM_OFF}`
+          : `${ANSI_DIM}└─${ANSI_DIM_OFF}`,
+      )
+      continue
+    }
+
+    if (inFence) {
+      out.push(`${ANSI_DIM}│ ${line}${ANSI_DIM_OFF}`)
+      continue
+    }
+
+    const heading = line.match(/^(#{1,6})\s+(.+)$/)
+    if (heading) {
+      const level = heading[1]!.length
+      const marker = level <= 2 ? '◆' : '•'
+      out.push(`${ANSI_BOLD}${ANSI_CYAN}${marker} ${formatInlineMarkdown(heading[2]!)}${ANSI_DIM_OFF}${ANSI_BOLD_OFF}`)
+      continue
+    }
+
+    if (/^\s*---+\s*$/.test(line)) {
+      out.push(`${ANSI_DIM}${'─'.repeat(48)}${ANSI_DIM_OFF}`)
+      continue
+    }
+
+    const quote = line.match(/^>\s?(.*)$/)
+    if (quote) {
+      out.push(`${ANSI_DIM}│ ${formatInlineMarkdown(quote[1] ?? '')}${ANSI_DIM_OFF}`)
+      continue
+    }
+
+    const unordered = line.match(/^(\s*)[-*+]\s+(.+)$/)
+    if (unordered) {
+      out.push(`${unordered[1]}• ${formatInlineMarkdown(unordered[2]!)}`)
+      continue
+    }
+
+    const ordered = line.match(/^(\s*)(\d+)\.\s+(.+)$/)
+    if (ordered) {
+      out.push(`${ordered[1]}${ordered[2]}. ${formatInlineMarkdown(ordered[3]!)}`)
+      continue
+    }
+
+    out.push(formatInlineMarkdown(line))
+  }
+
+  return out.join('\n')
+}
+
+function formatInlineMarkdown(text: string): string {
+  return text
+    .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_match, alt: string, url: string) =>
+      `${ANSI_MAGENTA}[图片: ${alt || 'image'}]${ANSI_DIM} ${url}${ANSI_DIM_OFF}`,
+    )
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, label: string, url: string) =>
+      `${ANSI_UNDERLINE}${label}${ANSI_UNDERLINE_OFF}${ANSI_DIM} (${url})${ANSI_DIM_OFF}`,
+    )
+    .replace(/`([^`\n]+)`/g, (_match, code: string) =>
+      `${ANSI_INVERSE} ${code} ${ANSI_INVERSE_OFF}`,
+    )
+    .replace(/\*\*([^*\n]+)\*\*/g, `${ANSI_BOLD}$1${ANSI_BOLD_OFF}`)
+    .replace(/__([^_\n]+)__/g, `${ANSI_BOLD}$1${ANSI_BOLD_OFF}`)
+}

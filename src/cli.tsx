@@ -8,7 +8,6 @@ import { configExistsSync, loadConfig, ensureLocalAgentDir } from './config/io.j
 import { InitWizard } from './ui/InitWizard.js'
 import { ChatWithSplash } from './ui/ChatWithSplash.js'
 import { McpManager } from './mcp/manager.js'
-import { enableSyncOutput, disableSyncOutput } from './ui/terminalSync.js'
 import { installSkillFromGit, installSkillFromPath } from './skills/install.js'
 import { loadSkillsForCwd } from './skills/loader.js'
 import {
@@ -232,7 +231,6 @@ async function runChatTui(
   }
   const mcp = new McpManager()
   const liveUi = opts.liveUi ?? null
-  enableSyncOutput()
   try {
     if (liveUi) {
       if (process.env.INFINITI_AGENT_DEBUG === '1') {
@@ -265,11 +263,10 @@ async function runChatTui(
         liveUi={liveUi}
         onConfigReload={opts.onConfigReload}
       />,
-      { maxFps: 15, incrementalRendering: true },
+      { maxFps: 30, incrementalRendering: false },
     )
     await waitUntilExit()
   } finally {
-    disableSyncOutput()
     if (liveUi) await liveUi.dispose()
     await mcp.stop()
   }

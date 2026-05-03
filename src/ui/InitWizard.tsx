@@ -1,10 +1,10 @@
 import React, { useState } from 'react'
-import { Box, Text, useApp } from 'ink'
+import { Box, Text, useApp, useWindowSize } from 'ink'
 import SelectInput from 'ink-select-input'
-import TextInput from 'ink-text-input'
 import { PROVIDER_DEFAULTS } from '../config/defaults.js'
 import type { LlmProvider, LlmProfile } from '../config/types.js'
 import { saveConfig } from '../config/io.js'
+import { StableTextInput } from './StableTextInput.js'
 
 type Step =
   | 'profileName'
@@ -30,6 +30,7 @@ const yesNoItems = [
 
 export function InitWizard(): React.ReactElement {
   const { exit } = useApp()
+  const { columns } = useWindowSize()
 
   const [profiles, setProfiles] = useState<Record<string, LlmProfile>>({})
   const [defaultProfile, setDefaultProfile] = useState<string>('main')
@@ -99,8 +100,7 @@ export function InitWizard(): React.ReactElement {
         <Text dimColor>{hint}</Text>
         {err ? <Text color="red">{err}</Text> : null}
         <Box>
-          <Text>Profile 名称 &gt; </Text>
-          <TextInput
+          <StableTextInput
             value={currentName}
             placeholder={placeholder}
             onChange={setCurrentName}
@@ -118,6 +118,8 @@ export function InitWizard(): React.ReactElement {
               setStep('provider')
               setErr(null)
             }}
+            columns={columns}
+            prefix="Profile 名称 > "
           />
         </Box>
       </Box>
@@ -150,8 +152,7 @@ export function InitWizard(): React.ReactElement {
         <Text dimColor>默认: {PROVIDER_DEFAULTS[provider].baseUrl}</Text>
         {err ? <Text color="red">{err}</Text> : null}
         <Box>
-          <Text>&gt; </Text>
-          <TextInput
+          <StableTextInput
             value={baseUrl}
             onChange={setBaseUrl}
             onSubmit={(v) => {
@@ -160,6 +161,8 @@ export function InitWizard(): React.ReactElement {
               setStep('model')
               setErr(null)
             }}
+            columns={columns}
+            prefix="> "
           />
         </Box>
         <Text dimColor>回车确认；留空则使用上方默认</Text>
@@ -174,8 +177,7 @@ export function InitWizard(): React.ReactElement {
         <Text dimColor>默认: {PROVIDER_DEFAULTS[provider].model}</Text>
         {err ? <Text color="red">{err}</Text> : null}
         <Box>
-          <Text>&gt; </Text>
-          <TextInput
+          <StableTextInput
             value={model}
             onChange={setModel}
             onSubmit={(v) => {
@@ -184,6 +186,8 @@ export function InitWizard(): React.ReactElement {
               setStep('apiKey')
               setErr(null)
             }}
+            columns={columns}
+            prefix="> "
           />
         </Box>
       </Box>
@@ -197,8 +201,7 @@ export function InitWizard(): React.ReactElement {
         <Text dimColor>将写入 ~/.infiniti-agent/config.json（文件权限仅本人可读）</Text>
         {err ? <Text color="red">{err}</Text> : null}
         <Box>
-          <Text>&gt; </Text>
-          <TextInput
+          <StableTextInput
             value={apiKey}
             onChange={setApiKey}
             onSubmit={(v) => {
@@ -212,6 +215,8 @@ export function InitWizard(): React.ReactElement {
               setStep('askMore')
               setErr(null)
             }}
+            columns={columns}
+            prefix="> "
           />
         </Box>
       </Box>

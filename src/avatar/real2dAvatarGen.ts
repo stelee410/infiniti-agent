@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto'
 import sharp from 'sharp'
 import type { InfinitiConfig } from '../config/types.js'
 import type { LiveUiFileAttachment, LiveUiVisionAttachment } from '../liveui/protocol.js'
+import type { PersistedMessage } from '../llm/persisted.js'
 import { localInboxDir } from '../paths.js'
 import { transparentizeStudioBackgroundPng } from './transparentizePngBackground.js'
 import { openRouterGenerateImageBuffer } from './openRouterImageGen.js'
@@ -104,6 +105,37 @@ export function avatarGenReferenceImagesFromLiveInputs(
   return out.slice(0, 4)
 }
 
+export function avatarGenReferenceImagesFromMessages(
+  messages: PersistedMessage[],
+): AvatarGenReferenceImage[] {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]!
+    if (m.role !== 'user') continue
+    const out: AvatarGenReferenceImage[] = []
+    if (m.vision) {
+      out.push({
+        mediaType: m.vision.mediaType,
+        base64: m.vision.imageBase64,
+        label: 'camera snapshot',
+      })
+    }
+    for (const a of m.attachments ?? []) {
+      if (
+        a.kind === 'image' &&
+        (a.mediaType === 'image/jpeg' || a.mediaType === 'image/png' || a.mediaType === 'image/webp')
+      ) {
+        out.push({
+          mediaType: a.mediaType,
+          base64: a.base64,
+          label: a.name,
+        })
+      }
+    }
+    if (out.length) return out.slice(0, 4)
+  }
+  return []
+}
+
 function backgroundPrompt(auth: ResolvedImageProfile): string {
   return auth.transparentBackground
     ? [
@@ -142,21 +174,34 @@ function buildPrompt(userPrompt: string, target: typeof TARGETS[number], hasRefe
   ].filter(Boolean).join('\n')
 }
 
-async function imageHasAlpha(buf: Buffer): Promise<boolean> {
+export async function imageHasTransparentPixels(buf: Buffer): Promise<boolean> {
   try {
-    return Boolean((await sharp(buf).metadata()).hasAlpha)
+    const { data, info } = await sharp(buf).ensureAlpha().raw().toBuffer({ resolveWithObject: true })
+    if (info.channels !== 4) return false
+    for (let i = 3; i < data.length; i += 4) {
+      if (data[i]! < 250) return true
+    }
+    return false
   } catch {
     return false
   }
 }
 
+function bgToleranceFromEnv(): number | undefined {
+  const s = process.env.INFINITI_AVATAR_BG_TOLERANCE?.trim()
+  if (!s) return undefined
+  const n = Number(s)
+  return Number.isFinite(n) ? n : undefined
+}
+
 async function ensureTransparentBackground(cwd: string, name: string, buf: Buffer): Promise<{ buffer: Buffer; hasAlpha: boolean; transparentized: boolean }> {
-  const hasAlpha = await imageHasAlpha(buf)
-  if (hasAlpha) return { buffer: buf, hasAlpha, transparentized: false }
+  const alreadyTransparent = await imageHasTransparentPixels(buf)
+  if (alreadyTransparent) return { buffer: buf, hasAlpha: true, transparentized: false }
   try {
-    const out = await transparentizeStudioBackgroundPng(buf)
-    const outHasAlpha = await imageHasAlpha(out)
-    await appendAvatarGenLog(cwd, `transparentized ${name} alpha=${outHasAlpha}`)
+    const tolerance = bgToleranceFromEnv()
+    const out = await transparentizeStudioBackgroundPng(buf, tolerance)
+    const outHasAlpha = await imageHasTransparentPixels(out)
+    await appendAvatarGenLog(cwd, `transparentized ${name} alpha=${outHasAlpha} tolerance=${tolerance ?? 'default'}`)
     return { buffer: out, hasAlpha: outHasAlpha, transparentized: true }
   } catch (e) {
     await appendAvatarGenLog(cwd, `transparentize_failed ${name} error=${(e as Error).message}`)
