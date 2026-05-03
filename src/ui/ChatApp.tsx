@@ -299,7 +299,7 @@ export function ChatApp({
 
   const visibleStreamText = useMemo(() => {
     if (!streamText) return null
-    return streamText.length > 1400 ? `…${streamText.slice(-1400)}` : streamText
+    return streamText
   }, [streamText])
 
   const slashMenuOpen =
@@ -1174,7 +1174,7 @@ export function ChatApp({
     liveUi.sendStatusPill(label, variant)
   }, [liveUi, sessionReady, compacting, busy, liveUiConnected])
 
-  const historyLineBudget = Math.max(4, rows - 18)
+  const historyLineBudget = Math.max(8, rows - 12)
   const visible = useMemo(
     () => selectVisibleHistory(messages, historyLineBudget, Math.max(20, columns - 8)),
     [columns, historyLineBudget, messages],
@@ -1486,10 +1486,13 @@ function selectVisibleHistory(
   lineBudget: number,
   width: number,
 ): VisibleHistoryMessage[] {
+  const pinnedStart = findLatestTurnStart(messages)
+  const pinned = messages.slice(pinnedStart).map(normalizeHistoryMessage)
+  const pinnedHeight = pinned.reduce((sum, message) => sum + estimateMessageHeight(message, width), 0)
   const selected: VisibleHistoryMessage[] = []
-  let remaining = lineBudget
+  let remaining = Math.max(0, lineBudget - pinnedHeight)
 
-  for (let i = messages.length - 1; i >= 0 && remaining > 0; i--) {
+  for (let i = pinnedStart - 1; i >= 0 && remaining > 0; i--) {
     const normalized = normalizeHistoryMessage(messages[i]!)
     const height = estimateMessageHeight(normalized, width)
     if (height <= remaining) {
@@ -1498,17 +1501,30 @@ function selectVisibleHistory(
       continue
     }
 
-    const reserveForPrevious = selected.length === 0 && i > 0 && remaining >= 10 ? 5 : 0
-    const cropped = cropMessageToFit(normalized, remaining - reserveForPrevious, width)
+    const cropped = normalized.role === 'tool'
+      ? cropMessageToFit(normalized, remaining, width)
+      : null
     if (cropped) {
       selected.unshift(cropped)
-      remaining -= estimateMessageHeight(cropped, width)
     }
-    if (reserveForPrevious > 0) continue
     break
   }
 
-  return selected
+  return [...selected, ...pinned]
+}
+
+function findLatestTurnStart(messages: PersistedMessage[]): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i]!
+    if (message.role === 'user') return i
+    if (message.role === 'assistant') {
+      for (let j = i - 1; j >= 0; j--) {
+        if (messages[j]!.role === 'user') return j
+      }
+      return i
+    }
+  }
+  return Math.max(0, messages.length - 1)
 }
 
 function normalizeHistoryMessage(message: PersistedMessage): VisibleHistoryMessage {
