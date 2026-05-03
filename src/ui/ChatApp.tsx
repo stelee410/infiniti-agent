@@ -297,10 +297,7 @@ export function ChatApp({
     [cwd, config.liveUi, promptEpoch],
   )
 
-  const visibleStreamText = useMemo(() => {
-    if (!streamText) return null
-    return streamText
-  }, [streamText])
+  const visibleStreamText = streamText || null
 
   const slashMenuOpen =
     sessionReady &&
@@ -1174,11 +1171,8 @@ export function ChatApp({
     liveUi.sendStatusPill(label, variant)
   }, [liveUi, sessionReady, compacting, busy, liveUiConnected])
 
-  const historyLineBudget = Math.max(8, rows - 12)
-  const visible = useMemo(
-    () => selectVisibleHistory(messages, historyLineBudget, Math.max(20, columns - 8)),
-    [columns, historyLineBudget, messages],
-  )
+  const visibleCount = Math.max(4, rows - 14)
+  const visible = messages.slice(-visibleCount)
   const permLabel = dangerouslySkipPermissions
     ? ' · ⚠ 跳过安全评估'
     : ''
@@ -1191,7 +1185,7 @@ export function ChatApp({
   const meta = `${config.llm.provider} · ${config.llm.model}${thinkLabel}${profileLabel}${permLabel}`
 
   return (
-    <Box flexDirection="column" width="100%" height={rows} overflow="hidden" paddingX={1}>
+    <Box flexDirection="column" width="100%" paddingX={1}>
       <Box
         borderStyle="round"
         borderColor="cyan"
@@ -1199,7 +1193,6 @@ export function ChatApp({
         paddingY={0}
         marginBottom={1}
         flexDirection="column"
-        flexShrink={0}
       >
         <Box flexDirection="row" justifyContent="space-between">
           <Text bold color="cyan">
@@ -1252,16 +1245,12 @@ export function ChatApp({
         paddingY={1}
         marginTop={1}
         flexDirection="column"
-        flexGrow={1}
-        flexShrink={1}
-        overflow="hidden"
         minHeight={6}
-        justifyContent="flex-end"
       >
         {visible.map((m, i) => (
           <MessageLine key={`${i}-${m.role}`} m={m} />
         ))}
-        {thinkingSnap && !visibleStreamText ? (
+        {thinkingSnap ? (
           <Box
             flexDirection="column"
             marginTop={1}
@@ -1274,9 +1263,7 @@ export function ChatApp({
               💭 Thinking…
             </Text>
             <Text dimColor wrap="wrap">
-              {thinkingSnap.length > 600
-                ? `…${thinkingSnap.slice(-600)}`
-                : thinkingSnap}
+              {thinkingSnap}
             </Text>
           </Box>
         ) : null}
@@ -1418,7 +1405,7 @@ const SlashCompletePanel = React.memo(function SlashCompletePanel({
   )
 })
 
-const MessageLine = React.memo(function MessageLine({ m }: { m: VisibleHistoryMessage }): React.ReactElement {
+const MessageLine = React.memo(function MessageLine({ m }: { m: PersistedMessage }): React.ReactElement {
   if (m.role === 'user') {
     return (
       <Box
@@ -1476,155 +1463,3 @@ const MessageLine = React.memo(function MessageLine({ m }: { m: VisibleHistoryMe
     </Box>
   )
 })
-
-type VisibleHistoryMessage = PersistedMessage & {
-  content: string
-}
-
-function selectVisibleHistory(
-  messages: PersistedMessage[],
-  lineBudget: number,
-  width: number,
-): VisibleHistoryMessage[] {
-  const pinnedStart = findLatestTurnStart(messages)
-  const pinned = messages.slice(pinnedStart).map(normalizeHistoryMessage)
-  const pinnedHeight = pinned.reduce((sum, message) => sum + estimateMessageHeight(message, width), 0)
-  const selected: VisibleHistoryMessage[] = []
-  let remaining = Math.max(0, lineBudget - pinnedHeight)
-
-  for (let i = pinnedStart - 1; i >= 0 && remaining > 0; i--) {
-    const normalized = normalizeHistoryMessage(messages[i]!)
-    const height = estimateMessageHeight(normalized, width)
-    if (height <= remaining) {
-      selected.unshift(normalized)
-      remaining -= height
-      continue
-    }
-
-    const cropped = normalized.role === 'tool'
-      ? cropMessageToFit(normalized, remaining, width)
-      : null
-    if (cropped) {
-      selected.unshift(cropped)
-    }
-    break
-  }
-
-  return [...selected, ...pinned]
-}
-
-function findLatestTurnStart(messages: PersistedMessage[]): number {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const message = messages[i]!
-    if (message.role === 'user') return i
-    if (message.role === 'assistant') {
-      for (let j = i - 1; j >= 0; j--) {
-        if (messages[j]!.role === 'user') return j
-      }
-      return i
-    }
-  }
-  return Math.max(0, messages.length - 1)
-}
-
-function normalizeHistoryMessage(message: PersistedMessage): VisibleHistoryMessage {
-  if (message.role === 'assistant') {
-    return {
-      ...message,
-      content: (message.content ?? '').trim(),
-    }
-  }
-  if (message.role === 'tool') {
-    return {
-      ...message,
-      content: message.content.length > 1200 ? `${message.content.slice(0, 1200)}…` : message.content,
-    }
-  }
-  return message
-}
-
-function estimateMessageHeight(message: VisibleHistoryMessage, width: number): number {
-  const contentLines = wrappedLineCount(message.content, width)
-  const toolHintLines =
-    message.role === 'assistant' && message.toolCalls?.length
-      ? 1
-      : 0
-  return contentLines + toolHintLines + 4
-}
-
-function cropMessageToFit(
-  message: VisibleHistoryMessage,
-  lineBudget: number,
-  width: number,
-): VisibleHistoryMessage | null {
-  const toolHintLines =
-    message.role === 'assistant' && message.toolCalls?.length
-      ? 1
-      : 0
-  const contentBudget = lineBudget - toolHintLines - 4
-  if (contentBudget <= 0) return null
-  return {
-    ...message,
-    content: cropTextToLastWrappedLines(message.content, contentBudget, width),
-  }
-}
-
-function cropTextToLastWrappedLines(text: string, maxLines: number, width: number): string {
-  const lines = wrapPlainText(text, width)
-  if (lines.length <= maxLines) return text
-  return `…${lines.slice(-maxLines).join('\n')}`
-}
-
-function wrappedLineCount(text: string, width: number): number {
-  return Math.max(1, wrapPlainText(text, width).length)
-}
-
-function wrapPlainText(text: string, width: number): string[] {
-  const safeWidth = Math.max(1, width)
-  const lines: string[] = []
-  for (const rawLine of (text || '').split('\n')) {
-    let current = ''
-    let currentWidth = 0
-    for (const segment of graphemes(rawLine)) {
-      const segmentWidth = terminalCellWidth(segment)
-      if (current && currentWidth + segmentWidth > safeWidth) {
-        lines.push(current)
-        current = ''
-        currentWidth = 0
-      }
-      current += segment
-      currentWidth += segmentWidth
-    }
-    lines.push(current)
-  }
-  return lines.length ? lines : ['']
-}
-
-function graphemes(text: string): string[] {
-  const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
-  return Array.from(segmenter.segment(text.normalize('NFC')), (s) => s.segment)
-}
-
-function terminalCellWidth(segment: string): number {
-  const cp = segment.codePointAt(0) ?? 0
-  if (cp === 0 || cp < 32 || (cp >= 0x7f && cp < 0xa0)) return 0
-  if (cp >= 0x300 && cp <= 0x36f) return 0
-  return isWideTerminalCodePoint(cp) ? 2 : 1
-}
-
-function isWideTerminalCodePoint(cp: number): boolean {
-  return (
-    cp >= 0x1100 &&
-    (cp <= 0x115f ||
-      cp === 0x2329 ||
-      cp === 0x232a ||
-      (cp >= 0x2e80 && cp <= 0xa4cf && cp !== 0x303f) ||
-      (cp >= 0xac00 && cp <= 0xd7a3) ||
-      (cp >= 0xf900 && cp <= 0xfaff) ||
-      (cp >= 0xfe10 && cp <= 0xfe19) ||
-      (cp >= 0xfe30 && cp <= 0xfe6f) ||
-      (cp >= 0xff00 && cp <= 0xff60) ||
-      (cp >= 0xffe0 && cp <= 0xffe6) ||
-      (cp >= 0x1f300 && cp <= 0x1faff))
-  )
-}
