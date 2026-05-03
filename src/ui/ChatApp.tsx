@@ -1279,9 +1279,7 @@ export function ChatApp({
             <Text bold color="magenta">
               Assistant · 流式
             </Text>
-            <Text dimColor wrap="wrap">
-              {visibleStreamText}
-            </Text>
+            <MarkdownText text={visibleStreamText} />
           </Box>
         ) : null}
       </Box>
@@ -1438,7 +1436,7 @@ const MessageLine = React.memo(function MessageLine({ m }: { m: PersistedMessage
           Assistant
         </Text>
         {(m.content ?? '').trim() ? (
-          <Text wrap="wrap">{(m.content ?? '').trim()}</Text>
+          <MarkdownText text={(m.content ?? '').trim()} />
         ) : null}
         {toolHint ? <Text dimColor>{toolHint}</Text> : null}
       </Box>
@@ -1463,3 +1461,94 @@ const MessageLine = React.memo(function MessageLine({ m }: { m: PersistedMessage
     </Box>
   )
 })
+
+function MarkdownText({ text }: { text: string }): React.ReactElement {
+  return <Text wrap="wrap">{formatMarkdownForTui(text)}</Text>
+}
+
+const ANSI_BOLD = '\x1b[1m'
+const ANSI_BOLD_OFF = '\x1b[22m'
+const ANSI_DIM = '\x1b[2m'
+const ANSI_DIM_OFF = '\x1b[22m'
+const ANSI_CYAN = '\x1b[36m'
+const ANSI_MAGENTA = '\x1b[35m'
+const ANSI_UNDERLINE = '\x1b[4m'
+const ANSI_UNDERLINE_OFF = '\x1b[24m'
+const ANSI_INVERSE = '\x1b[7m'
+const ANSI_INVERSE_OFF = '\x1b[27m'
+
+function formatMarkdownForTui(markdown: string): string {
+  const lines = markdown.replace(/\r\n/g, '\n').split('\n')
+  const out: string[] = []
+  let inFence = false
+  let fenceLanguage = ''
+
+  for (const line of lines) {
+    const fence = line.match(/^```+\s*([\w.+-]+)?\s*$/)
+    if (fence) {
+      inFence = !inFence
+      fenceLanguage = inFence ? fence[1] ?? '' : ''
+      out.push(
+        inFence
+          ? `${ANSI_DIM}┌─ ${fenceLanguage || 'code'}${ANSI_DIM_OFF}`
+          : `${ANSI_DIM}└─${ANSI_DIM_OFF}`,
+      )
+      continue
+    }
+
+    if (inFence) {
+      out.push(`${ANSI_DIM}│ ${line}${ANSI_DIM_OFF}`)
+      continue
+    }
+
+    const heading = line.match(/^(#{1,6})\s+(.+)$/)
+    if (heading) {
+      const level = heading[1]!.length
+      const marker = level <= 2 ? '◆' : '•'
+      out.push(`${ANSI_BOLD}${ANSI_CYAN}${marker} ${formatInlineMarkdown(heading[2]!)}${ANSI_DIM_OFF}${ANSI_BOLD_OFF}`)
+      continue
+    }
+
+    if (/^\s*---+\s*$/.test(line)) {
+      out.push(`${ANSI_DIM}${'─'.repeat(48)}${ANSI_DIM_OFF}`)
+      continue
+    }
+
+    const quote = line.match(/^>\s?(.*)$/)
+    if (quote) {
+      out.push(`${ANSI_DIM}│ ${formatInlineMarkdown(quote[1] ?? '')}${ANSI_DIM_OFF}`)
+      continue
+    }
+
+    const unordered = line.match(/^(\s*)[-*+]\s+(.+)$/)
+    if (unordered) {
+      out.push(`${unordered[1]}• ${formatInlineMarkdown(unordered[2]!)}`)
+      continue
+    }
+
+    const ordered = line.match(/^(\s*)(\d+)\.\s+(.+)$/)
+    if (ordered) {
+      out.push(`${ordered[1]}${ordered[2]}. ${formatInlineMarkdown(ordered[3]!)}`)
+      continue
+    }
+
+    out.push(formatInlineMarkdown(line))
+  }
+
+  return out.join('\n')
+}
+
+function formatInlineMarkdown(text: string): string {
+  return text
+    .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_match, alt: string, url: string) =>
+      `${ANSI_MAGENTA}[图片: ${alt || 'image'}]${ANSI_DIM} ${url}${ANSI_DIM_OFF}`,
+    )
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, label: string, url: string) =>
+      `${ANSI_UNDERLINE}${label}${ANSI_UNDERLINE_OFF}${ANSI_DIM} (${url})${ANSI_DIM_OFF}`,
+    )
+    .replace(/`([^`\n]+)`/g, (_match, code: string) =>
+      `${ANSI_INVERSE} ${code} ${ANSI_INVERSE_OFF}`,
+    )
+    .replace(/\*\*([^*\n]+)\*\*/g, `${ANSI_BOLD}$1${ANSI_BOLD_OFF}`)
+    .replace(/__([^_\n]+)__/g, `${ANSI_BOLD}$1${ANSI_BOLD_OFF}`)
+}
