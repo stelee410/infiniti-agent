@@ -299,8 +299,7 @@ export function ChatApp({
 
   const visibleStreamText = useMemo(() => {
     if (!streamText) return null
-    const lastNl = streamText.lastIndexOf('\n')
-    return lastNl >= 0 ? streamText.substring(0, lastNl + 1) : null
+    return streamText.length > 1400 ? `…${streamText.slice(-1400)}` : streamText
   }, [streamText])
 
   const slashMenuOpen =
@@ -1175,8 +1174,11 @@ export function ChatApp({
     liveUi.sendStatusPill(label, variant)
   }, [liveUi, sessionReady, compacting, busy, liveUiConnected])
 
-  const visibleCount = Math.max(4, rows - 14)
-  const visible = messages.slice(-visibleCount)
+  const historyLineBudget = Math.max(4, rows - 18)
+  const visible = useMemo(
+    () => selectVisibleHistory(messages, historyLineBudget, Math.max(20, columns - 8)),
+    [columns, historyLineBudget, messages],
+  )
   const permLabel = dangerouslySkipPermissions
     ? ' · ⚠ 跳过安全评估'
     : ''
@@ -1416,7 +1418,7 @@ const SlashCompletePanel = React.memo(function SlashCompletePanel({
   )
 })
 
-const MessageLine = React.memo(function MessageLine({ m }: { m: PersistedMessage }): React.ReactElement {
+const MessageLine = React.memo(function MessageLine({ m }: { m: VisibleHistoryMessage }): React.ReactElement {
   if (m.role === 'user') {
     return (
       <Box
@@ -1474,3 +1476,139 @@ const MessageLine = React.memo(function MessageLine({ m }: { m: PersistedMessage
     </Box>
   )
 })
+
+type VisibleHistoryMessage = PersistedMessage & {
+  content: string
+}
+
+function selectVisibleHistory(
+  messages: PersistedMessage[],
+  lineBudget: number,
+  width: number,
+): VisibleHistoryMessage[] {
+  const selected: VisibleHistoryMessage[] = []
+  let remaining = lineBudget
+
+  for (let i = messages.length - 1; i >= 0 && remaining > 0; i--) {
+    const normalized = normalizeHistoryMessage(messages[i]!)
+    const height = estimateMessageHeight(normalized, width)
+    if (height <= remaining) {
+      selected.unshift(normalized)
+      remaining -= height
+      continue
+    }
+
+    const reserveForPrevious = selected.length === 0 && i > 0 && remaining >= 10 ? 5 : 0
+    const cropped = cropMessageToFit(normalized, remaining - reserveForPrevious, width)
+    if (cropped) {
+      selected.unshift(cropped)
+      remaining -= estimateMessageHeight(cropped, width)
+    }
+    if (reserveForPrevious > 0) continue
+    break
+  }
+
+  return selected
+}
+
+function normalizeHistoryMessage(message: PersistedMessage): VisibleHistoryMessage {
+  if (message.role === 'assistant') {
+    return {
+      ...message,
+      content: (message.content ?? '').trim(),
+    }
+  }
+  if (message.role === 'tool') {
+    return {
+      ...message,
+      content: message.content.length > 1200 ? `${message.content.slice(0, 1200)}…` : message.content,
+    }
+  }
+  return message
+}
+
+function estimateMessageHeight(message: VisibleHistoryMessage, width: number): number {
+  const contentLines = wrappedLineCount(message.content, width)
+  const toolHintLines =
+    message.role === 'assistant' && message.toolCalls?.length
+      ? 1
+      : 0
+  return contentLines + toolHintLines + 4
+}
+
+function cropMessageToFit(
+  message: VisibleHistoryMessage,
+  lineBudget: number,
+  width: number,
+): VisibleHistoryMessage | null {
+  const toolHintLines =
+    message.role === 'assistant' && message.toolCalls?.length
+      ? 1
+      : 0
+  const contentBudget = lineBudget - toolHintLines - 4
+  if (contentBudget <= 0) return null
+  return {
+    ...message,
+    content: cropTextToLastWrappedLines(message.content, contentBudget, width),
+  }
+}
+
+function cropTextToLastWrappedLines(text: string, maxLines: number, width: number): string {
+  const lines = wrapPlainText(text, width)
+  if (lines.length <= maxLines) return text
+  return `…${lines.slice(-maxLines).join('\n')}`
+}
+
+function wrappedLineCount(text: string, width: number): number {
+  return Math.max(1, wrapPlainText(text, width).length)
+}
+
+function wrapPlainText(text: string, width: number): string[] {
+  const safeWidth = Math.max(1, width)
+  const lines: string[] = []
+  for (const rawLine of (text || '').split('\n')) {
+    let current = ''
+    let currentWidth = 0
+    for (const segment of graphemes(rawLine)) {
+      const segmentWidth = terminalCellWidth(segment)
+      if (current && currentWidth + segmentWidth > safeWidth) {
+        lines.push(current)
+        current = ''
+        currentWidth = 0
+      }
+      current += segment
+      currentWidth += segmentWidth
+    }
+    lines.push(current)
+  }
+  return lines.length ? lines : ['']
+}
+
+function graphemes(text: string): string[] {
+  const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
+  return Array.from(segmenter.segment(text.normalize('NFC')), (s) => s.segment)
+}
+
+function terminalCellWidth(segment: string): number {
+  const cp = segment.codePointAt(0) ?? 0
+  if (cp === 0 || cp < 32 || (cp >= 0x7f && cp < 0xa0)) return 0
+  if (cp >= 0x300 && cp <= 0x36f) return 0
+  return isWideTerminalCodePoint(cp) ? 2 : 1
+}
+
+function isWideTerminalCodePoint(cp: number): boolean {
+  return (
+    cp >= 0x1100 &&
+    (cp <= 0x115f ||
+      cp === 0x2329 ||
+      cp === 0x232a ||
+      (cp >= 0x2e80 && cp <= 0xa4cf && cp !== 0x303f) ||
+      (cp >= 0xac00 && cp <= 0xd7a3) ||
+      (cp >= 0xf900 && cp <= 0xfaff) ||
+      (cp >= 0xfe10 && cp <= 0xfe19) ||
+      (cp >= 0xfe30 && cp <= 0xfe6f) ||
+      (cp >= 0xff00 && cp <= 0xff60) ||
+      (cp >= 0xffe0 && cp <= 0xffe6) ||
+      (cp >= 0x1f300 && cp <= 0x1faff))
+  )
+}
