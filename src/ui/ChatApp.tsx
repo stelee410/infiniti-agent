@@ -1,8 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { basename, isAbsolute, relative, resolve, join } from 'node:path'
 import { copyFile } from 'node:fs/promises'
-import { Box, Text, useApp, useInput } from 'ink'
-import TextInput from 'ink-text-input'
+import { Box, Text, useApp, useInput, useWindowSize } from 'ink'
 import chokidar from 'chokidar'
 import type { InfinitiConfig } from '../config/types.js'
 import { loadSkillsForCwd, skillsToSystemBlock } from '../skills/loader.js'
@@ -83,6 +82,7 @@ import {
   handleUndoSlashCommand,
 } from './chatCommandHandlers.js'
 import { maybeStartAutoCompaction, mergeCompactedPrefixWithLatest } from './chatAutoCompaction.js'
+import { StableTextInput } from './StableTextInput.js'
 
 /**
  * Live 下 TTS 用的「干净正文」：与流式 onTextDelta 一致，先 `processAssistantStreamChunk` 得 `displayText`
@@ -237,7 +237,7 @@ export function ChatApp({
   onConfigReload,
 }: Props): React.ReactElement {
   const { exit } = useApp()
-  const rows = process.stdout.rows ?? 24
+  const { columns, rows } = useWindowSize()
   const [config, setConfig] = useState(initialConfig)
   const [cwd, setCwd] = useState(process.cwd())
   const [messages, setMessages] = useState<PersistedMessage[]>([])
@@ -1189,7 +1189,7 @@ export function ChatApp({
   const meta = `${config.llm.provider} · ${config.llm.model}${thinkLabel}${profileLabel}${permLabel}`
 
   return (
-    <Box flexDirection="column" width="100%" paddingX={1}>
+    <Box flexDirection="column" width="100%" height={rows} overflow="hidden" paddingX={1}>
       <Box
         borderStyle="round"
         borderColor="cyan"
@@ -1197,6 +1197,7 @@ export function ChatApp({
         paddingY={0}
         marginBottom={1}
         flexDirection="column"
+        flexShrink={0}
       >
         <Box flexDirection="row" justifyContent="space-between">
           <Text bold color="cyan">
@@ -1249,7 +1250,11 @@ export function ChatApp({
         paddingY={1}
         marginTop={1}
         flexDirection="column"
+        flexGrow={1}
+        flexShrink={1}
+        overflow="hidden"
         minHeight={6}
+        justifyContent="flex-end"
       >
         {visible.map((m, i) => (
           <MessageLine key={`${i}-${m.role}`} m={m} />
@@ -1293,12 +1298,12 @@ export function ChatApp({
       </Box>
 
       {!sessionReady ? (
-        <Box marginTop={1}>
+        <Box marginTop={1} flexShrink={0}>
           <Text dimColor>正在加载会话…</Text>
         </Box>
       ) : null}
       {busy ? (
-        <Box marginTop={1}>
+        <Box marginTop={1} flexShrink={0}>
           <Text color="yellow">
             {compacting
               ? '◆ 正在压缩会话历史（非流式）…'
@@ -1314,24 +1319,31 @@ export function ChatApp({
         />
       ) : null}
 
-      <Box marginTop={1} borderStyle="single" borderColor="cyan" paddingX={1}>
+      <Box
+        marginTop={1}
+        borderStyle="single"
+        borderColor="cyan"
+        paddingX={1}
+        height={3}
+        flexShrink={0}
+        overflow="hidden"
+      >
         {liveUi ? (
           <Text dimColor wrap="wrap">
             输入已移至桌面 Live 窗口底部；此处不再接收键盘输入（仍显示状态与历史）。斜杠命令在窗口输入框输入 / 可调出补全（Tab 写入 · ↑↓ 选择），例如 /help /clear。
           </Text>
         ) : (
-          <>
-            <Text color="cyan" bold>{'› '}</Text>
-            <TextInput
-              value={input}
-              focus={!busy && sessionReady}
-              onChange={setInput}
-              onSubmit={(v) => {
-                void handleSubmit(v)
-              }}
-              placeholder="输入…"
-            />
-          </>
+          <StableTextInput
+            value={input}
+            focus={!busy && sessionReady}
+            onChange={setInput}
+            onSubmit={(v) => {
+              void handleSubmit(v)
+            }}
+            placeholder="输入…"
+            columns={Math.max(1, columns - 6)}
+            nativeCursorY={Math.max(0, rows - 1)}
+          />
         )}
       </Box>
     </Box>
