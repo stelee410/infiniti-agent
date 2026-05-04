@@ -2371,7 +2371,6 @@ async function bootstrap(): Promise<void> {
     } else if (msg.type === 'VISION_CAPTURE_RESULT') {
       const requestId = typeof msg.data?.requestId === 'string' ? msg.data.requestId : ''
       if (!requestId || requestId !== activeCameraRequestId) return
-      windowManager.requestLayout({ mode: 'camera', reason: 'vision-capture-result', open: false })
       finishCameraCaptureUi()
       if (msg.data?.ok === true) {
         const vision = parseVisionAttachment(msg.data.vision)
@@ -3013,9 +3012,10 @@ async function bootstrap(): Promise<void> {
   const cameraCountdown = document.getElementById('liveui-camera-countdown') as HTMLElement | null
   const cameraCountdownIcon = document.getElementById('liveui-camera-countdown-icon') as SVGElement | null
   const cameraCountdownNumber = document.getElementById('liveui-camera-countdown-number') as HTMLElement | null
+  const cameraPreviewStage = document.getElementById('liveui-camera-preview-stage') as HTMLElement | null
+  const cameraStatus = document.getElementById('liveui-camera-status') as HTMLElement | null
   const cameraFlash = document.getElementById('liveui-camera-flash') as HTMLElement | null
   const attachmentList = document.getElementById('liveui-attachment-list')
-  const CAMERA_COUNTDOWN_CAPTURE_DELAY_MS = 3 * 720 + 120
 
   const readBlobBase64 = (blob: Blob): Promise<string> =>
     new Promise((resolve, reject) => {
@@ -3102,6 +3102,56 @@ async function bootstrap(): Promise<void> {
     visionBtn.title = cameraCapturing ? '正在拍照…' : '拍照'
   }
 
+  let preparedCameraPreview: PreparedCameraCapture | null = null
+
+  const setCameraStatus = (text: string): void => {
+    if (cameraStatus) cameraStatus.textContent = text
+  }
+
+  const clearCameraPreviewStage = (): void => {
+    cameraPreviewStage?.replaceChildren()
+  }
+
+  const closePreparedCameraPreview = (): void => {
+    preparedCameraPreview?.close()
+    preparedCameraPreview = null
+    clearCameraPreviewStage()
+  }
+
+  const mountCameraPreview = (prepared: PreparedCameraCapture): void => {
+    if (!cameraPreviewStage) return
+    const video = prepared.video
+    video.style.position = 'absolute'
+    video.style.left = '0'
+    video.style.top = '0'
+    video.style.width = '100%'
+    video.style.height = '100%'
+    video.style.objectFit = 'cover'
+    clearCameraPreviewStage()
+    cameraPreviewStage.appendChild(video)
+  }
+
+  const setCameraCaptureMode = (open: boolean, reason: string): void => {
+    document.body.classList.toggle('liveui-camera-capture-open', open)
+    windowManager.requestLayout({ mode: 'camera', reason, open })
+    if (cameraCountdown) {
+      cameraCountdown.hidden = !open
+      cameraCountdown.setAttribute('aria-hidden', String(!open))
+    }
+    if (open) {
+      if (cameraCountdownIcon) cameraCountdownIcon.hidden = false
+      if (cameraCountdownNumber) cameraCountdownNumber.textContent = ''
+      setCameraStatus('准备摄像头')
+      cancelDynamicWindowFit()
+      return
+    }
+    if (cameraCountdownIcon) cameraCountdownIcon.hidden = false
+    if (cameraCountdownNumber) cameraCountdownNumber.textContent = ''
+    setCameraStatus('准备拍照')
+    closePreparedCameraPreview()
+    requestAnimationFrame(() => refreshNormalWindowLayout())
+  }
+
   const finishCameraCaptureUi = (): void => {
     cameraCapturing = false
     activeCameraRequestId = ''
@@ -3109,6 +3159,7 @@ async function bootstrap(): Promise<void> {
       window.clearTimeout(cameraUiTimeout)
       cameraUiTimeout = undefined
     }
+    setCameraCaptureMode(false, 'camera-finish')
     updateCameraBtn()
   }
 
@@ -3210,29 +3261,18 @@ async function bootstrap(): Promise<void> {
   }
 
   const runCameraCountdown = async (): Promise<void> => {
-    const restoreSprite = await temporarilyUseSpriteExpression('exp_take_photo')
-    const restoreLive2d = restoreSprite ? null : await temporarilyUseLive2dExpression('exp_take_photo')
-    const restorePose = restoreSprite ?? restoreLive2d
-    const hasTakePhotoPose = restorePose != null
-    if (cameraCountdown) {
-      cameraCountdown.hidden = false
-      cameraCountdown.setAttribute('aria-hidden', 'false')
-    }
-    if (cameraCountdownIcon) cameraCountdownIcon.hidden = hasTakePhotoPose
+    if (cameraCountdownIcon) cameraCountdownIcon.hidden = true
     try {
       for (const n of ['3', '2', '1']) {
         if (cameraCountdownNumber) cameraCountdownNumber.textContent = n
+        setCameraStatus('保持微笑')
         await delay(720)
       }
       if (cameraCountdownNumber) cameraCountdownNumber.textContent = ''
+      setCameraStatus('拍摄中')
       await triggerCameraFlash()
     } finally {
-      if (cameraCountdown) {
-        cameraCountdown.hidden = true
-        cameraCountdown.setAttribute('aria-hidden', 'true')
-      }
       if (cameraCountdownIcon) cameraCountdownIcon.hidden = false
-      restorePose?.()
     }
   }
 
@@ -3246,25 +3286,23 @@ async function bootstrap(): Promise<void> {
     cameraUiTimeout = window.setTimeout(() => {
       if (activeCameraRequestId !== requestId) return
       console.warn('[liveui] 拍照请求超时，已恢复相机按钮')
-      windowManager.requestLayout({ mode: 'camera', reason: 'camera-timeout', open: false })
       finishCameraCaptureUi()
     }, 30_000)
     try {
-      if (!isSocketOpen(socket)) {
-        throw new Error('LiveUI WebSocket 未连接，无法请求 CLI 摄像头拍照')
-      }
-      windowManager.requestLayout({ mode: 'camera', reason: 'camera-countdown', open: true })
-      layoutFigureInStage()
-      positionBubbleOverFigure()
+      setCameraCaptureMode(true, 'camera-countdown')
+      const locationPromise = getCurrentLocation(1200)
+      preparedCameraPreview = await prepareCameraCapture()
+      mountCameraPreview(preparedCameraPreview)
       if (activeCameraRequestId !== requestId) return
-      sendSocketMessage(socket, 'VISION_CAPTURE_REQUEST', {
-        requestId,
-        captureDelayMs: CAMERA_COUNTDOWN_CAPTURE_DELAY_MS,
-      })
+      setCameraStatus('准备拍照')
       await runCameraCountdown()
+      if (activeCameraRequestId !== requestId || !preparedCameraPreview) return
+      const location = await locationPromise
+      const vision = preparedCameraPreview.capture(location)
+      finishCameraCaptureUi()
+      showPhotoPreview(requestId, vision)
     } catch (e) {
       console.warn(`[liveui] 拍照失败: ${describeCameraError(e)}`)
-      windowManager.requestLayout({ mode: 'camera', reason: 'camera-error', open: false })
       if (activeCameraRequestId === requestId) finishCameraCaptureUi()
     }
   }
