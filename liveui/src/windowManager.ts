@@ -1,4 +1,11 @@
 export type LiveUiWindowBounds = { width: number; height: number }
+export type LiveUiWindowMode = 'avatar' | 'config' | 'inbox' | 'camera' | 'minimal'
+export type LiveUiWindowLayoutRequest =
+  | { mode: 'avatar'; reason: string; compactHeight?: number }
+  | { mode: 'config'; reason: string; open: boolean }
+  | { mode: 'inbox'; reason: string; open: boolean }
+  | { mode: 'camera'; reason: string; open: boolean }
+  | { mode: 'minimal'; reason: string; open: boolean; bounds?: LiveUiWindowBounds }
 
 export type LiveUiWindowBridge = {
   setIgnoreMouseEvents?: (ignore: boolean, opts?: { forward?: boolean }) => void
@@ -10,6 +17,7 @@ export type LiveUiWindowBridge = {
 }
 
 export type LiveUiWindowManager = {
+  requestLayout(request: LiveUiWindowLayoutRequest): void
   compactHeight(height: number): void
   setConfigPanelOpen(open: boolean): void
   setInboxOpen(open: boolean): void
@@ -23,26 +31,49 @@ export function createLiveUiWindowManager(bridge?: LiveUiWindowBridge): LiveUiWi
     bridge?.setIgnoreMouseEvents?.(!interactive, { forward: true })
   }
 
+  const requestLayout = (request: LiveUiWindowLayoutRequest): void => {
+    switch (request.mode) {
+      case 'avatar':
+        if (typeof request.compactHeight === 'number' && Number.isFinite(request.compactHeight)) {
+          bridge?.compactWindowHeight?.(request.compactHeight)
+        }
+        return
+      case 'config':
+        bridge?.setConfigPanelOpen?.(request.open)
+        setInteractive(request.open)
+        return
+      case 'inbox':
+        if (bridge?.setInboxOpen) {
+          bridge.setInboxOpen(request.open)
+        } else {
+          setInteractive(request.open)
+        }
+        return
+      case 'camera':
+        bridge?.setCameraCaptureOpen?.(request.open)
+        return
+      case 'minimal':
+        bridge?.setMinimalModeOpen?.(request.open, request.bounds)
+        return
+    }
+  }
+
   return {
+    requestLayout,
     compactHeight(height) {
-      bridge?.compactWindowHeight?.(height)
+      requestLayout({ mode: 'avatar', reason: 'compact-height', compactHeight: height })
     },
     setConfigPanelOpen(open) {
-      bridge?.setConfigPanelOpen?.(open)
-      setInteractive(open)
+      requestLayout({ mode: 'config', reason: 'config-panel', open })
     },
     setInboxOpen(open) {
-      if (bridge?.setInboxOpen) {
-        bridge.setInboxOpen(open)
-      } else {
-        setInteractive(open)
-      }
+      requestLayout({ mode: 'inbox', reason: 'inbox-panel', open })
     },
     setCameraCaptureOpen(open) {
-      bridge?.setCameraCaptureOpen?.(open)
+      requestLayout({ mode: 'camera', reason: 'camera-capture', open })
     },
     setMinimalModeOpen(open, bounds) {
-      bridge?.setMinimalModeOpen?.(open, bounds)
+      requestLayout({ mode: 'minimal', reason: 'minimal-mode', open, bounds })
     },
     setInteractive,
   }

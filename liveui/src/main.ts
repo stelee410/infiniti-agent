@@ -686,7 +686,11 @@ async function bootstrap(): Promise<void> {
             pendingReal2dCompactHeight = nextH
             real2dCompactBaseStageHeight ??= real2dLayoutHeight || real2dStageHeight()
           }
-          windowManager.compactHeight(nextH)
+          windowManager.requestLayout({
+            mode: 'avatar',
+            reason: 'dynamic-figure-fit',
+            compactHeight: nextH,
+          })
           if (attempt < 6) {
             window.setTimeout(() => scheduleCompactWindowHeight(attempt + 1), 220)
           }
@@ -1387,7 +1391,7 @@ async function bootstrap(): Promise<void> {
       }
       configPanelOpen = open
       document.body.classList.toggle('liveui-config-open', open)
-      windowManager.setConfigPanelOpen(open)
+      windowManager.requestLayout({ mode: 'config', reason: 'config-panel', open })
       if (configPanelLayoutAction(open) === 'suspend-fit') {
         cancelDynamicWindowFit()
         return
@@ -1418,7 +1422,7 @@ async function bootstrap(): Promise<void> {
       inboxReturnWindowSize = null
     }
     inboxOpen = open
-    windowManager.setInboxOpen(open)
+    windowManager.requestLayout({ mode: 'inbox', reason: 'inbox-panel', open })
     if (open) {
       cancelDynamicWindowFit()
       return
@@ -2346,7 +2350,7 @@ async function bootstrap(): Promise<void> {
     } else if (msg.type === 'VISION_CAPTURE_RESULT') {
       const requestId = typeof msg.data?.requestId === 'string' ? msg.data.requestId : ''
       if (!requestId || requestId !== activeCameraRequestId) return
-      windowManager.setCameraCaptureOpen(false)
+      windowManager.requestLayout({ mode: 'camera', reason: 'vision-capture-result', open: false })
       finishCameraCaptureUi()
       if (msg.data?.ok === true) {
         const vision = parseVisionAttachment(msg.data.vision)
@@ -2558,11 +2562,16 @@ async function bootstrap(): Promise<void> {
       const bottom = Math.max(...rects.map((r) => r.bottom))
       const width = Math.ceil(right - left + 24)
       const height = Math.ceil(bottom - top + 16)
-      windowManager.setMinimalModeOpen(true, { width, height })
+      windowManager.requestLayout({
+        mode: 'minimal',
+        reason: 'minimal-content-fit',
+        open: true,
+        bounds: { width, height },
+      })
     }
     requestAnimationFrame(() => {
       if (!minimalMode) {
-        windowManager.setMinimalModeOpen(false)
+        windowManager.requestLayout({ mode: 'minimal', reason: 'minimal-mode-exit', open: false })
         refreshNormalWindowLayout()
         requestAnimationFrame(() => forceWindowInteractive())
         return
@@ -3215,14 +3224,14 @@ async function bootstrap(): Promise<void> {
     cameraUiTimeout = window.setTimeout(() => {
       if (activeCameraRequestId !== requestId) return
       console.warn('[liveui] 拍照请求超时，已恢复相机按钮')
-      windowManager.setCameraCaptureOpen(false)
+      windowManager.requestLayout({ mode: 'camera', reason: 'camera-timeout', open: false })
       finishCameraCaptureUi()
     }, 30_000)
     try {
       if (!isSocketOpen(socket)) {
         throw new Error('LiveUI WebSocket 未连接，无法请求 CLI 摄像头拍照')
       }
-      windowManager.setCameraCaptureOpen(true)
+      windowManager.requestLayout({ mode: 'camera', reason: 'camera-countdown', open: true })
       layoutFigureInStage()
       positionBubbleOverFigure()
       if (activeCameraRequestId !== requestId) return
@@ -3233,7 +3242,7 @@ async function bootstrap(): Promise<void> {
       await runCameraCountdown()
     } catch (e) {
       console.warn(`[liveui] 拍照失败: ${describeCameraError(e)}`)
-      windowManager.setCameraCaptureOpen(false)
+      windowManager.requestLayout({ mode: 'camera', reason: 'camera-error', open: false })
       if (activeCameraRequestId === requestId) finishCameraCaptureUi()
     }
   }
