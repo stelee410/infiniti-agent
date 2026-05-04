@@ -16,6 +16,10 @@ import {
   computeFigureScale,
 } from './figureManager.ts'
 import {
+  createLiveUiLayoutCoordinator,
+  type LiveUiLayoutCoordinator,
+} from './layoutCoordinator.ts'
+import {
   HIT_BODY_RE,
   HIT_HEAD_RE,
   LIVE2D_BODY_POKE_MOTIONS,
@@ -626,7 +630,6 @@ async function bootstrap(): Promise<void> {
   let inboxReturnWindowSize: WindowSize | null = null
   let pendingInboxCloseWindowSize: WindowSize | null = null
   let syncMinimalWindowBounds = (): void => {}
-  let dynamicWindowFitTimer: number | undefined
 
   const layoutSuspended = (): boolean => configPanelOpen || inboxOpen
 
@@ -639,26 +642,12 @@ async function bootstrap(): Promise<void> {
     if (pendingInboxCloseWindowSize === target) pendingInboxCloseWindowSize = null
   }
 
-  const cancelDynamicWindowFit = (): void => {
-    if (dynamicWindowFitTimer !== undefined) {
-      window.clearTimeout(dynamicWindowFitTimer)
-      dynamicWindowFitTimer = undefined
-    }
-  }
+  let layoutCoordinator: LiveUiLayoutCoordinator | null = null
 
-  const scheduleDynamicWindowFit = (attempt = 0): void => {
-    if (!shouldRunDynamicFigureFit({ minimalMode, layoutSuspended: layoutSuspended() })) return
-    cancelDynamicWindowFit()
-    dynamicWindowFitTimer = window.setTimeout(() => {
-      dynamicWindowFitTimer = undefined
-      if (!shouldRunDynamicFigureFit({ minimalMode, layoutSuspended: layoutSuspended() })) return
-      if (minimalMode) {
-        syncMinimalWindowBounds()
-      } else {
-        scheduleCompactWindowHeight(attempt)
-      }
-    }, 0)
-  }
+  const cancelDynamicWindowFit = (): void => layoutCoordinator?.cancelDynamicFit()
+
+  const scheduleDynamicWindowFit = (attempt = 0): void =>
+    layoutCoordinator?.scheduleDynamicFit(attempt)
 
   /**
    * 在「当前 layout」下读人物可见 bounds，若头顶留白明显则把窗口高度减掉一截。
@@ -1301,49 +1290,54 @@ async function bootstrap(): Promise<void> {
     scheduleDynamicWindowFit()
   })
 
-  const refreshNormalWindowLayout = (attempt = 0): void => {
-    requestAnimationFrame(() => {
-      app.renderer.resize(window.innerWidth, window.innerHeight)
-      if (real2dAvatar) {
-        applyReal2dStageLayout()
-        scheduleReal2dVerticalPlacement()
-      }
-      layoutFigureInStage()
-      positionBubbleOverFigure()
-      if (attempt >= 1) scheduleDynamicWindowFit()
-      if (attempt < 4) {
-        window.setTimeout(() => refreshNormalWindowLayout(attempt + 1), 90)
-      }
-    })
+  const runNormalWindowLayout = (attempt: number): void => {
+    app.renderer.resize(window.innerWidth, window.innerHeight)
+    if (real2dAvatar) {
+      applyReal2dStageLayout()
+      scheduleReal2dVerticalPlacement()
+    }
+    layoutFigureInStage()
+    positionBubbleOverFigure()
+    if (attempt >= 1) scheduleDynamicWindowFit()
   }
 
+  const refreshNormalWindowLayout = (attempt = 0): void =>
+    layoutCoordinator?.refreshNormal(attempt)
+
   const refreshConfigPanelClosedLayout = (reason: ConfigPanelCloseReason | undefined, attempt = 0): void => {
-    requestAnimationFrame(() => {
-      const current = { width: window.innerWidth, height: window.innerHeight }
-      if (!isWindowSizeRestored(current, pendingConfigPanelCloseWindowSize) && attempt < 20) {
-        window.setTimeout(() => refreshConfigPanelClosedLayout(reason, attempt + 1), 50)
-        return
-      }
-      pendingConfigPanelCloseWindowSize = null
-      if (shouldResetReal2dCompactScaleOnConfigClose(false, reason)) {
-        resetReal2dCompactScaleState()
-      }
-      refreshNormalWindowLayout()
-    })
+    layoutCoordinator?.refreshAfterWindowRestore({
+      getTarget: () => pendingConfigPanelCloseWindowSize,
+      clearTarget: () => {
+        pendingConfigPanelCloseWindowSize = null
+      },
+      beforeRefresh: () => {
+        if (shouldResetReal2dCompactScaleOnConfigClose(false, reason)) {
+          resetReal2dCompactScaleState()
+        }
+      },
+    }, attempt)
   }
 
   const refreshInboxClosedLayout = (attempt = 0): void => {
-    requestAnimationFrame(() => {
-      const current = { width: window.innerWidth, height: window.innerHeight }
-      if (!isWindowSizeRestored(current, pendingInboxCloseWindowSize) && attempt < 20) {
-        window.setTimeout(() => refreshInboxClosedLayout(attempt + 1), 50)
-        return
-      }
-      pendingInboxCloseWindowSize = null
-      resetReal2dCompactScaleState()
-      refreshNormalWindowLayout()
-    })
+    layoutCoordinator?.refreshAfterWindowRestore({
+      getTarget: () => pendingInboxCloseWindowSize,
+      clearTarget: () => {
+        pendingInboxCloseWindowSize = null
+      },
+      beforeRefresh: resetReal2dCompactScaleState,
+    }, attempt)
   }
+
+  layoutCoordinator = createLiveUiLayoutCoordinator({
+    isDynamicFitAllowed: () =>
+      shouldRunDynamicFigureFit({ minimalMode, layoutSuspended: layoutSuspended() }),
+    isMinimalMode: () => minimalMode,
+    syncMinimalWindowBounds: () => syncMinimalWindowBounds(),
+    runCompactWindowFit: (attempt) => scheduleCompactWindowHeight(attempt),
+    runNormalLayout: runNormalWindowLayout,
+    getWindowSize: () => ({ width: window.innerWidth, height: window.innerHeight }),
+    isWindowSizeRestored,
+  })
 
   const dockEl = document.getElementById('liveui-bottom-dock')
   if (dockEl && typeof ResizeObserver !== 'undefined') {
