@@ -3,6 +3,9 @@ import {
   clampFigureZoom,
   computeFigureLayoutPlan,
   computeFigureScale,
+  computeReal2dCompactScaleCompensation,
+  computeReal2dRuntimeStageHeight,
+  computeReal2dStageHeight,
 } from './figureManager.ts'
 
 describe('figureManager', () => {
@@ -49,5 +52,36 @@ describe('figureManager', () => {
     expect(computeFigureScale(shortDock, 420, 400, 600)).toBe(
       computeFigureScale(tallDock, 420, 400, 600),
     )
+  })
+
+  it('computes Real2D stage height from the control bar top', () => {
+    expect(computeReal2dStageHeight(580, 420.8)).toBe(420)
+    expect(computeReal2dStageHeight(580, 120)).toBe(260)
+    expect(computeReal2dStageHeight(580, undefined)).toBe(580)
+  })
+
+  it('keeps Real2D runtime stage height stable outside minimal mode', () => {
+    expect(computeReal2dRuntimeStageHeight({
+      currentStageHeight: 420,
+      stableStageHeight: 500,
+      minimalMode: false,
+    })).toEqual({
+      runtimeStageHeight: 500,
+      stableStageHeight: 500,
+    })
+    expect(computeReal2dRuntimeStageHeight({
+      currentStageHeight: 540,
+      stableStageHeight: 500,
+      minimalMode: false,
+    })).toEqual({
+      runtimeStageHeight: 540,
+      stableStageHeight: 540,
+    })
+  })
+
+  it('clamps Real2D compact scale compensation', () => {
+    expect(computeReal2dCompactScaleCompensation(500, 400)).toBe(1.25)
+    expect(computeReal2dCompactScaleCompensation(1000, 400)).toBe(1.6)
+    expect(computeReal2dCompactScaleCompensation(100, 400)).toBe(0.7)
   })
 })

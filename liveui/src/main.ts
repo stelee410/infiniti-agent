@@ -8,12 +8,16 @@ import {
 } from '../../src/liveui/emotionParse.ts'
 import type { LiveUiStatusVariant, LiveUiVisionAttachment } from '../../src/liveui/protocol.ts'
 import { renderLiveUiBubbleMarkdown } from './bubbleMarkdown.ts'
+import { computeAssistantContentLayoutPlan } from './assistantContentLayoutPolicy.ts'
 import { ReconnectingWebSocket } from './reconnectingWebSocket.ts'
 import { isSocketOpen, sendSocketMessage } from './socketMessages.ts'
 import {
   clampFigureZoom,
   computeFigureLayoutPlan,
   computeFigureScale,
+  computeReal2dCompactScaleCompensation,
+  computeReal2dRuntimeStageHeight,
+  computeReal2dStageHeight,
 } from './figureManager.ts'
 import {
   createLiveUiLayoutCoordinator,
@@ -473,19 +477,18 @@ async function bootstrap(): Promise<void> {
 
   const real2dStageHeight = (): number => {
     const controlBar = document.getElementById('liveui-control-bar')
-    const barTop = controlBar?.getBoundingClientRect().top
-    if (typeof barTop === 'number' && Number.isFinite(barTop) && barTop > 0) {
-      return Math.max(260, Math.floor(barTop))
-    }
-    return window.innerHeight
+    return computeReal2dStageHeight(window.innerHeight, controlBar?.getBoundingClientRect().top)
   }
 
   const real2dRuntimeStageHeight = (): number => {
     const current = real2dStageHeight()
-    if (!minimalMode) {
-      real2dStableStageHeight = Math.max(real2dStableStageHeight, current)
-    }
-    return Math.max(current, real2dStableStageHeight || current)
+    const next = computeReal2dRuntimeStageHeight({
+      currentStageHeight: current,
+      stableStageHeight: real2dStableStageHeight,
+      minimalMode,
+    })
+    real2dStableStageHeight = next.stableStageHeight
+    return next.runtimeStageHeight
   }
 
   const applyReal2dStageLayout = (resizeRuntime = true): void => {
@@ -665,7 +668,13 @@ async function bootstrap(): Promise<void> {
         }
         const bar = document.getElementById('liveui-control-bar')
         const barHeight = bar ? Math.ceil(bar.getBoundingClientRect().height) : 120
-        const minH = Math.max(360, barHeight + 220)
+        const contentLayout = computeAssistantContentLayoutPlan({
+          text: bubbleTarget,
+          barHeight,
+          viewportHeight: window.innerHeight,
+          minimalMode,
+        })
+        const minH = Math.max(360, barHeight + 220, contentLayout.minWindowHeight)
         const topGoal = 10
         const topDelta = Math.floor(b.top - topGoal)
         const nextH = Math.max(minH, Math.min(1000, window.innerHeight - topDelta))
@@ -796,6 +805,19 @@ async function bootstrap(): Promise<void> {
     }
   }
 
+  const applyAssistantContentLayout = (text: string): void => {
+    if (!speechBubbleText) return
+    const bar = document.getElementById('liveui-control-bar')
+    const barHeight = bar ? Math.ceil(bar.getBoundingClientRect().height) : 120
+    const plan = computeAssistantContentLayoutPlan({
+      text,
+      barHeight,
+      viewportHeight: window.innerHeight,
+      minimalMode,
+    })
+    speechBubbleText.style.setProperty('--liveui-bubble-lines', String(plan.bubbleLines))
+  }
+
   const scheduleBubbleDismiss = (): void => {
     clearBubbleDismiss()
     if (!bubbleTarget.trim()) return
@@ -828,6 +850,7 @@ async function bootstrap(): Promise<void> {
     minimalBubbleWaiting = false
     minimalBubbleStarted = false
     if (speechBubbleText) {
+      applyAssistantContentLayout('')
       speechBubbleText.innerHTML = ''
       speechBubbleText.scrollTop = 0
     }
@@ -839,6 +862,7 @@ async function bootstrap(): Promise<void> {
   const setWaitingBubbleFirstChar = (): void => {
     if (!speechBubbleText || !speechBubble) return
     const first = Array.from(bubbleTarget.trimStart())[0] ?? ''
+    applyAssistantContentLayout(bubbleTarget)
     speechBubbleText.innerHTML = `<span class="liveui-bubble-first-char">${escapeHtmlText(first)}</span>`
     speechBubbleText.scrollTop = 0
     speechBubble.classList.add('visible', 'liveui-bubble-waiting')
@@ -924,6 +948,7 @@ async function bootstrap(): Promise<void> {
   const setBubbleFromDisplayText = (displayText: string): void => {
     if (!speechBubbleText || !speechBubble) return
     bubbleTarget = displayText
+    applyAssistantContentLayout(displayText)
     if (!displayText.trim()) {
       resetSpeechBubble()
       return
@@ -1278,7 +1303,9 @@ async function bootstrap(): Promise<void> {
         applyReal2dStageLayout()
         if (isReal2dCompactResize && real2dLayoutHeight > 0) {
           const baseHeight = real2dCompactBaseStageHeight ?? real2dLayoutHeight
-          real2dAvatar.setStageScaleCompensation(baseHeight / real2dLayoutHeight)
+          real2dAvatar.setStageScaleCompensation(
+            computeReal2dCompactScaleCompensation(baseHeight, real2dLayoutHeight),
+          )
         } else {
           resetReal2dCompactScaleState()
         }
@@ -2533,6 +2560,7 @@ async function bootstrap(): Promise<void> {
   const setMinimalMode = (next: boolean): void => {
     minimalMode = next
     document.body.classList.toggle('liveui-minimal-mode', minimalMode)
+    applyAssistantContentLayout(bubbleTarget)
     updateMinimalBtn()
     updateSpeakerBtn()
     if (minimalMode) {
