@@ -252,7 +252,7 @@ function parseSnapImageConfig(raw: unknown): SnapImageConfig | undefined {
   const u = recordField(raw)
   if (!u) return undefined
   const out: SnapImageConfig = {}
-  const provider = enumField(u.provider, ['nano-banana', 'gpt-image-2'] as const)
+  const provider = enumField(u.provider, ['openrouter', 'nano-banana', 'openai', 'gpt-image-2', 'gemini'] as const)
   const quality = enumField(u.quality, ['auto', 'high', 'medium', 'low'] as const)
   const timeoutMs = numberField({ value: u.timeoutMs, min: 5000, integer: true })
   const fields = ['imageProfile', 'baseUrl', 'apiKey', 'model', 'aspectRatio', 'imageSize'] as const
@@ -269,7 +269,7 @@ function parseSnapImageConfig(raw: unknown): SnapImageConfig | undefined {
 function parseImageProfile(raw: unknown): ImageProfile | undefined {
   const u = recordField(raw)
   if (!u) return undefined
-  const provider = enumField(u.provider, ['gpt-image-2', 'nano-banana'] as const)
+  const provider = enumField(u.provider, ['openai', 'openrouter', 'gemini', 'gpt-image-2', 'nano-banana'] as const)
   if (!provider) return undefined
   const baseUrl = stringField({ value: u.baseUrl }) ?? ''
   const apiKey = stringField({ value: u.apiKey }) ?? ''

@@ -5,6 +5,7 @@ import OpenAI, { toFile } from 'openai'
 import { getInfinitiConfigPath, loadConfig } from '../config/io.js'
 import { localLinkyunRefDir } from '../paths.js'
 import { openRouterGenerateImageBuffer } from '../avatar/openRouterImageGen.js'
+import { geminiGenerateImageBuffer } from '../avatar/geminiImageGen.js'
 import { transparentizeStudioBackgroundPng } from '../avatar/transparentizePngBackground.js'
 import { resolveAvatarGenImageProfile, type ResolvedImageProfile } from '../image/resolveImageProfile.js'
 import {
@@ -82,7 +83,7 @@ async function generateAvatarImageBuffer(
   prompt: string,
   referenceImages: Array<{ mimeType: string; base64: string }>,
 ): Promise<Buffer> {
-  if (auth.provider !== 'gpt-image-2') {
+  if (auth.provider === 'openrouter') {
     return await openRouterGenerateImageBuffer({
       baseUrl: auth.baseUrl,
       apiKey: auth.apiKey,
@@ -94,6 +95,18 @@ async function generateAvatarImageBuffer(
       ...(auth.imageSize ? { imageSize: auth.imageSize } : {}),
       ...(auth.quality ? { quality: auth.quality } : {}),
       transparentBackground: auth.transparentBackground,
+      timeoutMs: auth.timeoutMs,
+    })
+  }
+  if (auth.provider === 'gemini') {
+    return await geminiGenerateImageBuffer({
+      baseUrl: auth.baseUrl,
+      apiKey: auth.apiKey,
+      model: auth.model,
+      prompt,
+      referenceImages,
+      aspectRatio: auth.aspectRatio ?? '2:3',
+      ...(auth.imageSize ? { imageSize: auth.imageSize } : {}),
       timeoutMs: auth.timeoutMs,
     })
   }

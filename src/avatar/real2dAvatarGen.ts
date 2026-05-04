@@ -9,6 +9,7 @@ import type { PersistedMessage } from '../llm/persisted.js'
 import { localInboxDir } from '../paths.js'
 import { transparentizeStudioBackgroundPng } from './transparentizePngBackground.js'
 import { openRouterGenerateImageBuffer } from './openRouterImageGen.js'
+import { geminiGenerateImageBuffer } from './geminiImageGen.js'
 import { resolveAvatarGenImageProfile, type ResolvedImageProfile } from '../image/resolveImageProfile.js'
 
 export type AvatarGenReferenceImage = {
@@ -215,7 +216,7 @@ async function generateOne(
   refs: AvatarGenReferenceImage[],
   prompt: string,
 ): Promise<Buffer> {
-  if (auth.provider !== 'gpt-image-2') {
+  if (auth.provider === 'openrouter') {
     return await openRouterGenerateImageBuffer({
       baseUrl: auth.baseUrl,
       apiKey: auth.apiKey,
@@ -227,6 +228,18 @@ async function generateOne(
       ...(auth.imageSize ? { imageSize: auth.imageSize } : {}),
       ...(auth.quality ? { quality: auth.quality } : {}),
       transparentBackground: auth.transparentBackground,
+      timeoutMs: auth.timeoutMs,
+    })
+  }
+  if (auth.provider === 'gemini') {
+    return await geminiGenerateImageBuffer({
+      baseUrl: auth.baseUrl,
+      apiKey: auth.apiKey,
+      model: auth.model,
+      prompt,
+      referenceImages: refs.map((r) => ({ mimeType: r.mediaType, base64: r.base64 })),
+      aspectRatio: auth.aspectRatio ?? '2:3',
+      ...(auth.imageSize ? { imageSize: auth.imageSize } : {}),
       timeoutMs: auth.timeoutMs,
     })
   }
@@ -265,7 +278,7 @@ async function generateBaseWithoutReference(
   auth: ResolvedImageProfile,
   prompt: string,
 ): Promise<Buffer> {
-  if (auth.provider !== 'gpt-image-2') {
+  if (auth.provider === 'openrouter') {
     return await openRouterGenerateImageBuffer({
       baseUrl: auth.baseUrl,
       apiKey: auth.apiKey,
@@ -276,6 +289,17 @@ async function generateBaseWithoutReference(
       ...(auth.imageSize ? { imageSize: auth.imageSize } : {}),
       ...(auth.quality ? { quality: auth.quality } : {}),
       transparentBackground: auth.transparentBackground,
+      timeoutMs: auth.timeoutMs,
+    })
+  }
+  if (auth.provider === 'gemini') {
+    return await geminiGenerateImageBuffer({
+      baseUrl: auth.baseUrl,
+      apiKey: auth.apiKey,
+      model: auth.model,
+      prompt,
+      aspectRatio: auth.aspectRatio ?? '2:3',
+      ...(auth.imageSize ? { imageSize: auth.imageSize } : {}),
       timeoutMs: auth.timeoutMs,
     })
   }
@@ -319,7 +343,7 @@ export async function generateReal2dAvatarSet(
   await mkdir(outDir, { recursive: true })
   await appendAvatarGenLog(cwd, `start provider=${auth.provider} model=${auth.model} refs=${referenceImages.length} transparentBackground=${auth.transparentBackground} out=${outDir}`)
 
-  const client = auth.provider === 'gpt-image-2'
+  const client = auth.provider === 'openai'
     ? new OpenAI({ apiKey: auth.apiKey, baseURL: auth.baseUrl, timeout: auth.timeoutMs || DEFAULT_TIMEOUT_MS })
     : null
   const files: Real2dAvatarGenResult['files'] = []
