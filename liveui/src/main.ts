@@ -632,17 +632,21 @@ async function bootstrap(): Promise<void> {
   let inboxOpen = false
   let inboxReturnWindowSize: WindowSize | null = null
   let pendingInboxCloseWindowSize: WindowSize | null = null
+  let cameraCaptureOpen = false
+  let cameraReturnWindowSize: WindowSize | null = null
+  let pendingCameraCloseWindowSize: WindowSize | null = null
   let syncMinimalWindowBounds = (): void => {}
 
-  const layoutSuspended = (): boolean => configPanelOpen || inboxOpen
+  const layoutSuspended = (): boolean => configPanelOpen || inboxOpen || cameraCaptureOpen
 
   const pendingLayoutCloseWindowSize = (): WindowSize | null =>
-    pendingConfigPanelCloseWindowSize ?? pendingInboxCloseWindowSize
+    pendingConfigPanelCloseWindowSize ?? pendingInboxCloseWindowSize ?? pendingCameraCloseWindowSize
 
   const clearPendingLayoutCloseWindowSize = (target: WindowSize | null): void => {
     if (!target) return
     if (pendingConfigPanelCloseWindowSize === target) pendingConfigPanelCloseWindowSize = null
     if (pendingInboxCloseWindowSize === target) pendingInboxCloseWindowSize = null
+    if (pendingCameraCloseWindowSize === target) pendingCameraCloseWindowSize = null
   }
 
   let layoutCoordinator: LiveUiLayoutCoordinator | null = null
@@ -1350,6 +1354,16 @@ async function bootstrap(): Promise<void> {
       getTarget: () => pendingInboxCloseWindowSize,
       clearTarget: () => {
         pendingInboxCloseWindowSize = null
+      },
+      beforeRefresh: resetReal2dCompactScaleState,
+    }, attempt)
+  }
+
+  const refreshCameraClosedLayout = (attempt = 0): void => {
+    layoutCoordinator?.refreshAfterWindowRestore({
+      getTarget: () => pendingCameraCloseWindowSize,
+      clearTarget: () => {
+        pendingCameraCloseWindowSize = null
       },
       beforeRefresh: resetReal2dCompactScaleState,
     }, attempt)
@@ -3132,6 +3146,15 @@ async function bootstrap(): Promise<void> {
   }
 
   const setCameraCaptureMode = (open: boolean, reason: string): void => {
+    const wasOpen = cameraCaptureOpen
+    if (open && !wasOpen) {
+      cameraReturnWindowSize = { width: window.innerWidth, height: window.innerHeight }
+      pendingCameraCloseWindowSize = null
+    } else if (!open && wasOpen) {
+      pendingCameraCloseWindowSize = cameraReturnWindowSize
+      cameraReturnWindowSize = null
+    }
+    cameraCaptureOpen = open
     document.body.classList.toggle('liveui-camera-capture-open', open)
     windowManager.requestLayout({ mode: 'camera', reason, open })
     if (cameraCountdown) {
@@ -3149,7 +3172,7 @@ async function bootstrap(): Promise<void> {
     if (cameraCountdownNumber) cameraCountdownNumber.textContent = ''
     setCameraStatus('准备拍照')
     closePreparedCameraPreview()
-    requestAnimationFrame(() => refreshNormalWindowLayout())
+    refreshCameraClosedLayout()
   }
 
   const finishCameraCaptureUi = (): void => {
