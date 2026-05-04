@@ -10,7 +10,11 @@ import type { LiveUiStatusVariant, LiveUiVisionAttachment } from '../../src/live
 import { renderLiveUiBubbleMarkdown } from './bubbleMarkdown.ts'
 import { ReconnectingWebSocket } from './reconnectingWebSocket.ts'
 import { isSocketOpen, sendSocketMessage } from './socketMessages.ts'
-import { FIGURE_LAYOUT } from './figureLayoutConfig.ts'
+import {
+  clampFigureZoom,
+  computeFigureLayoutPlan,
+  computeFigureScale,
+} from './figureManager.ts'
 import {
   HIT_BODY_RE,
   HIT_HEAD_RE,
@@ -72,6 +76,7 @@ import {
 } from './panelLayoutPolicy.ts'
 import { adaptExpression, type RendererKind } from './expressionAdapter.ts'
 import { Real2dLiveUiAdapter, type Real2dExpressionSlot } from './real2dLiveUiAdapter.ts'
+import { createLiveUiWindowManager } from './windowManager.ts'
 
 /** 由 expressions.json 注入，覆盖默认 exp_xx 映射 */
 let spriteEmotionToIdOverride: Record<string, string> | null = null
@@ -94,6 +99,8 @@ declare global {
       compactWindowHeight?: (height: number) => void
       /** Electron：配置面板打开时临时切换到较大的可交互窗口 */
       setConfigPanelOpen?: (open: boolean) => void
+      /** Electron：邮箱打开时临时切换到全屏可交互窗口 */
+      setInboxOpen?: (open: boolean) => void
       /** Electron：拍照倒计时/闪光时临时铺满屏幕 */
       setCameraCaptureOpen?: (open: boolean) => void
       /** Electron：极简模式时收缩/恢复透明窗口边界 */
@@ -395,6 +402,7 @@ async function bootstrap(): Promise<void> {
     resolution: window.devicePixelRatio || 1,
     autoDensity: true,
   })
+  const windowManager = createLiveUiWindowManager(window.infinitiLiveUi)
 
   const face = new PIXI.Graphics()
   face.beginFill(0x6ec5ff, 0.85)
@@ -459,9 +467,6 @@ async function bootstrap(): Promise<void> {
     }
   }
 
-  const layoutFootGapPx = (viewH: number): number =>
-    Math.max(0, Math.round(viewH * FIGURE_LAYOUT.footGapScreenFraction))
-
   const real2dStageHeight = (): number => {
     const controlBar = document.getElementById('liveui-control-bar')
     const barTop = controlBar?.getBoundingClientRect().top
@@ -510,86 +515,45 @@ async function bootstrap(): Promise<void> {
   const layoutFigureInStage = (): void => {
     const W = app.screen.width
     const H = app.screen.height
-    const gap = layoutFootGapPx(H)
     const canvasRect = canvas.getBoundingClientRect()
     const dock = document.getElementById('liveui-bottom-dock')
     const controlBar = document.getElementById('liveui-control-bar')
-    const minPlatformTop = Math.round(H * FIGURE_LAYOUT.minPlatformTopScreenFraction)
-    const fallbackPlatform =
-      dock != null
-        ? dock.getBoundingClientRect().top - canvasRect.top
-        : Math.max(120, H - Math.ceil(window.innerHeight * FIGURE_LAYOUT.fallbackDockReserveScreenFraction))
-    const rawPlatform = controlBar
-      ? controlBar.getBoundingClientRect().top - canvasRect.top
-      : fallbackPlatform
-    const platformTop = Math.max(rawPlatform, minPlatformTop)
-    const soleCeiling = platformTop - FIGURE_LAYOUT.footClearOfControlBarPx
-
-    const stand = FIGURE_LAYOUT.footStandOnOverlapPx
-    const targetFootY = platformTop + stand - gap
-
-    const footNudgeMax = Math.min(
-      FIGURE_LAYOUT.footNudgeMaxPx,
-      Math.round(H * FIGURE_LAYOUT.footNudgeScreenFraction),
-    )
-
-    /**
-     * config liveUi.figureZoom 或 `infiniti-agent live --zoom <n>` 注入的人物缩放系数。仅作用于虚拟人，
-     * 不影响控制条/输入框（它们是独立 DOM）。范围 0.4 ~ 1.5，缺省 1。
-     */
-    const figureZoom = (() => {
-      const z = window.infinitiLiveUi?.figureZoom
-      if (typeof z !== 'number' || !Number.isFinite(z)) return 1
-      return Math.max(0.4, Math.min(1.5, z))
-    })()
+    const plan = computeFigureLayoutPlan({
+      viewportWidth: W,
+      viewportHeight: H,
+      canvasTop: canvasRect.top,
+      dockTop: dock?.getBoundingClientRect().top,
+      controlBarTop: controlBar?.getBoundingClientRect().top,
+      figureZoom: window.infinitiLiveUi?.figureZoom,
+    })
 
     if (liveModel) {
-      const uw = liveModelNaturalW
-      const uh = liveModelNaturalH
-      const scaleVerticalBudget = Math.max(
-        100,
-        Math.round(H * FIGURE_LAYOUT.modelScaleViewportHeightFraction),
-      )
-      const sBase = Math.min(
-        (W * FIGURE_LAYOUT.modelWidthScreenFraction) / uw,
-        (scaleVerticalBudget * FIGURE_LAYOUT.modelHeightScaleFraction) / uh,
-      )
-      const s = sBase * figureZoom
+      const s = computeFigureScale(plan, W, liveModelNaturalW, liveModelNaturalH)
       liveModel.scale.set(s, s)
       liveModel.position.set(W / 2, H / 2)
       const b = liveModel.getBounds()
-      liveModel.position.y += targetFootY - b.bottom
-      liveModel.position.y += footNudgeMax
+      liveModel.position.y += plan.targetFootY - b.bottom
+      liveModel.position.y += plan.footNudgeMax
       const b2 = liveModel.getBounds()
-      if (b2.bottom > soleCeiling) {
-        liveModel.position.y -= b2.bottom - soleCeiling
+      if (b2.bottom > plan.soleCeiling) {
+        liveModel.position.y -= b2.bottom - plan.soleCeiling
       }
     } else if (expressionSprite) {
-      const uw = spriteNaturalW
-      const uh = spriteNaturalH
-      const scaleVerticalBudget = Math.max(
-        100,
-        Math.round(H * FIGURE_LAYOUT.modelScaleViewportHeightFraction),
-      )
-      const sBase = Math.min(
-        (W * FIGURE_LAYOUT.modelWidthScreenFraction) / uw,
-        (scaleVerticalBudget * FIGURE_LAYOUT.modelHeightScaleFraction) / uh,
-      )
-      const s = sBase * figureZoom
+      const s = computeFigureScale(plan, W, spriteNaturalW, spriteNaturalH)
       expressionSprite.scale.set(s, s)
       expressionSprite.position.set(W / 2, H / 2)
       const b = expressionSprite.getBounds()
-      expressionSprite.position.y += targetFootY - b.bottom
-      expressionSprite.position.y += footNudgeMax
+      expressionSprite.position.y += plan.targetFootY - b.bottom
+      expressionSprite.position.y += plan.footNudgeMax
       const b2 = expressionSprite.getBounds()
-      if (b2.bottom > soleCeiling) {
-        expressionSprite.position.y -= b2.bottom - soleCeiling
+      if (b2.bottom > plan.soleCeiling) {
+        expressionSprite.position.y -= b2.bottom - plan.soleCeiling
       }
       mouth.position.set(b2.x + b2.width / 2, b2.bottom + 10)
     } else {
-      let fy = targetFootY - FACE_RADIUS + footNudgeMax
-      if (fy + FACE_RADIUS > soleCeiling) {
-        fy = soleCeiling - FACE_RADIUS
+      let fy = plan.targetFootY - FACE_RADIUS + plan.footNudgeMax
+      if (fy + FACE_RADIUS > plan.soleCeiling) {
+        fy = plan.soleCeiling - FACE_RADIUS
       }
       face.position.set(W / 2, fy)
       mouth.position.set(face.x, face.y + 38)
@@ -658,8 +622,22 @@ async function bootstrap(): Promise<void> {
     })
 
   let configPanelOpen = false
+  let inboxOpen = false
+  let inboxReturnWindowSize: WindowSize | null = null
+  let pendingInboxCloseWindowSize: WindowSize | null = null
   let syncMinimalWindowBounds = (): void => {}
   let dynamicWindowFitTimer: number | undefined
+
+  const layoutSuspended = (): boolean => configPanelOpen || inboxOpen
+
+  const pendingLayoutCloseWindowSize = (): WindowSize | null =>
+    pendingConfigPanelCloseWindowSize ?? pendingInboxCloseWindowSize
+
+  const clearPendingLayoutCloseWindowSize = (target: WindowSize | null): void => {
+    if (!target) return
+    if (pendingConfigPanelCloseWindowSize === target) pendingConfigPanelCloseWindowSize = null
+    if (pendingInboxCloseWindowSize === target) pendingInboxCloseWindowSize = null
+  }
 
   const cancelDynamicWindowFit = (): void => {
     if (dynamicWindowFitTimer !== undefined) {
@@ -669,11 +647,11 @@ async function bootstrap(): Promise<void> {
   }
 
   const scheduleDynamicWindowFit = (attempt = 0): void => {
-    if (!shouldRunDynamicFigureFit({ minimalMode, configPanelOpen })) return
+    if (!shouldRunDynamicFigureFit({ minimalMode, layoutSuspended: layoutSuspended() })) return
     cancelDynamicWindowFit()
     dynamicWindowFitTimer = window.setTimeout(() => {
       dynamicWindowFitTimer = undefined
-      if (!shouldRunDynamicFigureFit({ minimalMode, configPanelOpen })) return
+      if (!shouldRunDynamicFigureFit({ minimalMode, layoutSuspended: layoutSuspended() })) return
       if (minimalMode) {
         syncMinimalWindowBounds()
       } else {
@@ -689,8 +667,6 @@ async function bootstrap(): Promise<void> {
   const scheduleCompactWindowHeight = (attempt = 0): void => {
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
-        const c = window.infinitiLiveUi?.compactWindowHeight
-        if (typeof c !== 'function') return
         layoutFigureInStage()
         const pixiFig = expressionSprite ?? liveModel
         const b = pixiFig?.getBounds() ?? real2dAvatar?.getVisualBounds()
@@ -710,7 +686,7 @@ async function bootstrap(): Promise<void> {
             pendingReal2dCompactHeight = nextH
             real2dCompactBaseStageHeight ??= real2dLayoutHeight || real2dStageHeight()
           }
-          c(nextH)
+          windowManager.compactHeight(nextH)
           if (attempt < 6) {
             window.setTimeout(() => scheduleCompactWindowHeight(attempt + 1), 220)
           }
@@ -1029,11 +1005,7 @@ async function bootstrap(): Promise<void> {
     new URL(`${expBase}.png`, spriteExpressionDirFileUrl).href
   const real2dExpressionIds = real2dExpressionIdsFromEmotionMap(spriteEmotionToIdOverride)
   const real2dNeutralExpressionId = real2dExpressionIds?.neutral ?? 'exp01'
-  const real2dFigureZoom = (() => {
-    const z = window.infinitiLiveUi?.figureZoom
-    if (typeof z !== 'number' || !Number.isFinite(z)) return 1
-    return Math.max(0.4, Math.min(1.5, z))
-  })()
+  const real2dFigureZoom = clampFigureZoom(window.infinitiLiveUi?.figureZoom)
 
   const loadSpritePngTexture = (url: string): Promise<PIXI.Texture> =>
     new Promise((resolve, reject) => {
@@ -1289,18 +1261,19 @@ async function bootstrap(): Promise<void> {
 
   window.addEventListener('resize', () => {
     app.renderer.resize(window.innerWidth, window.innerHeight)
+    const pendingCloseSize = pendingLayoutCloseWindowSize()
     const closeWindowRestored = isWindowSizeRestored(
       { width: window.innerWidth, height: window.innerHeight },
-      pendingConfigPanelCloseWindowSize,
+      pendingCloseSize,
     )
     if (!shouldApplyReal2dResizeLayout({
-      configPanelOpen,
-      pendingConfigPanelCloseRestore: pendingConfigPanelCloseWindowSize != null,
+      layoutSuspended: layoutSuspended(),
+      pendingConfigPanelCloseRestore: pendingCloseSize != null,
       closeWindowRestored,
     })) {
       return
     }
-    if (closeWindowRestored) pendingConfigPanelCloseWindowSize = null
+    if (closeWindowRestored) clearPendingLayoutCloseWindowSize(pendingCloseSize)
     if (real2dAvatar) {
       if (minimalMode) {
         resetReal2dCompactScaleState()
@@ -1355,16 +1328,30 @@ async function bootstrap(): Promise<void> {
     })
   }
 
+  const refreshInboxClosedLayout = (attempt = 0): void => {
+    requestAnimationFrame(() => {
+      const current = { width: window.innerWidth, height: window.innerHeight }
+      if (!isWindowSizeRestored(current, pendingInboxCloseWindowSize) && attempt < 20) {
+        window.setTimeout(() => refreshInboxClosedLayout(attempt + 1), 50)
+        return
+      }
+      pendingInboxCloseWindowSize = null
+      resetReal2dCompactScaleState()
+      refreshNormalWindowLayout()
+    })
+  }
+
   const dockEl = document.getElementById('liveui-bottom-dock')
   if (dockEl && typeof ResizeObserver !== 'undefined') {
     const ro = new ResizeObserver(() => {
       requestAnimationFrame(() => {
+        const pendingCloseSize = pendingLayoutCloseWindowSize()
         if (!shouldApplyReal2dResizeLayout({
-          configPanelOpen,
-          pendingConfigPanelCloseRestore: pendingConfigPanelCloseWindowSize != null,
+          layoutSuspended: layoutSuspended(),
+          pendingConfigPanelCloseRestore: pendingCloseSize != null,
           closeWindowRestored: isWindowSizeRestored(
             { width: window.innerWidth, height: window.innerHeight },
-            pendingConfigPanelCloseWindowSize,
+            pendingCloseSize,
           ),
         })) {
           return
@@ -1400,8 +1387,7 @@ async function bootstrap(): Promise<void> {
       }
       configPanelOpen = open
       document.body.classList.toggle('liveui-config-open', open)
-      window.infinitiLiveUi?.setConfigPanelOpen?.(open)
-      window.infinitiLiveUi?.setIgnoreMouseEvents?.(!open, { forward: true })
+      windowManager.setConfigPanelOpen(open)
       if (configPanelLayoutAction(open) === 'suspend-fit') {
         cancelDynamicWindowFit()
         return
@@ -1423,14 +1409,29 @@ async function bootstrap(): Promise<void> {
   const slashMenuEl = document.getElementById('liveui-slash-menu')
   const slashHintEl = document.getElementById('liveui-slash-menu-hint')
   const slashListEl = document.getElementById('liveui-slash-menu-list')
+  const setInboxWindowOpen = (open: boolean): void => {
+    if (open) {
+      inboxReturnWindowSize = { width: window.innerWidth, height: window.innerHeight }
+      pendingInboxCloseWindowSize = null
+    } else {
+      pendingInboxCloseWindowSize = inboxReturnWindowSize
+      inboxReturnWindowSize = null
+    }
+    inboxOpen = open
+    windowManager.setInboxOpen(open)
+    if (open) {
+      cancelDynamicWindowFit()
+      return
+    }
+    refreshInboxClosedLayout()
+  }
   const inboxController = createLiveInboxController({
     root: inboxRoot,
     toggle: inboxToggle,
     panel: inboxPanel,
     socket,
     positionAtComposer: positionInboxAtComposer,
-    setConfigPanelOpen: (open) => window.infinitiLiveUi?.setConfigPanelOpen?.(open),
-    setIgnoreMouseEvents: (ignore, options) => window.infinitiLiveUi?.setIgnoreMouseEvents?.(ignore, options),
+    setInboxOpen: setInboxWindowOpen,
     savePath: (request) => window.infinitiLiveUi?.savePath?.(request),
     getPort: () => window.infinitiLiveUi?.port || new URLSearchParams(window.location.search).get('port') || '8080',
   })
@@ -2345,7 +2346,7 @@ async function bootstrap(): Promise<void> {
     } else if (msg.type === 'VISION_CAPTURE_RESULT') {
       const requestId = typeof msg.data?.requestId === 'string' ? msg.data.requestId : ''
       if (!requestId || requestId !== activeCameraRequestId) return
-      window.infinitiLiveUi?.setCameraCaptureOpen?.(false)
+      windowManager.setCameraCaptureOpen(false)
       finishCameraCaptureUi()
       if (msg.data?.ok === true) {
         const vision = parseVisionAttachment(msg.data.vision)
@@ -2557,11 +2558,11 @@ async function bootstrap(): Promise<void> {
       const bottom = Math.max(...rects.map((r) => r.bottom))
       const width = Math.ceil(right - left + 24)
       const height = Math.ceil(bottom - top + 16)
-      window.infinitiLiveUi?.setMinimalModeOpen?.(true, { width, height })
+      windowManager.setMinimalModeOpen(true, { width, height })
     }
     requestAnimationFrame(() => {
       if (!minimalMode) {
-        window.infinitiLiveUi?.setMinimalModeOpen?.(false)
+        windowManager.setMinimalModeOpen(false)
         refreshNormalWindowLayout()
         requestAnimationFrame(() => forceWindowInteractive())
         return
@@ -3214,14 +3215,14 @@ async function bootstrap(): Promise<void> {
     cameraUiTimeout = window.setTimeout(() => {
       if (activeCameraRequestId !== requestId) return
       console.warn('[liveui] 拍照请求超时，已恢复相机按钮')
-      window.infinitiLiveUi?.setCameraCaptureOpen?.(false)
+      windowManager.setCameraCaptureOpen(false)
       finishCameraCaptureUi()
     }, 30_000)
     try {
       if (!isSocketOpen(socket)) {
         throw new Error('LiveUI WebSocket 未连接，无法请求 CLI 摄像头拍照')
       }
-      window.infinitiLiveUi?.setCameraCaptureOpen?.(true)
+      windowManager.setCameraCaptureOpen(true)
       layoutFigureInStage()
       positionBubbleOverFigure()
       if (activeCameraRequestId !== requestId) return
@@ -3232,7 +3233,7 @@ async function bootstrap(): Promise<void> {
       await runCameraCountdown()
     } catch (e) {
       console.warn(`[liveui] 拍照失败: ${describeCameraError(e)}`)
-      window.infinitiLiveUi?.setCameraCaptureOpen?.(false)
+      windowManager.setCameraCaptureOpen(false)
       if (activeCameraRequestId === requestId) finishCameraCaptureUi()
     }
   }
@@ -3275,7 +3276,7 @@ async function bootstrap(): Promise<void> {
     let windowIgnoring = true
     forceWindowInteractive = () => {
       windowIgnoring = false
-      setIgnore(false)
+      windowManager.setInteractive(true)
     }
 
     const isOverInteractive = (ex: number, ey: number): boolean => {

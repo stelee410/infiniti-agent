@@ -38,8 +38,7 @@ type LiveInboxControllerOptions = {
   panel: HTMLElement | null
   socket: SocketLike
   positionAtComposer(): void
-  setConfigPanelOpen(open: boolean): void
-  setIgnoreMouseEvents(ignore: boolean, options?: { forward?: boolean }): void
+  setInboxOpen(open: boolean): void
   savePath(request: { defaultPath: string }): Promise<string | undefined> | string | undefined
   getPort(): string
 }
@@ -206,8 +205,7 @@ export function createLiveInboxController(options: LiveInboxControllerOptions): 
     options.toggle.innerHTML = open ? CLOSE_ICON_SVG : INBOX_ICON_SVG
     options.toggle.title = open ? '关闭你的邮箱' : '你的邮箱'
     options.toggle.setAttribute('aria-label', open ? '关闭你的邮箱' : '你的邮箱')
-    options.setConfigPanelOpen(open)
-    options.setIgnoreMouseEvents(!open, { forward: true })
+    options.setInboxOpen(open)
     render()
     if (open) markVisibleInboxReadSoon()
   }

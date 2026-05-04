@@ -8,17 +8,21 @@ export function configPanelLayoutAction(open: boolean): ConfigPanelLayoutAction 
 
 export function shouldRunDynamicFigureFit(state: {
   minimalMode: boolean
-  configPanelOpen: boolean
+  configPanelOpen?: boolean
+  layoutSuspended?: boolean
 }): boolean {
-  return state.minimalMode || !state.configPanelOpen
+  const layoutSuspended = state.layoutSuspended ?? Boolean(state.configPanelOpen)
+  return state.minimalMode || !layoutSuspended
 }
 
 export function shouldApplyReal2dResizeLayout(state: {
-  configPanelOpen: boolean
+  configPanelOpen?: boolean
+  layoutSuspended?: boolean
   pendingConfigPanelCloseRestore: boolean
   closeWindowRestored: boolean
 }): boolean {
-  if (state.configPanelOpen) return false
+  const layoutSuspended = state.layoutSuspended ?? Boolean(state.configPanelOpen)
+  if (layoutSuspended) return false
   if (state.pendingConfigPanelCloseRestore) return state.closeWindowRestored
   return true
 }
