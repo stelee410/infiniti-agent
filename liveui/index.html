@@ -443,6 +443,27 @@
       #liveui-control-bar:active {
         cursor: grabbing;
       }
+      #liveui-avatar-fallback {
+        box-sizing: border-box;
+        flex: 0 0 auto;
+        align-self: center;
+        width: 64px;
+        height: 64px;
+        margin: 0 auto 2px;
+        border-radius: 50%;
+        object-fit: cover;
+        background: #0f172a;
+        border: 2px solid rgba(255, 255, 255, 0.78);
+        box-shadow:
+          0 10px 24px rgba(0, 0, 0, 0.48),
+          0 0 0 5px rgba(20, 22, 28, 0.86);
+        pointer-events: none;
+        -webkit-app-region: no-drag;
+        app-region: no-drag;
+      }
+      #liveui-avatar-fallback[hidden] {
+        display: none;
+      }
       #liveui-window-tools {
         position: absolute;
         top: -18px;
@@ -1369,6 +1390,7 @@
         </div>
         <div id="liveui-bar-body">
           <aside id="liveui-bar-side">
+            <img id="liveui-avatar-fallback" alt="" hidden aria-hidden="true" />
             <div
               id="liveui-status-pill"
               class="liveui-status-pill liveui-status-pill--loading"

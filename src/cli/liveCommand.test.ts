@@ -30,6 +30,7 @@ function deps(overrides: Partial<LiveCommandDeps> = {}): LiveCommandDeps {
       model3FileUrl: 'file:///model.json',
       warnings: [],
     })),
+    resolveAvatarFallbackForUi: vi.fn(() => null),
     buildLiveUiVoiceMicEnvJson: vi.fn(() => '{"mode":"push_to_talk"}'),
     ...overrides,
   }
@@ -79,5 +80,23 @@ describe('liveCommand', () => {
     expect(plan.figureZoomOverride).toBe(1.2)
     expect(plan.warnings).toContain('renderer=real2d 需要 liveUi.spriteExpressions.dir，当前将回退 Live2D/占位')
     expect(plan.info).toContain('人物缩放: 120%')
+  })
+
+  it('uses avatar fallback when sprite expressions are unavailable', () => {
+    const plan = resolveLiveCommandPlan(
+      '/project',
+      cfg({ renderer: 'sprite' }),
+      {},
+      deps({
+        resolveAvatarFallbackForUi: vi.fn(() => ({
+          avatarPath: '/project/.infiniti-agent/ref/jess/avatar.jpg',
+          avatarFileUrl: 'file:///project/.infiniti-agent/ref/jess/avatar.jpg',
+        })),
+      }),
+    )
+
+    expect(plan.renderer).toBe('live2d')
+    expect(plan.avatarFallbackFileUrl).toBe('file:///project/.infiniti-agent/ref/jess/avatar.jpg')
+    expect(plan.info).toContain('spriteExpressions 不可用，已启用圆形头像兜底')
   })
 })

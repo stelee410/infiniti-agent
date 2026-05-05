@@ -88,6 +88,9 @@ TTS 服务由 `../infiniti-tts-service` 独立启动；主仓只配置 `provider
 | `infiniti-agent init` | 配置 LLM（写入全局 `~/.infiniti-agent/config.json`） |
 | `infiniti-agent migrate` | 将全局配置复制到当前目录 `.infiniti-agent/`，实现项目级独立 |
 | `infiniti-agent upgrade` | 升级旧版 config.json 到最新格式 |
+| `infiniti-agent export <file>` | 导出当前 agent layout 为 zip 格式 `.agent` 文件 |
+| `infiniti-agent import <file>` | 从 `.agent` 文件导入 agent layout，已有 layout 时询问是否覆盖 |
+| `infiniti-agent sync` | 登录 LinkYun，选择 Agent，并按时间戳双向同步 `.agent` 归档 |
 | `infiniti-agent link` | 从 SOUL.md 提取邮件配置，生成 `mail-poller.sh` 邮件轮询守护脚本 |
 | `infiniti-agent skill add <source>` | 安装 Skill（支持 `owner/repo`、git URL、本地路径） |
 | `infiniti-agent skill list` | 列出当前项目已安装的 Skills |
@@ -175,6 +178,20 @@ your-project/
 ```
 
 不同目录的 agent 完全隔离——可以各自安装不同的 skills，拥有不同的 memory 和对话历史。
+
+可以把当前目录的 agent 打包迁移到另一个目录：
+
+```bash
+infiniti-agent export jess.agent
+cd ../another-project
+infiniti-agent import ../jess.agent
+```
+
+`.agent` 文件本质上是 zip，包含 `.infiniti-agent/` 以及 `SOUL.md`、`INFINITI.md`、`CLAUDE.md` 等 agent 提示文件。若目标目录已存在 agent layout，导入时会询问是否覆盖；自动化脚本可使用 `infiniti-agent import jess.agent --force`。
+
+`infiniti-agent sync` 会把 LinkYun 登录信息、workspace 和选中的 Agent code 保存在当前目录 `.env.local`，下次自动复用；该文件不会被 `export` 打进 `.agent`，也默认不提交 Git。手动同步时会先拉取 Agent 的 SOUL / 角色素材，再查看服务器 `.agent` 版本：如果服务器归档比本地 `.infiniti-agent/session.json` 更新，就下载并覆盖当前 layout；如果服务器没有归档或本地 session 更新，就导出并上传本地 `.agent`。可用 `--pull` 或 `--push` 强制方向，`--login` 强制重新登录，`--agent <code>` 切换绑定的 LinkYun Agent。
+
+当当前目录已有 `.env.local` 绑定 Agent 时，`infiniti-agent` / `chat` / `live` / `cli` 启动前会自动做一次 **pull-only** 同步：只在服务器 `.agent` 更新时下载，不会在启动时自动上传旧本地状态；正常退出时会自动 push 一次。覆盖导入前会把 `SOUL.md`、`session.json`、`memory.json`、`subconscious.json`、`schedules.json`、`sessions.db`、`knowledge.db` 等关键文件备份到 `.infiniti-agent/backups/sync/`（保留最近 5 份），每次同步会追加记录到 `.infiniti-agent/sync-history.jsonl`。临时跳过自动同步可用 `INFINITI_AGENT_SKIP_STARTUP_SYNC=1 infiniti-agent`。
 
 ## 自定义 Agent 行为
 

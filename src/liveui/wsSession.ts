@@ -71,6 +71,7 @@ export class LiveUiSession {
   private lastVisionCapture: { requestId: string; vision: LiveUiVisionAttachment } | undefined
   private pendingVisionAttachment: LiveUiVisionAttachment | undefined
   private pendingFileAttachments: LiveUiFileAttachment[] = []
+  private lastStatusPill: { label: string; variant: LiveUiStatusVariant } = { label: '就绪', variant: 'ready' }
 
   private readonly mediaRoots: string[]
 
@@ -281,6 +282,7 @@ export class LiveUiSession {
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'TTS_STATUS', data: { available: this.ttsEngine != null, enabled: this.ttsEnabled } }))
         ws.send(JSON.stringify({ type: 'ASR_STATUS', data: { available: this.asrEngine != null } }))
+        ws.send(JSON.stringify({ type: 'STATUS_PILL', data: this.lastStatusPill }))
       }
       ws.on('message', (buf) => {
         try {
@@ -487,6 +489,7 @@ export class LiveUiSession {
 
   /** 同步底部栏左侧状态胶囊（就绪 / 处理中 / 渲染未连接等）。 */
   sendStatusPill(label: string, variant: LiveUiStatusVariant): void {
+    this.lastStatusPill = { label, variant }
     this.broadcast({ type: 'STATUS_PILL', data: { label, variant } })
   }
 

@@ -31,9 +31,9 @@ import { spawnLiveElectron } from './liveui/spawnRenderer.js'
 import { buildLiveUiVoiceMicEnvJson, VOICE_MIC_DEFAULT_SPEECH_RMS_THRESHOLD } from './liveui/voiceMicEnv.js'
 import { runTestAsr, parseTestAsrRms, parseTestAsrInt } from './cli/testAsr.js'
 import { runTestCamera, parseTestCameraInt } from './cli/testCamera.js'
-import { resolveLive2dModelForUi, resolveSpriteExpressionDirForUi } from './liveui/resolveModelPath.js'
+import { resolveAvatarFallbackForUi, resolveLive2dModelForUi, resolveSpriteExpressionDirForUi } from './liveui/resolveModelPath.js'
 import { runAddLlm, runSelectLlm } from './cli/llmCli.js'
-import { runLinkyunSync } from './cli/linkyunSync.js'
+import { runLinkyunShutdownPush, runLinkyunStartupSync, runLinkyunSync } from './cli/linkyunSync.js'
 import { runGenerateAvatar } from './cli/generateAvatar.js'
 import { runSetLiveAgent } from './cli/setLiveAgent.js'
 import { parseWorkerCommand, runWorkerCommand } from './cli/workerCommands.js'
@@ -41,10 +41,13 @@ import { defaultLegacyCliDeps, parseLegacyCliCommand, runLegacyCliCommand } from
 import { parseGlobalFlags } from './cli/globalFlags.js'
 import { runMigrateCommand } from './cli/migrateCommand.js'
 import { runUpgradeCommand } from './cli/upgradeCommand.js'
+import { exportAgentArchive, importAgentArchive } from './cli/agentArchive.js'
 import { LiveCommandError, resolveLiveCommandPlan } from './cli/liveCommand.js'
 import { disableUiLogFile, enableUiLogFile, withUiLogFile } from './utils/uiLogFile.js'
 
 const cwd = process.cwd()
+let startupSyncDone = false
+let shutdownPushDone = false
 
 function parseAddLlmProviderFlag(s?: string): 'openai' | 'anthropic' | 'gemini' | 'openrouter' | undefined {
   if (!s) return undefined
@@ -56,6 +59,28 @@ function parseAddLlmProviderFlag(s?: string): 'openai' | 'anthropic' | 'gemini' 
 function applyThinkingOverride(cfg: Awaited<ReturnType<typeof loadConfig>>, disable: boolean): Awaited<ReturnType<typeof loadConfig>> {
   if (!disable) return cfg
   return { ...cfg, thinking: { ...cfg.thinking, mode: 'disabled' as const } }
+}
+
+async function maybeRunStartupSync(): Promise<void> {
+  if (startupSyncDone) return
+  startupSyncDone = true
+  if (process.env.INFINITI_AGENT_SKIP_STARTUP_SYNC === '1') return
+  try {
+    await runLinkyunStartupSync(cwd)
+  } catch (e) {
+    console.error(`[sync] 启动同步失败，继续启动: ${(e as Error).message}`)
+  }
+}
+
+async function maybeRunShutdownPush(): Promise<void> {
+  if (shutdownPushDone) return
+  shutdownPushDone = true
+  if (process.env.INFINITI_AGENT_SKIP_STARTUP_SYNC === '1') return
+  try {
+    await runLinkyunShutdownPush(cwd)
+  } catch (e) {
+    console.error(`[sync] 结束同步失败: ${(e as Error).message}`)
+  }
 }
 
 function isUiModeInvocation(argv: string[]): boolean {
@@ -164,6 +189,7 @@ function restartLiveUiElectron(
   }
 
   const useSprite = Boolean(spriteResolved?.dirFileUrl)
+  const avatarFallback = useSprite ? null : resolveAvatarFallbackForUi(cwd)
   const renderer = cfg.liveUi?.renderer ?? (useSprite ? 'sprite' : 'live2d')
   const useReal2d = renderer === 'real2d' && useSprite
   const useSpriteOnly = renderer === 'sprite' && useSprite
@@ -179,6 +205,7 @@ function restartLiveUiElectron(
     renderer: useReal2d ? 'real2d' : useSpriteOnly ? 'sprite' : 'live2d',
     model3FileUrl: useReal2d || useSpriteOnly ? undefined : resolved?.model3FileUrl,
     spriteExpressionDirFileUrl: useReal2d || useSpriteOnly ? spriteResolved?.dirFileUrl : undefined,
+    avatarFallbackFileUrl: avatarFallback?.avatarFileUrl,
     voiceMicJson: buildLiveUiVoiceMicEnvJson(cfg.liveUi, { auto: opts.auto === true }),
     figureZoom: resolveLiveUiFigureZoom(cfg, opts.figureZoom),
   })
@@ -208,6 +235,8 @@ async function runChatTui(
     liveUiModel3FileUrl?: string
     /** `live` 且配置了 `spriteExpressions.dir` 时注入 Electron（`INFINITI_LIVEUI_SPRITE_EXPRESSION_DIR`） */
     liveUiSpriteExpressionDirFileUrl?: string
+    /** `spriteExpressions.dir` 不可用时注入圆形头像兜底 */
+    liveUiAvatarFallbackFileUrl?: string
     /** `live` 时注入麦克 VAD（JSON → Electron `INFINITI_LIVEUI_VOICE_MIC`） */
     liveUiVoiceMicJson?: string
     /** `live --zoom` 注入：人物显示缩放（0.4 ~ 1.5），不影响控制条/输入框 */
@@ -243,6 +272,7 @@ async function runChatTui(
         renderer: opts.liveUiRenderer,
         model3FileUrl: opts.liveUiModel3FileUrl,
         spriteExpressionDirFileUrl: opts.liveUiSpriteExpressionDirFileUrl,
+        avatarFallbackFileUrl: opts.liveUiAvatarFallbackFileUrl,
         voiceMicJson: opts.liveUiVoiceMicJson,
         figureZoom: resolveLiveUiFigureZoom(cfg, opts.liveUiFigureZoom),
       })
@@ -299,10 +329,12 @@ async function main(): Promise<void> {
 
   const legacyCliCommand = parseLegacyCliCommand(argv)
   if (legacyCliCommand) {
+    await maybeRunStartupSync()
     await runLegacyCliCommand(
       legacyCliCommand,
       defaultLegacyCliDeps(cwd, disableThinking, applyThinkingOverride),
     )
+    await maybeRunShutdownPush()
     return
   }
 
@@ -342,6 +374,36 @@ async function main(): Promise<void> {
     })
 
   program
+    .command('export')
+    .description('导出当前目录的 agent layout（.infiniti-agent/、SOUL.md 等）为 zip 格式 .agent 文件')
+    .argument('<file>', '输出文件，例如 jess.agent')
+    .action(async (file: string) => {
+      try {
+        const result = await exportAgentArchive(cwd, file)
+        console.log(`✓ 已导出 ${result.entries.length} 项到 ${result.archivePath}`)
+      } catch (e) {
+        console.error((e as Error).message)
+        process.exit(2)
+      }
+    })
+
+  program
+    .command('import')
+    .description('从 .agent（zip）文件导入 agent layout 到当前目录；已有 layout 时会询问是否覆盖')
+    .argument('<file>', '输入文件，例如 jess.agent')
+    .option('-f, --force', '已有 agent layout 时直接覆盖，跳过确认')
+    .action(async (file: string, cmdOpts: { force?: boolean }) => {
+      try {
+        const result = await importAgentArchive(cwd, file, { force: cmdOpts.force })
+        const prefix = result.overwritten ? '✓ 已覆盖并导入' : '✓ 已导入'
+        console.log(`${prefix} ${result.entries.length} 项到 ${cwd}`)
+      } catch (e) {
+        console.error((e as Error).message)
+        process.exit(2)
+      }
+    })
+
+  program
     .command('add_llm')
     .description('交互式添加 LLM profile 到项目 .infiniti-agent/config.json（拉取模型列表、选模型）')
     .option('--profile <name>', 'Profile 名称（默认 main）')
@@ -373,7 +435,11 @@ async function main(): Promise<void> {
     .command('chat')
     .description('进入对话界面（无参数时默认）')
     .action(async () => {
-      await withUiLogFile(cwd, () => runChatTui({ skipPermissions, disableThinking }))
+      await withUiLogFile(cwd, async () => {
+        await maybeRunStartupSync()
+        await runChatTui({ skipPermissions, disableThinking })
+        await maybeRunShutdownPush()
+      })
     })
 
   program
@@ -387,58 +453,61 @@ async function main(): Promise<void> {
     )
     .action(async (cmdOpts: { port?: string; zoom?: string; auto?: boolean }) => {
       await withUiLogFile(cwd, async () => {
-      if (!configExistsSync(cwd)) {
-        console.error('尚未配置。请先运行: infiniti-agent init 或 infiniti-agent migrate')
-        process.exit(2)
-      }
-      let cfg: Awaited<ReturnType<typeof loadConfig>>
-      try {
-        cfg = applyThinkingOverride(await loadConfig(cwd), disableThinking)
-      } catch (e) {
-        console.error((e as Error).message)
-        process.exit(2)
-      }
-
-      let livePlan: ReturnType<typeof resolveLiveCommandPlan>
-      try {
-        livePlan = resolveLiveCommandPlan(cwd, cfg, cmdOpts)
-      } catch (e) {
-        if (e instanceof LiveCommandError) {
-          console.error(e.message)
+        await maybeRunStartupSync()
+        if (!configExistsSync(cwd)) {
+          console.error('尚未配置。请先运行: infiniti-agent init 或 infiniti-agent migrate')
           process.exit(2)
         }
-        throw e
-      }
-      for (const w of livePlan.warnings) {
-        console.error(`[liveui] ${w}`)
-      }
-      for (const msg of livePlan.info) {
-        console.error(`[liveui] ${msg}`)
-      }
+        let cfg: Awaited<ReturnType<typeof loadConfig>>
+        try {
+          cfg = applyThinkingOverride(await loadConfig(cwd), disableThinking)
+        } catch (e) {
+          console.error((e as Error).message)
+          process.exit(2)
+        }
 
-      const liveUi = new LiveUiSession(livePlan.port, { mediaRoots: [localAgentDir(cwd)] })
-      await runChatTui({
-        skipPermissions,
-        disableThinking,
-        liveUi,
-        liveUiRenderer: livePlan.renderer,
+        let livePlan: ReturnType<typeof resolveLiveCommandPlan>
+        try {
+          livePlan = resolveLiveCommandPlan(cwd, cfg, cmdOpts)
+        } catch (e) {
+          if (e instanceof LiveCommandError) {
+            console.error(e.message)
+            process.exit(2)
+          }
+          throw e
+        }
+        for (const w of livePlan.warnings) {
+          console.error(`[liveui] ${w}`)
+        }
+        for (const msg of livePlan.info) {
+          console.error(`[liveui] ${msg}`)
+        }
+
+        const liveUi = new LiveUiSession(livePlan.port, { mediaRoots: [localAgentDir(cwd)] })
+        await runChatTui({
+          skipPermissions,
+          disableThinking,
+          liveUi,
+          liveUiRenderer: livePlan.renderer,
         liveUiModel3FileUrl: livePlan.model3FileUrl,
         liveUiSpriteExpressionDirFileUrl: livePlan.spriteExpressionDirFileUrl,
+        liveUiAvatarFallbackFileUrl: livePlan.avatarFallbackFileUrl,
         liveUiVoiceMicJson: livePlan.voiceMicJson,
-        liveUiFigureZoom: livePlan.figureZoomOverride,
-        onConfigReload: async (nextCfg) => {
-          if (nextCfg.liveUi?.port && nextCfg.liveUi.port !== liveUi.port) {
-            console.warn(
-              `[liveui] liveUi.port 已保存为 ${nextCfg.liveUi.port}，当前会话仍使用 ws://127.0.0.1:${liveUi.port}；端口变更需下次启动生效。`,
-            )
-          }
-          await configureLiveUiEngines(liveUi, nextCfg)
-          restartLiveUiElectron(liveUi, nextCfg, {
-            auto: cmdOpts.auto === true,
-            figureZoom: livePlan.figureZoomOverride,
-          })
-        },
-      })
+          liveUiFigureZoom: livePlan.figureZoomOverride,
+          onConfigReload: async (nextCfg) => {
+            if (nextCfg.liveUi?.port && nextCfg.liveUi.port !== liveUi.port) {
+              console.warn(
+                `[liveui] liveUi.port 已保存为 ${nextCfg.liveUi.port}，当前会话仍使用 ws://127.0.0.1:${liveUi.port}；端口变更需下次启动生效。`,
+              )
+            }
+            await configureLiveUiEngines(liveUi, nextCfg)
+            restartLiveUiElectron(liveUi, nextCfg, {
+              auto: cmdOpts.auto === true,
+              figureZoom: livePlan.figureZoomOverride,
+            })
+          },
+        })
+        await maybeRunShutdownPush()
       })
     })
 
@@ -494,6 +563,7 @@ async function main(): Promise<void> {
         console.error('用法: infiniti-agent cli <prompt>')
         process.exit(2)
       }
+      await maybeRunStartupSync()
       if (!configExistsSync(cwd)) {
         console.error('尚未配置。请先运行: infiniti-agent init 或 infiniti-agent migrate')
         process.exit(2)
@@ -501,6 +571,7 @@ async function main(): Promise<void> {
       try {
         const cfg = applyThinkingOverride(await loadConfig(cwd), disableThinking)
         await runCliPrompt(cfg, prompt)
+        await maybeRunShutdownPush()
       } catch (e) {
         console.error((e as Error).message)
         process.exit(2)
@@ -551,18 +622,26 @@ async function main(): Promise<void> {
   program
     .command('sync')
     .description(
-      '登录 LinkYun，选择 AI Agent，将 system prompt 写入 SOUL.md，并下载头像与角色设定到 .infiniti-agent/ref/<Agent Code>/',
+      '登录 LinkYun，选择 AI Agent，同步 SOUL/素材，并按 session.json 时间戳双向同步 .agent 归档',
     )
     .option(
       '--api-base <url>',
       'API 根地址（不含 /api/v1；省略时在终端询问，直接 Enter 为 https://api.linkyun.co）',
     )
     .option('--workspace <code>', '指定 X-Workspace-Code（默认使用登录接口返回的工作空间）')
-    .action(async (cmd: { apiBase?: string; workspace?: string }) => {
+    .option('--agent <code>', '指定 LinkYun Agent code，并写入 .env.local')
+    .option('--login', '强制重新登录并刷新 .env.local')
+    .option('--pull', '强制以服务器最新 .agent 为准，下载并覆盖当前 layout')
+    .option('--push', '强制以本地 layout 为准，导出并上传 .agent')
+    .action(async (cmd: { apiBase?: string; workspace?: string; agent?: string; login?: boolean; pull?: boolean; push?: boolean }) => {
       try {
         await runLinkyunSync(cwd, {
           apiBase: cmd.apiBase,
           workspaceCode: cmd.workspace,
+          agentCode: cmd.agent,
+          forceLogin: cmd.login,
+          pull: cmd.pull,
+          push: cmd.push,
         })
       } catch (e) {
         console.error((e as Error).message)

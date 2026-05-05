@@ -6,6 +6,7 @@ __pycache__/
 
 # 项目级 Agent 配置与数据（含 API Key）；由 migrate 生成，勿提交
 .infiniti-agent/
+.env.local
 # setup:liveui 复制到仓库根时与示例重复，保留本地即可
 /model_dict.json
 
