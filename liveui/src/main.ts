@@ -1397,6 +1397,7 @@ async function bootstrap(): Promise<void> {
         }
         layoutFigureInStage()
         applyReal2dStageLayout()
+        scheduleReal2dVerticalPlacement()
         positionBubbleOverFigure()
         scheduleDynamicWindowFit()
       })
@@ -2514,6 +2515,7 @@ async function bootstrap(): Promise<void> {
     inputHistoryIndex = inputHistory.length
     inputHistoryDraft = ''
     pushComposerDraft()
+    refreshNormalWindowLayout()
   })
 
   wirePointerInteractions()
