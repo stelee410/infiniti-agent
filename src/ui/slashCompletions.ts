@@ -57,13 +57,6 @@ const COMMAND_ITEMS: SlashItem[] = [
     insert: '/config ',
   },
   {
-    id: '/debug',
-    kind: 'command',
-    label: '/debug',
-    desc: '切换 LiveUI 调试叠层：左侧情绪，右侧五维关系指数',
-    insert: '/debug ',
-  },
-  {
     id: '/schedule',
     kind: 'command',
     label: '/schedule',

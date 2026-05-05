@@ -28,6 +28,8 @@ export async function runLucidDream(opts: {
         episode: opts.episode,
         rem: opts.rem,
         guardrails: [
+          'Dreams are first-person self-organization.',
+          'Use first person: 我.',
           'Creative insights are not facts.',
           'Do not write creative insights into long-term factual memory.',
           'Every idea must be grounded in known context.',
@@ -58,7 +60,7 @@ function fallbackLucidDream(episode: DreamEpisode, rem: RemDreamInsight): LucidD
   }
   const idea: LucidDreamIdea = {
     id: newIdeaId(),
-    idea: `可以把下一次梦境聚焦在一个未解决问题上，而不是平均整理全部内容：${base.slice(0, 120)}`,
+    idea: `我想让下一次梦境聚焦在一个留在我心里的未解决问题上，而不是平均整理全部内容：${base.slice(0, 120)}`,
     type: 'experiment',
     groundedIn: [base.slice(0, 180)],
     usefulness: 0.72,

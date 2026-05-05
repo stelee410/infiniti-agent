@@ -49,7 +49,8 @@ describe('parseChatSlashCommand', () => {
 
   it('keeps help text centralized', () => {
     expect(CHAT_HELP_TEXT).toContain('/schedule')
-    expect(CHAT_HELP_TEXT).toContain('/dream')
+    expect(CHAT_HELP_TEXT).not.toContain('/dream')
+    expect(CHAT_HELP_TEXT).not.toContain('/debug')
     expect(CHAT_HELP_TEXT).toContain('/avatargen')
   })
 })

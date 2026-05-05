@@ -24,8 +24,8 @@ recent conversation and history fragments
 One-line definition:
 
 ```text
-Long-term memory lets Jess remember what happened.
-Dream Runtime lets Jess understand what those events mean for me, you, and what we are building together.
+Long-term memory preserves stable facts about the outside world.
+Dream Runtime lets the current agent organize itself in first person after experience.
 ```
 
 ## 2. Runtime Constraints
@@ -43,7 +43,7 @@ Non-requirements for v0.1:
 Each digital human has its own working directory and independent package:
 
 ```text
-avatar-jess/
+avatar-current-agent/
   .infiniti-agent/
     subconscious.json
     session.json
@@ -72,7 +72,7 @@ Long-term Memory:
 Choose which facts, preferences, and project contexts are worth preserving.
 
 Dream Runtime:
-Use recent experience to re-understand the user, the relationship, the project direction, and Jess's own collaboration strategy.
+Use recent experience to reorganize the agent's own attention, tone, boundaries, continuity, and next waking posture.
 ```
 
 Relationship:
@@ -100,16 +100,16 @@ What should be saved?
 It becomes dreaming when it also answers:
 
 ```text
-What is Steven really trying to advance right now?
-How should Jess adjust her collaboration style?
-What should Jess help track next?
-What does this imply for relationship, trust, tone, and continuity?
-Is there a message Jess wants to leave for Steven?
+What stayed with me from this experience?
+What did I misunderstand or over-structure?
+What should I carry forward when I wake up?
+How do I want to adjust my tone, attention, and boundaries?
+Is there a first-person thought I want to leave as a diary note?
 ```
 
 ## 4. Product Goals
 
-Dream Runtime should give Jess:
+Dream Runtime should give the current agent:
 
 - Long-term continuity.
 - Relationship continuity.
@@ -279,7 +279,7 @@ Example:
 
 ```text
 Steven 当前讨论的重点不是多用户架构，而是单机数字人如何形成后台连续理解。
-Jess 应该优先帮助他澄清概念边界，再推进工程落点。
+我醒来后应该先澄清概念边界，再推进工程落点。
 ```
 
 REM Dream may make associations, but every association must be marked as insight or hypothesis. It must not be written directly as a stable fact.
@@ -480,7 +480,7 @@ Recommended prompt block:
 ## Dream Context
 
 Long-horizon objective:
-帮助 Steven 把 Jess 的 Dream Runtime 设计成单机可落地的后台认知系统。
+帮助当前 agent 把 Dream Runtime 设计成单机可落地的第一人称自我整理系统。
 
 Recent insight:
 最近讨论显示，Steven 当前更关心“做梦”和“记忆压缩”的本质区别，以及梦境如何进入提示词工程。
@@ -561,7 +561,7 @@ Principles:
 Dream Diary example:
 
 ```text
-# Jess 的梦境笔记
+# 我的梦境笔记
 
 昨晚我整理了我们最近的讨论。
 
@@ -640,7 +640,7 @@ Wait for future confirmation.
 
 ### Phase 1: Dream Diary MVP
 
-Goal: Jess can periodically dream and leave a readable diary.
+Goal: the current agent can periodically dream and leave a readable first-person diary.
 
 Tasks:
 
@@ -685,7 +685,7 @@ Tasks:
 
 ### Phase 4: MetaState + Objective
 
-Goal: Jess forms a long-term collaboration direction.
+Goal: the current agent forms a long-term first-person waking posture.
 
 Tasks:
 
@@ -777,13 +777,13 @@ async function runDream(mode: DreamMode, source: DreamSource) {
 
 v0.1 is successful when:
 
-- Jess checks whether she should dream every 4 or 8 hours.
+- The current agent checks whether it should dream every 4 or 8 hours.
 - New content produces a Dream Diary.
 - Dream Diary is user-readable.
 - Dream Context enters the Main Agent prompt.
 - Main Agent does not read the full dream.
 - Long-term memory only stores high-confidence facts.
-- Jess maintains a short-term long-horizon objective.
+- The current agent maintains a short-term long-horizon objective.
 
 ## 20. Final Principle
 
@@ -798,7 +798,7 @@ turning direction into continuity in the next conversation.
 Relationship to memory:
 
 ```text
-Long-term memory is Jess's archive.
-Dream Runtime is Jess's night-time reflection.
-Prompt Context is the small piece of lucid memory Jess carries into the day.
+Long-term memory is the archive of stable outside-world facts.
+Dream Runtime is the agent's first-person self-organization.
+Prompt Context is the small piece of organized self the agent carries into the day.
 ```

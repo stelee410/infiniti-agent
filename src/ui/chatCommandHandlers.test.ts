@@ -123,6 +123,7 @@ describe('handleDreamSlashCommand', () => {
 
     await handleDreamSlashCommand(cwd, '/dream run', { kind: 'dreamRun', mode: 'full' }, controller, u)
 
+    expect(u.setNotice).toHaveBeenCalledWith(expect.stringContaining('我开始做梦了'))
     expect(controller.runDreamNow).toHaveBeenCalledWith(expect.objectContaining({
       mode: 'full',
       source: 'manual',
@@ -137,7 +138,7 @@ describe('handleDreamSlashCommand', () => {
     await saveDreamDiary(cwd, {
       id: 'diary_1',
       createdAt: '2026-05-05T04:00:00.000Z',
-      title: 'Jess 的梦境笔记',
+      title: '我的梦境笔记',
       summary: '梦到了 Dream Runtime。',
       whatHappened: ['做了梦'],
       whatIUnderstood: ['不要把完整梦境塞进 prompt'],

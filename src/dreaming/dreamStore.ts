@@ -162,7 +162,7 @@ export async function loadLatestDreamDiary(cwd: string): Promise<DreamDiary | nu
 
 export function renderDreamDiaryMarkdown(diary: DreamDiary): string {
   const lines = [
-    `# ${diary.title || 'Jess 的梦境笔记'}`,
+    `# ${diary.title || '我的梦境笔记'}`,
     '',
     `- id: ${diary.id}`,
     `- created_at: ${diary.createdAt}`,

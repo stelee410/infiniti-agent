@@ -17,7 +17,7 @@ export function runDeepDream(opts: {
   const diary: DreamDiary = {
     id: `diary_${now.toISOString().replace(/[:.]/g, '-')}_${Math.random().toString(36).slice(2, 8)}`,
     createdAt: now.toISOString(),
-    title: 'Jess 的梦境笔记',
+    title: '我的梦境笔记',
     summary: opts.episode.summary,
     whatHappened: [
       ...opts.episode.keyFacts,
@@ -50,8 +50,8 @@ export function runDeepDream(opts: {
     unresolvedThreads: opts.rem.unresolvedThreads.slice(0, 5),
     ...(topIdea ? { creativeHint: topIdea.idea } : {}),
     cautions: [
-      'Dream insights are guidance, not hard facts.',
-      'Creative hints are dream ideas, not confirmed facts.',
+      'Dream insights are first-person self-reflections, not hard facts.',
+      'Creative hints are my dream ideas, not confirmed facts.',
       'Low-confidence hypotheses must be verified before becoming long-term memory.',
     ],
   }
@@ -71,12 +71,12 @@ export function runDeepDream(opts: {
 function metaStateNotes(rem: RemDreamInsight): string[] {
   const notes: string[] = []
   if (rem.relationshipSignals.length) {
-    notes.push(`关系信号：${rem.relationshipSignals.slice(0, 3).join('；')}`)
+    notes.push(`我注意到的关系信号：${rem.relationshipSignals.slice(0, 3).join('；')}`)
   }
   if (rem.emotionalTrend.length) {
-    notes.push(`情绪趋势：${rem.emotionalTrend.slice(0, 3).join('；')}`)
+    notes.push(`留在我这里的情绪痕迹：${rem.emotionalTrend.slice(0, 3).join('；')}`)
   }
-  if (!notes.length) notes.push('本次梦境未对长期关系状态做明显调整。')
+  if (!notes.length) notes.push('本次梦境没有让我明显调整长期状态。')
   return notes
 }
 
