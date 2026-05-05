@@ -18,6 +18,9 @@ export function dreamPromptContextToPromptBlock(context: DreamPromptContext | nu
   if (context.unresolvedThreads.length) {
     lines.push('', 'Unresolved threads:', ...context.unresolvedThreads.slice(0, 5).map((t) => `- ${t.slice(0, 500)}`))
   }
+  if (context.creativeHint?.trim()) {
+    lines.push('', 'Creative hint:', context.creativeHint.trim().slice(0, 500))
+  }
   if (context.cautions.length) {
     lines.push('', 'Cautions:', ...context.cautions.slice(0, 5).map((c) => `- ${c.slice(0, 500)}`))
   }

@@ -46,6 +46,8 @@ export async function runRemDream(opts: {
         })),
       }, null, 2),
       maxOutTokens: 1600,
+      temperature: 0.4,
+      topP: 0.9,
     })
     const parsed = parseJsonObject<RemDreamJson>(raw)
     if (!parsed) return fallback

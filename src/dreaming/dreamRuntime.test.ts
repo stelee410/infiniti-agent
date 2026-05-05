@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { InfinitiConfig } from '../config/types.js'
+import type { LiveUiSession } from '../liveui/wsSession.js'
 import { localAgentDir } from '../paths.js'
 import { buildSystemWithMemory } from '../prompt/systemBuilder.js'
 import { loadMemoryStore } from '../memory/structured.js'
@@ -54,6 +55,23 @@ vi.mock('../llm/oneShotCompletion.js', () => ({
         },
       })
     }
+    if (opts.system.includes('Lucid Dream')) {
+      return JSON.stringify({
+        creativeInsights: [
+          {
+            idea: '把 Dream Runtime 拆成事实线和灵感线，灵感只进 dream ideas，不进长期事实记忆。',
+            type: 'architecture_idea',
+            groundedIn: ['用户担心 dream context 污染主 prompt', '当前系统已有 diary 和 prompt context'],
+            usefulness: 0.93,
+            confidence: 0.78,
+            shouldTellUser: true,
+          },
+        ],
+        nextQuestions: ['灵感线是否需要用户确认后才转成任务？'],
+        possibleExperiments: ['每次梦只选择一个 unresolved thread 做创造性深挖。'],
+        messageToUser: '我梦里想到：Dream Runtime 可以有事实线和灵感线，避免创造性污染长期记忆。',
+      })
+    }
     return '{}'
   }),
 }))
@@ -101,11 +119,14 @@ describe('dream runtime', () => {
     const context = await readFile(contextPath, 'utf8')
     expect(context).toContain('帮助用户完成 Dream Runtime 的工程落地')
     expect(context).toContain('不要引入多用户隔离')
+    expect(context).toContain('事实线和灵感线')
 
     const diaryPath = join(localAgentDir(cwd), 'dreams', 'diaries', '2026-05-05T04-00-00-000Z.md')
     const diary = await readFile(diaryPath, 'utf8')
     expect(diary).toContain('Jess 的梦境笔记')
     expect(diary).toContain('后台认知循环')
+    expect(diary).toContain('Creative Insights')
+    expect(diary).toContain('事实线和灵感线')
 
     const store = await loadSubconsciousStore(cwd)
     expect(store.metadata.lastDreamAt).toBe('2026-05-05T04:00:00.000Z')
@@ -116,14 +137,50 @@ describe('dream runtime', () => {
 
     const structuredMemory = await loadMemoryStore(cwd)
     expect(structuredMemory.entries.some((m) => m.body.includes('单机 Dream Runtime'))).toBe(true)
+    expect(structuredMemory.entries.some((m) => m.body.includes('事实线和灵感线'))).toBe(false)
 
     const candidates = await readFile(join(localAgentDir(cwd), 'dreams', 'candidates.jsonl'), 'utf8')
     expect(candidates).toContain('project_context')
+    const ideas = await readFile(join(localAgentDir(cwd), 'dreams', 'dream-ideas.jsonl'), 'utf8')
+    expect(ideas).toContain('architecture_idea')
+    expect(ideas).toContain('事实线和灵感线')
 
     const system = await buildSystemWithMemory(config, cwd, agent, 'Dream Context 怎么注入？')
     expect(system).toContain('## Dream Context')
     expect(system).toContain('Long-horizon objective')
     expect(system).toContain('帮助用户完成 Dream Runtime 的工程落地')
+    await agent.waitForIdle()
+  })
+
+  it('closes real2d eyes while dreaming and restores behavior afterward', async () => {
+    const liveUi = {
+      sendAction: vi.fn(),
+      sendDebugState: vi.fn(),
+      sendStatusPill: vi.fn(),
+    } as unknown as LiveUiSession
+    const agent = new SubconsciousAgent(config, cwd, liveUi)
+    await agent.start()
+    await agent.observeUserInput('请做一次梦，整理 Dream Runtime。')
+    await agent.observeAssistantOutput('我会整理梦境笔记。')
+
+    await agent.runDreamNow({
+      mode: 'full',
+      source: 'manual',
+      reason: 'test dream pose',
+      now: new Date('2026-05-05T05:00:00.000Z'),
+    })
+
+    const sendAction = (liveUi as unknown as { sendAction: ReturnType<typeof vi.fn> }).sendAction
+    expect(sendAction).toHaveBeenCalledWith(expect.objectContaining({
+      expression: 'neutral',
+      gaze: 'close',
+      motion: 'idle',
+    }))
+    expect((liveUi as unknown as { sendStatusPill: ReturnType<typeof vi.fn> }).sendStatusPill)
+      .toHaveBeenCalledWith('做梦中…', 'loading')
+    expect(agent.isDreaming()).toBe(false)
+    expect(sendAction).toHaveBeenCalledWith({ gaze: 'center' })
+    expect(sendAction).toHaveBeenLastCalledWith({ gaze: 'center' })
     await agent.waitForIdle()
   })
 })

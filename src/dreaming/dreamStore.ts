@@ -1,11 +1,12 @@
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { localDreamsDir } from '../paths.js'
-import type { DreamDiary, DreamEpisode, DreamMemoryCandidate, DreamPromptContext, DreamRun, DreamSource, DreamMode } from './types.js'
+import type { DreamDiary, DreamEpisode, DreamMemoryCandidate, DreamPromptContext, DreamRun, DreamSource, DreamMode, LucidDreamIdea } from './types.js'
 
 const RUNS_FILE = 'dream-runs.jsonl'
 const EPISODES_FILE = 'episodes.jsonl'
 const CANDIDATES_FILE = 'candidates.jsonl'
+const IDEAS_FILE = 'dream-ideas.jsonl'
 const CONTEXT_FILE = 'prompt-context.json'
 const CONTEXT_MAX_LIST_ITEMS = 6
 const CONTEXT_MAX_FIELD_CHARS = 320
@@ -71,6 +72,22 @@ export async function appendDreamMemoryCandidates(
   }
 }
 
+export async function appendDreamIdeas(
+  cwd: string,
+  ideas: LucidDreamIdea[],
+  meta: { runId: string; episodeId: string; createdAt?: string },
+): Promise<void> {
+  const createdAt = meta.createdAt ?? new Date().toISOString()
+  for (const idea of ideas) {
+    await appendJsonl(join(dreamsDir(cwd), IDEAS_FILE), {
+      ...idea,
+      dreamRunId: meta.runId,
+      episodeId: meta.episodeId,
+      createdAt,
+    })
+  }
+}
+
 export async function saveDreamPromptContext(cwd: string, context: DreamPromptContext): Promise<void> {
   const p = join(dreamsDir(cwd), CONTEXT_FILE)
   await mkdir(dirname(p), { recursive: true })
@@ -100,6 +117,9 @@ export function normalizeDreamPromptContext(context: DreamPromptContext): DreamP
     relevantStableMemories: cleanList(context.relevantStableMemories),
     behaviorGuidance: cleanList(context.behaviorGuidance),
     unresolvedThreads: cleanList(context.unresolvedThreads),
+    ...(cleanText(context.creativeHint, CONTEXT_MAX_FIELD_CHARS)
+      ? { creativeHint: cleanText(context.creativeHint, CONTEXT_MAX_FIELD_CHARS) }
+      : {}),
     cautions: cleanList(context.cautions),
   }
 }
@@ -164,6 +184,9 @@ export function renderDreamDiaryMarkdown(diary: DreamDiary): string {
   ]
   if (diary.currentObjective) {
     lines.push('', '## Current Objective', '', diary.currentObjective)
+  }
+  if (diary.creativeInsights.length) {
+    lines.push('', '## Creative Insights', ...listLines(diary.creativeInsights))
   }
   if (diary.messageToUser) {
     lines.push('', '## Message To User', '', diary.messageToUser)

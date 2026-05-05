@@ -144,6 +144,7 @@ describe('handleDreamSlashCommand', () => {
       memoriesChanged: [],
       metaStateChanges: [],
       currentObjective: '完成单机 Dream Runtime',
+      creativeInsights: ['Dream Context 可以是一条行动摘要。'],
       visibleToUser: true,
     })
     await saveDreamPromptContext(cwd, {

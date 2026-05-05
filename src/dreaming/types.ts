@@ -76,6 +76,29 @@ export type RemDreamInsight = {
   optionalMessageToUser?: string
 }
 
+export type LucidDreamIdea = {
+  id: string
+  idea: string
+  type:
+    | 'architecture_idea'
+    | 'product_idea'
+    | 'ux_idea'
+    | 'risk_warning'
+    | 'question_to_ask'
+    | 'experiment'
+  groundedIn: string[]
+  usefulness: number
+  confidence: number
+  shouldTellUser: boolean
+}
+
+export type LucidDreamInsight = {
+  creativeInsights: LucidDreamIdea[]
+  nextQuestions: string[]
+  possibleExperiments: string[]
+  messageToUser?: string
+}
+
 export type MetaStatePatch = StateDelta & {
   persona?: {
     warmth?: number
@@ -95,6 +118,7 @@ export type DreamDiary = {
   memoriesChanged: string[]
   metaStateChanges: string[]
   currentObjective?: string
+  creativeInsights: string[]
   messageToUser?: string
   visibleToUser: boolean
 }
@@ -106,6 +130,7 @@ export type DreamPromptContext = {
   relevantStableMemories: string[]
   behaviorGuidance: string[]
   unresolvedThreads: string[]
+  creativeHint?: string
   cautions: string[]
 }
 
@@ -116,6 +141,7 @@ export type DeepDreamResult = {
   fuzzyMemoriesCreated: string[]
   metaStatePatch: MetaStatePatch
   longHorizonObjective?: LongHorizonObjective
+  lucid?: LucidDreamInsight
   dreamDiary: DreamDiary
   promptContext: DreamPromptContext
 }

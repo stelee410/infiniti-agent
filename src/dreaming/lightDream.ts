@@ -45,6 +45,8 @@ export async function runLightDream(opts: {
         opts.historyTranscript || '(empty)',
       ].join('\n'),
       maxOutTokens: 900,
+      temperature: 0.2,
+      topP: 0.8,
     })
     const parsed = parseJsonObject<LightDreamJson>(raw)
     if (!parsed) return fallback

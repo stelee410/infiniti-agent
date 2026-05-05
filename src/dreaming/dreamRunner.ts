@@ -15,6 +15,7 @@ import type { SubconsciousStore } from '../subconscious/types.js'
 import { runDeepDream } from './deepDream.js'
 import {
   appendDreamEpisode,
+  appendDreamIdeas,
   appendDreamMemoryCandidates,
   finishDreamRun,
   loadRecentDreamDiaries,
@@ -23,6 +24,7 @@ import {
   startDreamRun,
 } from './dreamStore.js'
 import { runLightDream } from './lightDream.js'
+import { runLucidDream } from './lucidDream.js'
 import { runRemDream } from './remDream.js'
 import type { DeepDreamResult, DreamMode, DreamRun, DreamSource } from './types.js'
 
@@ -128,7 +130,18 @@ export async function runDream(opts: {
       episodeId: episode.id,
       createdAt: now.toISOString(),
     })
-    const deep = runDeepDream({ episode, rem, now })
+    const lucid = await runLucidDream({
+      config: opts.config,
+      profile,
+      episode,
+      rem,
+    })
+    await appendDreamIdeas(opts.cwd, lucid.creativeInsights, {
+      runId: run.id,
+      episodeId: episode.id,
+      createdAt: now.toISOString(),
+    })
+    const deep = runDeepDream({ episode, rem, lucid, now })
     applyExistingObjectiveFallback(deep, store, now)
     store = await applyDeepDream(opts.cwd, store, deep, now)
     await saveDreamDiary(opts.cwd, deep.dreamDiary)

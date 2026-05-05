@@ -95,6 +95,7 @@ export class SubconsciousAgent {
   private debugOverlayEnabled = false
   private idleHeartbeatCount = 0
   private lastProactiveGreetingAt = 0
+  private dreaming = false
 
   constructor(
     private readonly config: InfinitiConfig,
@@ -118,6 +119,10 @@ export class SubconsciousAgent {
   getDebugSnapshot(): LiveUiDebugSnapshot | null {
     if (!this.store) return null
     return debugSnapshotFromMetaState(this.store.state)
+  }
+
+  isDreaming(): boolean {
+    return this.dreaming
   }
 
   async observeUserInput(input: string): Promise<void> {
@@ -265,18 +270,26 @@ export class SubconsciousAgent {
     now?: Date
     writeInbox?: boolean
   }): Promise<RunDreamResult> {
-    const result = await runDream({
-      config: this.config,
-      cwd: this.cwd,
-      mode: opts.mode,
-      source: opts.source ?? 'manual',
-      reason: opts.reason ?? 'manual dream run',
-      now: opts.now,
-      writeInbox: opts.writeInbox,
-    })
-    this.store = await loadSubconsciousStore(this.cwd)
-    await this.syncDocumentMemoryIfChanged()
-    return result
+    this.dreaming = true
+    this.renderDreamingPose()
+    try {
+      const result = await runDream({
+        config: this.config,
+        cwd: this.cwd,
+        mode: opts.mode,
+        source: opts.source ?? 'manual',
+        reason: opts.reason ?? 'manual dream run',
+        now: opts.now,
+        writeInbox: opts.writeInbox,
+      })
+      this.store = await loadSubconsciousStore(this.cwd)
+      await this.syncDocumentMemoryIfChanged()
+      return result
+    } finally {
+      this.dreaming = false
+      this.render()
+      this.renderAwakePose()
+    }
   }
 
   compactSessionAsync(opts: {
@@ -533,6 +546,22 @@ export class SubconsciousAgent {
     if (this.debugOverlayEnabled) {
       this.sendDebugState(true)
     }
+  }
+
+  private renderDreamingPose(): void {
+    if (!this.liveUi) return
+    this.liveUi.sendStatusPill('做梦中…', 'loading')
+    this.liveUi.sendAction({
+      expression: 'neutral',
+      intensity: 0.25,
+      gaze: 'close',
+      motion: 'idle',
+    })
+  }
+
+  private renderAwakePose(): void {
+    if (!this.liveUi) return
+    this.liveUi.sendAction({ gaze: 'center' })
   }
 
   private sendDebugState(enabled: boolean): void {

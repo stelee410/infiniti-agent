@@ -1,9 +1,10 @@
-import type { DreamEpisode, DeepDreamResult, RemDreamInsight, DreamPromptContext, DreamDiary } from './types.js'
+import type { DreamEpisode, DeepDreamResult, RemDreamInsight, DreamPromptContext, DreamDiary, LucidDreamInsight } from './types.js'
 import type { StateDelta } from '../subconscious/types.js'
 
 export function runDeepDream(opts: {
   episode: DreamEpisode
   rem: RemDreamInsight
+  lucid?: LucidDreamInsight
   now?: Date
 }): DeepDreamResult {
   const now = opts.now ?? new Date()
@@ -11,6 +12,8 @@ export function runDeepDream(opts: {
   const soft = opts.rem.memoryCandidates.filter((c) => c.importance >= 0.55 && !(c.importance >= 0.75 && c.confidence >= 0.7))
   const discard = opts.rem.memoryCandidates.filter((c) => c.importance < 0.55)
   const currentObjective = opts.rem.longHorizonObjectiveCandidate?.objective
+  const topIdea = opts.lucid?.creativeInsights.find((idea) => idea.shouldTellUser)
+    ?? opts.lucid?.creativeInsights[0]
   const diary: DreamDiary = {
     id: `diary_${now.toISOString().replace(/[:.]/g, '-')}_${Math.random().toString(36).slice(2, 8)}`,
     createdAt: now.toISOString(),
@@ -32,7 +35,10 @@ export function runDeepDream(opts: {
     ].slice(0, 12),
     metaStateChanges: metaStateNotes(opts.rem),
     ...(currentObjective ? { currentObjective } : {}),
-    ...(opts.rem.optionalMessageToUser ? { messageToUser: opts.rem.optionalMessageToUser } : {}),
+    creativeInsights: (opts.lucid?.creativeInsights ?? []).map((idea) => `${idea.type}: ${idea.idea}`).slice(0, 5),
+    ...(opts.lucid?.messageToUser || opts.rem.optionalMessageToUser
+      ? { messageToUser: opts.lucid?.messageToUser ?? opts.rem.optionalMessageToUser }
+      : {}),
     visibleToUser: true,
   }
   const promptContext: DreamPromptContext = {
@@ -42,8 +48,10 @@ export function runDeepDream(opts: {
     relevantStableMemories: save.map((c) => c.content).slice(0, 5),
     behaviorGuidance: opts.rem.behaviorGuidance.slice(0, 6),
     unresolvedThreads: opts.rem.unresolvedThreads.slice(0, 5),
+    ...(topIdea ? { creativeHint: topIdea.idea } : {}),
     cautions: [
       'Dream insights are guidance, not hard facts.',
+      'Creative hints are dream ideas, not confirmed facts.',
       'Low-confidence hypotheses must be verified before becoming long-term memory.',
     ],
   }
@@ -54,6 +62,7 @@ export function runDeepDream(opts: {
     fuzzyMemoriesCreated: soft.map((c) => c.content),
     metaStatePatch: metaStatePatchFromRem(opts.rem),
     ...(opts.rem.longHorizonObjectiveCandidate ? { longHorizonObjective: opts.rem.longHorizonObjectiveCandidate } : {}),
+    ...(opts.lucid ? { lucid: opts.lucid } : {}),
     dreamDiary: diary,
     promptContext,
   }
