@@ -70,6 +70,14 @@
       body.liveui-inbox-open #speech-bubble {
         display: none !important;
       }
+      body.liveui-camera-capture-open #app,
+      body.liveui-camera-capture-open #liveui-real2d-stage,
+      body.liveui-camera-capture-open #speech-bubble,
+      body.liveui-camera-capture-open #liveui-bottom-dock,
+      body.liveui-camera-capture-open #liveui-inbox,
+      body.liveui-camera-capture-open .liveui-debug-edge {
+        display: none !important;
+      }
       .liveui-debug-edge {
         position: fixed;
         z-index: 260;
@@ -144,9 +152,9 @@
         color: rgba(255, 255, 255, 0.95);
         word-break: break-word;
         user-select: none;
-        /* 电影字幕：固定 3 行可视区，超出由 typewriter 平滑向上滚动；
+        /* 电影字幕：根据回复长度调整可视行数，超出由 typewriter 平滑向上滚动；
            隐藏滚动条但仍允许 JS 设置 scrollTop。 */
-        max-height: calc(15px * 1.55 * 3 + 0.2em);
+        max-height: calc(15px * 1.55 * var(--liveui-bubble-lines, 3) + 0.2em);
         overflow-y: auto;
         overflow-x: hidden;
         scrollbar-width: none;
@@ -852,24 +860,15 @@
       #liveui-camera-countdown {
         position: fixed;
         z-index: 245;
-        left: 50%;
-        top: 34%;
-        transform: translate(-50%, -50%);
+        inset: 0;
         display: flex;
-        flex-direction: column;
         align-items: center;
         justify-content: center;
-        gap: 14px;
-        min-width: 130px;
-        min-height: 130px;
-        padding: 18px;
+        padding: 28px;
         box-sizing: border-box;
-        border-radius: 22px;
-        background: rgba(12, 14, 22, 0.48);
-        border: 1px solid rgba(255, 255, 255, 0.16);
-        box-shadow: 0 20px 54px rgba(0, 0, 0, 0.45);
-        backdrop-filter: blur(10px);
-        -webkit-backdrop-filter: blur(10px);
+        background:
+          radial-gradient(circle at 50% 45%, rgba(15, 23, 42, 0.2), rgba(2, 6, 23, 0.88) 62%),
+          rgba(2, 6, 23, 0.76);
         color: #fff;
         pointer-events: none;
         user-select: none;
@@ -877,23 +876,83 @@
       #liveui-camera-countdown[hidden] {
         display: none !important;
       }
+      #liveui-camera-widget {
+        position: relative;
+        width: min(72vw, 620px);
+        aspect-ratio: 4 / 3;
+        overflow: hidden;
+        border-radius: 24px;
+        background: #05070d;
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        box-shadow:
+          0 34px 90px rgba(0, 0, 0, 0.56),
+          0 0 0 1px rgba(125, 211, 252, 0.08) inset;
+        pointer-events: none;
+      }
+      #liveui-camera-preview-stage {
+        position: absolute;
+        inset: 0;
+        overflow: hidden;
+        background:
+          linear-gradient(135deg, rgba(14, 165, 233, 0.16), rgba(251, 191, 36, 0.08)),
+          #090b12;
+      }
+      #liveui-camera-preview-stage video {
+        display: block;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        transform: scaleX(-1);
+      }
+      #liveui-camera-preview-stage::after {
+        content: '';
+        position: absolute;
+        inset: 0;
+        background:
+          linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+        background-size: 36px 36px;
+        opacity: 0.38;
+        pointer-events: none;
+      }
       #liveui-camera-countdown-icon {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
         width: 54px;
         height: 54px;
         color: #fbbf24;
         filter: drop-shadow(0 8px 18px rgba(0, 0, 0, 0.42));
+        z-index: 2;
       }
       #liveui-camera-countdown-icon[hidden] {
         display: none !important;
       }
       #liveui-camera-countdown-number {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
         min-width: 1.2em;
         text-align: center;
-        font: 800 64px/0.9 system-ui, -apple-system, 'Segoe UI', sans-serif;
+        font: 900 92px/0.9 system-ui, -apple-system, 'Segoe UI', sans-serif;
         color: #ffffff;
         text-shadow:
           0 2px 6px rgba(0, 0, 0, 0.65),
           0 0 20px rgba(251, 191, 36, 0.48);
+        z-index: 3;
+      }
+      #liveui-camera-status {
+        position: absolute;
+        left: 18px;
+        right: 18px;
+        bottom: 16px;
+        z-index: 4;
+        text-align: center;
+        color: rgba(255, 255, 255, 0.78);
+        font: 600 13px/1.35 system-ui, -apple-system, 'Segoe UI', sans-serif;
+        text-shadow: 0 2px 8px rgba(0, 0, 0, 0.72);
       }
       #liveui-camera-flash {
         position: fixed;
@@ -1231,10 +1290,14 @@
     <div id="liveui-debug-emotion" class="liveui-debug-edge" hidden aria-hidden="true"></div>
     <div id="liveui-debug-relationship" class="liveui-debug-edge" hidden aria-hidden="true"></div>
     <div id="liveui-camera-countdown" hidden aria-hidden="true">
-      <svg id="liveui-camera-countdown-icon" viewBox="0 0 24 24" aria-hidden="true">
-        <path fill="currentColor" d="M9.25 4 7.6 6H4.75A2.75 2.75 0 0 0 2 8.75v8.5A2.75 2.75 0 0 0 4.75 20h14.5A2.75 2.75 0 0 0 22 17.25v-8.5A2.75 2.75 0 0 0 19.25 6H16.4l-1.65-2h-5.5zM12 9a4 4 0 1 1 0 8 4 4 0 0 1 0-8zm0 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm6.5-2.2a.8.8 0 1 1 0 1.6.8.8 0 0 1 0-1.6z"/>
-      </svg>
-      <div id="liveui-camera-countdown-number">3</div>
+      <div id="liveui-camera-widget">
+        <div id="liveui-camera-preview-stage"></div>
+        <svg id="liveui-camera-countdown-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <path fill="currentColor" d="M9.25 4 7.6 6H4.75A2.75 2.75 0 0 0 2 8.75v8.5A2.75 2.75 0 0 0 4.75 20h14.5A2.75 2.75 0 0 0 22 17.25v-8.5A2.75 2.75 0 0 0 19.25 6H16.4l-1.65-2h-5.5zM12 9a4 4 0 1 1 0 8 4 4 0 0 1 0-8zm0 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm6.5-2.2a.8.8 0 1 1 0 1.6.8.8 0 0 1 0-1.6z"/>
+        </svg>
+        <div id="liveui-camera-countdown-number">3</div>
+        <div id="liveui-camera-status">准备拍照</div>
+      </div>
     </div>
     <div id="liveui-camera-flash" aria-hidden="true"></div>
     <div id="liveui-inbox" aria-hidden="true">

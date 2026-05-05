@@ -8,11 +8,13 @@ import { loadSession, saveSession } from '../session/file.js'
 import { searchSessions } from '../session/archive.js'
 import { EditHistory } from '../session/editHistory.js'
 import { writeInboxMessage } from '../inbox/store.js'
+import { saveDreamDiary, saveDreamPromptContext } from '../dreaming/dreamStore.js'
 import {
   handleClearSlashCommand,
   handleCompactSlashCommand,
   handleConfigSlashCommand,
   handleDebugSlashCommand,
+  handleDreamSlashCommand,
   handleExitSlashCommand,
   handleHelpSlashCommand,
   handleInboxSlashCommand,
@@ -103,6 +105,63 @@ describe('handleInboxSlashCommand', () => {
     expect(liveUi.openInbox).toHaveBeenCalledWith([
       expect.objectContaining({ id: 'msg-a', subject: '第一封' }),
     ])
+  })
+})
+
+describe('handleDreamSlashCommand', () => {
+  it('runs a manual dream through the controller', async () => {
+    const u = ui()
+    const controller = {
+      runDreamNow: vi.fn().mockResolvedValue({
+        run: { id: 'dream_1', status: 'completed' },
+        deep: {
+          dreamDiary: { summary: '整理了 Dream Runtime' },
+          promptContext: { longHorizonObjective: '完成 Dream Runtime' },
+        },
+      }),
+    }
+
+    await handleDreamSlashCommand(cwd, '/dream run', { kind: 'dreamRun', mode: 'full' }, controller, u)
+
+    expect(controller.runDreamNow).toHaveBeenCalledWith(expect.objectContaining({
+      mode: 'full',
+      source: 'manual',
+      writeInbox: true,
+    }))
+    expect(u.deliverLocalCommandExchange).toHaveBeenCalledWith('/dream run', expect.stringContaining('Dream run completed'))
+    expect(u.setInput).toHaveBeenCalledWith('')
+  })
+
+  it('shows latest diary and prompt context', async () => {
+    const u = ui()
+    await saveDreamDiary(cwd, {
+      id: 'diary_1',
+      createdAt: '2026-05-05T04:00:00.000Z',
+      title: 'Jess 的梦境笔记',
+      summary: '梦到了 Dream Runtime。',
+      whatHappened: ['做了梦'],
+      whatIUnderstood: ['不要把完整梦境塞进 prompt'],
+      memoriesChanged: [],
+      metaStateChanges: [],
+      currentObjective: '完成单机 Dream Runtime',
+      creativeInsights: ['Dream Context 可以是一条行动摘要。'],
+      visibleToUser: true,
+    })
+    await saveDreamPromptContext(cwd, {
+      updatedAt: '2026-05-05T04:00:00.000Z',
+      longHorizonObjective: '完成单机 Dream Runtime',
+      recentInsight: 'Dream Context 是梦醒后的行动摘要。',
+      relevantStableMemories: [],
+      behaviorGuidance: ['保持单机设计'],
+      unresolvedThreads: [],
+      cautions: [],
+    })
+
+    await handleDreamSlashCommand(cwd, '/dream diary', { kind: 'dreamDiary' }, null, u)
+    expect(u.deliverLocalCommandExchange).toHaveBeenCalledWith('/dream diary', expect.stringContaining('不要把完整梦境塞进 prompt'))
+
+    await handleDreamSlashCommand(cwd, '/dream context', { kind: 'dreamContext' }, null, u)
+    expect(u.deliverLocalCommandExchange).toHaveBeenCalledWith('/dream context', expect.stringContaining('## Dream Context'))
   })
 })
 

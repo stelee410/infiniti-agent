@@ -73,6 +73,7 @@ import {
   handleConfigSlashCommand,
   handleCompactSlashCommand,
   handleDebugSlashCommand,
+  handleDreamSlashCommand,
   handleExitSlashCommand,
   handleHelpSlashCommand,
   handleInboxSlashCommand,
@@ -356,10 +357,10 @@ export function ChatApp({
     const id = setInterval(() => {
       void agent
         .heartbeat(new Date(), {
-          allowProactiveGreeting: Boolean(liveUi && liveUiConnectedRef.current && !busyRef.current),
+          allowProactiveGreeting: Boolean(liveUi && liveUiConnectedRef.current && !busyRef.current && !agent.isDreaming()),
         })
         .then((greeting) => {
-          if (!greeting || !liveUi || busyRef.current) return
+          if (!greeting || !liveUi || busyRef.current || agent.isDreaming()) return
           liveUi.sendAssistantStream(greeting, true, true)
           if (liveUi.hasTts) {
             const clean = ttsDisplayCleanForLiveUi(greeting, expressionManifest)
@@ -588,12 +589,14 @@ export function ChatApp({
   const processDueSchedules = useCallback(async () => {
     if (!sessionReady) return
     if (scheduleRunningRef.current || busyRef.current) return
+    if (liveUi && subconsciousRef.current?.isDreaming()) return
     scheduleRunningRef.current = true
     try {
       let store = await loadScheduleStore(cwd)
       const due = dueScheduleTasks(store, new Date())
       for (const task of due) {
         if (busyRef.current) break
+        if (liveUi && subconsciousRef.current?.isDreaming()) break
         try {
           setNotice(`执行计划任务：${task.prompt}`)
           await runScheduleTask(task)
@@ -643,6 +646,12 @@ export function ChatApp({
         return
       }
       if (!sessionReady) {
+        return
+      }
+      if (liveUi && subconsciousRef.current?.isDreaming()) {
+        setNotice('Jess 正在做梦，醒来后再回应你。')
+        setTimeout(() => setNotice(null), 3000)
+        setInput('')
         return
       }
 
@@ -737,6 +746,36 @@ export function ChatApp({
               setInput,
               setNotice,
               clearNoticeLater: (ms) => setTimeout(() => setNotice(null), ms),
+            })
+            return
+          }
+          case 'dreamRun': {
+            await handleDreamSlashCommand(cwd, raw, slashCommand, subconsciousRef.current, {
+              setError,
+              setInput,
+              setNotice,
+              clearNoticeLater: (ms) => setTimeout(() => setNotice(null), ms),
+              deliverLocalCommandExchange,
+            })
+            return
+          }
+          case 'dreamDiary': {
+            await handleDreamSlashCommand(cwd, raw, slashCommand, subconsciousRef.current, {
+              setError,
+              setInput,
+              setNotice,
+              clearNoticeLater: (ms) => setTimeout(() => setNotice(null), ms),
+              deliverLocalCommandExchange,
+            })
+            return
+          }
+          case 'dreamContext': {
+            await handleDreamSlashCommand(cwd, raw, slashCommand, subconsciousRef.current, {
+              setError,
+              setInput,
+              setNotice,
+              clearNoticeLater: (ms) => setTimeout(() => setNotice(null), ms),
+              deliverLocalCommandExchange,
             })
             return
           }
@@ -1102,6 +1141,7 @@ export function ChatApp({
   useEffect(() => {
     if (!liveUi) return
     return liveUi.onInterrupt(() => {
+      if (subconsciousRef.current?.isDreaming()) return
       const ac = abortRef.current
       if (ac && !ac.signal.aborted) {
         ac.abort()
@@ -1147,6 +1187,7 @@ export function ChatApp({
     }
     return liveUi.onInteraction((kind) => {
       if (busyRef.current) return
+      if (subconsciousRef.current?.isDreaming()) return
       const now = Date.now()
       if (now - liveUiInteractionCooldownRef.current < 5000) return
       liveUiInteractionCooldownRef.current = now

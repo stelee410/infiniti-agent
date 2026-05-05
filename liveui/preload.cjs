@@ -56,6 +56,9 @@ contextBridge.exposeInMainWorld('infinitiLiveUi', {
   setConfigPanelOpen: (open) => {
     ipcRenderer.send('liveui-config-panel-open', !!open)
   },
+  setInboxOpen: (open) => {
+    ipcRenderer.send('liveui-inbox-open', !!open)
+  },
   setCameraCaptureOpen: (open) => {
     ipcRenderer.send('liveui-camera-capture-open', !!open)
   },

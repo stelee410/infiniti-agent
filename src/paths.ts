@@ -39,6 +39,10 @@ export function localJobsDir(cwd: string): string {
   return join(cwd, LOCAL_DIR_NAME, 'jobs')
 }
 
+export function localDreamsDir(cwd: string): string {
+  return join(cwd, LOCAL_DIR_NAME, 'dreams')
+}
+
 export function localMemoryPath(cwd: string): string {
   return join(cwd, LOCAL_DIR_NAME, 'memory.md')
 }

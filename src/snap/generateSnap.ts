@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto'
 import type { InfinitiConfig } from '../config/types.js'
 import type { LiveUiVisionAttachment } from '../liveui/protocol.js'
 import { openRouterGenerateImageBuffer, type OpenRouterRefImage } from '../avatar/openRouterImageGen.js'
+import { geminiGenerateImageBuffer } from '../avatar/geminiImageGen.js'
 import { localInboxDir } from '../paths.js'
 import { resolveSnapImageProfile, type ResolvedImageProfile } from '../image/resolveImageProfile.js'
 
@@ -129,6 +130,22 @@ async function generateWithOpenRouter(auth: ResolvedImageProfile, prompt: string
   })
 }
 
+async function generateWithGemini(auth: ResolvedImageProfile, prompt: string, refs: RefImage[]): Promise<Buffer> {
+  return await geminiGenerateImageBuffer({
+    baseUrl: auth.baseUrl,
+    apiKey: auth.apiKey,
+    model: auth.model,
+    prompt,
+    referenceImages: refs.map((r) => ({
+      mimeType: r.mimeType,
+      base64: r.buffer.toString('base64'),
+    })),
+    ...(auth.aspectRatio ? { aspectRatio: auth.aspectRatio } : {}),
+    ...(auth.imageSize ? { imageSize: auth.imageSize } : {}),
+    timeoutMs: auth.timeoutMs,
+  })
+}
+
 async function generateWithOpenAI(auth: ResolvedImageProfile, prompt: string, refs: RefImage[]): Promise<Buffer> {
   const client = new OpenAI({ apiKey: auth.apiKey, baseURL: auth.baseUrl, timeout: auth.timeoutMs })
   const common = {
@@ -183,10 +200,13 @@ export async function generateSnapPhoto(
   )
   let image: Buffer
   try {
-    image =
-      auth.provider === 'gpt-image-2'
-        ? await generateWithOpenAI(auth, prompt, refs)
-        : await generateWithOpenRouter(auth, prompt, refs)
+    if (auth.provider === 'openai') {
+      image = await generateWithOpenAI(auth, prompt, refs)
+    } else if (auth.provider === 'gemini') {
+      image = await generateWithGemini(auth, prompt, refs)
+    } else {
+      image = await generateWithOpenRouter(auth, prompt, refs)
+    }
   } catch (e) {
     const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e)
     await appendSnapLog(cwd, `failed ${msg}`)

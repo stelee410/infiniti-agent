@@ -22,6 +22,15 @@ describe('panelLayoutPolicy', () => {
     expect(shouldRunDynamicFigureFit({ minimalMode: true, configPanelOpen: true })).toBe(true)
   })
 
+  it('suspends figure fitting for non-config full-window overlays', () => {
+    expect(shouldRunDynamicFigureFit({ minimalMode: false, layoutSuspended: true })).toBe(false)
+    expect(shouldApplyReal2dResizeLayout({
+      layoutSuspended: true,
+      pendingConfigPanelCloseRestore: false,
+      closeWindowRestored: false,
+    })).toBe(false)
+  })
+
   it('ignores config-panel resize noise until the panel is closing back to the avatar window', () => {
     expect(shouldApplyReal2dResizeLayout({
       configPanelOpen: true,

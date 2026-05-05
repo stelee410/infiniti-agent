@@ -34,6 +34,8 @@ export type OneShotParams = {
   system: string
   user: string
   maxOutTokens?: number
+  temperature?: number
+  topP?: number
   /** 指定使用哪个 LLM profile（不传则用 default） */
   profile?: string
 }
@@ -56,6 +58,8 @@ export async function oneShotTextCompletion(
       client.messages.create({
         model: llm.model,
         max_tokens: maxOut,
+        ...(typeof opts.temperature === 'number' ? { temperature: opts.temperature } : {}),
+        ...(typeof opts.topP === 'number' ? { top_p: opts.topP } : {}),
         system: opts.system,
         messages: [{ role: 'user', content: opts.user }],
       }),
@@ -82,6 +86,8 @@ export async function oneShotTextCompletion(
       client.chat.completions.create({
         model: llm.model,
         max_tokens: maxOut,
+        ...(typeof opts.temperature === 'number' ? { temperature: opts.temperature } : {}),
+        ...(typeof opts.topP === 'number' ? { top_p: opts.topP } : {}),
         messages: [
           { role: 'system', content: opts.system },
           { role: 'user', content: opts.user },
@@ -99,6 +105,10 @@ export async function oneShotTextCompletion(
     const model = genAI.getGenerativeModel({
       model: llm.model,
       systemInstruction: opts.system,
+      generationConfig: {
+        ...(typeof opts.temperature === 'number' ? { temperature: opts.temperature } : {}),
+        ...(typeof opts.topP === 'number' ? { topP: opts.topP } : {}),
+      },
     })
     const result = await withDeadline(
       model.generateContent(opts.user),

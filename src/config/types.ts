@@ -76,7 +76,7 @@ export type LiveUiSpriteExpressionsConfig = {
   manifest?: string
 }
 
-export type ImageProvider = 'gpt-image-2' | 'nano-banana'
+export type ImageProvider = 'openai' | 'openrouter' | 'gemini' | 'gpt-image-2' | 'nano-banana'
 
 export type ImageProfile = {
   provider: ImageProvider
@@ -125,8 +125,8 @@ export type AvatarGenConfig = {
 export type SnapImageConfig = {
   /** Preferred image provider profile name from `image.profiles`. Legacy direct fields below are still supported. */
   imageProfile?: string
-  /** `nano-banana` 走 OpenRouter 图像模型；`gpt-image-2` 走 OpenAI Images API。 */
-  provider?: 'nano-banana' | 'gpt-image-2'
+  /** `openrouter`/`nano-banana` 走 OpenRouter Chat Completions；`openai`/`gpt-image-2` 走 OpenAI Images API；`gemini` 走 Google generateContent。 */
+  provider?: 'openrouter' | 'nano-banana' | 'openai' | 'gpt-image-2' | 'gemini'
   baseUrl?: string
   apiKey?: string
   /** nano-banana 默认 google/gemini-3-pro-image-preview；gpt-image-2 默认 gpt-image-2。 */

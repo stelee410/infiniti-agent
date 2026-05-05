@@ -94,6 +94,7 @@ function createWindow() {
 
   const preload = path.join(__dirname, 'preload.cjs')
   let preConfigBounds = null
+  let preInboxBounds = null
   let preCameraBounds = null
   let preMinimalBounds = null
 
@@ -154,7 +155,7 @@ function createWindow() {
   /** 调整高度并保持底边不动：由渲染端在首帧布局后请求，去掉头顶大块留白。 */
   ipcMain.on('liveui-compact-height', (_e, payload) => {
     try {
-      if (preConfigBounds) return
+      if (preConfigBounds || preInboxBounds) return
       const h = payload && Number.isFinite(payload.height) ? Math.round(payload.height) : 0
       if (h <= 0) return
       const cur = win.getBounds()
@@ -175,6 +176,21 @@ function createWindow() {
       } else if (preConfigBounds) {
         win.setBounds(preConfigBounds)
         preConfigBounds = null
+        if (!debugWindow) win.setIgnoreMouseEvents(true, { forward: true })
+      }
+    } catch { /* window may be destroyed */ }
+  })
+
+  ipcMain.on('liveui-inbox-open', (_e, open) => {
+    try {
+      if (open) {
+        if (!preInboxBounds) preInboxBounds = win.getBounds()
+        win.setIgnoreMouseEvents(false)
+        const display = require('electron').screen.getDisplayMatching(win.getBounds())
+        win.setBounds(display.workArea)
+      } else if (preInboxBounds) {
+        win.setBounds(preInboxBounds)
+        preInboxBounds = null
         if (!debugWindow) win.setIgnoreMouseEvents(true, { forward: true })
       }
     } catch { /* window may be destroyed */ }
