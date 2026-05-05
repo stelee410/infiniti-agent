@@ -6,6 +6,8 @@ import { executeMemoryAction, loadMemoryStore, type MemoryAction } from '../memo
 import { executeProfileAction, loadProfileStore, type ProfileAction } from '../memory/userProfile.js'
 import { executeKgAction, type KgAction } from '../memory/knowledgeGraph.js'
 import { documentMemoryHitsToPromptBlock, retrieveDocumentMemories, syncDocumentMemory } from '../memory/documentMemory.js'
+import { chooseDreamMode, runDream, shouldRunDream, type RunDreamResult } from '../dreaming/dreamRunner.js'
+import type { DreamMode, DreamSource } from '../dreaming/types.js'
 import { archiveSession } from '../session/archive.js'
 import { searchSessions } from '../session/archive.js'
 import { saveSession } from '../session/file.js'
@@ -199,6 +201,14 @@ export class SubconsciousAgent {
       this.enqueueMemoryWork(() => this.scanHistoryForStableFacts(now)).catch((e) => {
         agentDebug('[subconscious-agent] history scan failed', e)
       })
+      if (shouldRunDream(this.store, now)) {
+        const mode = chooseDreamMode(this.store)
+        this.enqueueMemoryWork(async () => {
+          await this.runDreamDirect({ mode, source: 'heartbeat', reason: 'periodic heartbeat dream', now })
+        }).catch((e) => {
+          agentDebug('[subconscious-agent] dream runtime failed', e)
+        })
+      }
     } finally {
       if (this.store) {
         this.store.metadata.lastHeartbeatDurationMs = Date.now() - started
@@ -236,6 +246,37 @@ export class SubconsciousAgent {
       agentDebug('[subconscious-agent] memory reinforcement failed', e)
     })
     return documentMemoryHitsToPromptBlock(hits)
+  }
+
+  async runDreamNow(opts: {
+    mode?: DreamMode
+    source?: DreamSource
+    reason?: string
+    now?: Date
+    writeInbox?: boolean
+  } = {}): Promise<RunDreamResult> {
+    return this.enqueueMemoryWork(() => this.runDreamDirect(opts))
+  }
+
+  private async runDreamDirect(opts: {
+    mode?: DreamMode
+    source?: DreamSource
+    reason?: string
+    now?: Date
+    writeInbox?: boolean
+  }): Promise<RunDreamResult> {
+    const result = await runDream({
+      config: this.config,
+      cwd: this.cwd,
+      mode: opts.mode,
+      source: opts.source ?? 'manual',
+      reason: opts.reason ?? 'manual dream run',
+      now: opts.now,
+      writeInbox: opts.writeInbox,
+    })
+    this.store = await loadSubconsciousStore(this.cwd)
+    await this.syncDocumentMemoryIfChanged()
+    return result
   }
 
   compactSessionAsync(opts: {

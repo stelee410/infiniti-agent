@@ -1,4 +1,6 @@
 import type { InfinitiConfig } from '../config/types.js'
+import { loadDreamPromptContext } from '../dreaming/dreamStore.js'
+import { dreamPromptContextToPromptBlock } from '../dreaming/promptContext.js'
 import { documentMemoryHitsToPromptBlock, retrieveDocumentMemories } from '../memory/documentMemory.js'
 import { loadMemoryStore, memoryToPromptBlock } from '../memory/structured.js'
 import { loadProfileStore, profileToPromptBlock } from '../memory/userProfile.js'
@@ -25,7 +27,7 @@ export async function buildSystemWithMemory(
   },
   query?: string,
 ): Promise<string> {
-  const [docs, memStore, profileStore, skills, retrievedMemory] = await Promise.all([
+  const [docs, memStore, profileStore, skills, retrievedMemory, dreamContext] = await Promise.all([
     loadAgentPromptDocs(cwd),
     memoryCoordinator?.loadMemoryStore() ?? loadMemoryStore(cwd),
     memoryCoordinator?.loadProfileStore() ?? loadProfileStore(cwd),
@@ -35,6 +37,7 @@ export async function buildSystemWithMemory(
         ? memoryCoordinator.retrieveRelevantMemory(query)
         : retrieveDocumentMemories(cwd, query, 6).then(documentMemoryHitsToPromptBlock)
       : Promise.resolve(''),
+    loadDreamPromptContext(cwd),
   ])
 
   const parts = [buildAgentSystemPrompt(docs)]
@@ -62,6 +65,11 @@ export async function buildSystemWithMemory(
 
   if (retrievedMemory.trim()) {
     parts.push(retrievedMemory)
+  }
+
+  const dreamBlock = dreamPromptContextToPromptBlock(dreamContext)
+  if (dreamBlock.trim()) {
+    parts.push(dreamBlock)
   }
 
   const skillBlock = skillsToSystemBlock(skills)

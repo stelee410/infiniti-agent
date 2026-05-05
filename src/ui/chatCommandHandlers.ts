@@ -5,6 +5,10 @@ import {
   loadScheduleStore,
   removeScheduleTask,
 } from '../schedule/store.js'
+import { loadDreamPromptContext, loadLatestDreamDiary } from '../dreaming/dreamStore.js'
+import { dreamPromptContextToPromptBlock } from '../dreaming/promptContext.js'
+import type { DreamMode } from '../dreaming/types.js'
+import type { RunDreamResult } from '../dreaming/dreamRunner.js'
 import type { InfinitiConfig } from '../config/types.js'
 import { compactSessionMessages } from '../llm/compactSession.js'
 import { resolvedCompactionSettings } from '../llm/compactionSettings.js'
@@ -25,6 +29,7 @@ type ScheduleCommand = Extract<
 >
 
 type InboxCommand = Extract<ChatSlashCommand, { kind: 'inbox' | 'lastEmail' }>
+type DreamCommand = Extract<ChatSlashCommand, { kind: 'dreamRun' | 'dreamDiary' | 'dreamContext' }>
 type RollCommand = Extract<ChatSlashCommand, { kind: 'roll' }>
 type PermissionCommand = Extract<ChatSlashCommand, { kind: 'permission' }>
 type CompactCommand = Extract<ChatSlashCommand, { kind: 'compact' }>
@@ -39,6 +44,14 @@ type CompactController = {
     customInstructions?: string
     preCompactHook?: string
   }): Promise<PersistedMessage[]>
+}
+type DreamController = {
+  runDreamNow(options: {
+    mode?: DreamMode
+    source?: 'manual'
+    reason?: string
+    writeInbox?: boolean
+  }): Promise<RunDreamResult>
 }
 
 export type ChatCommandLiveUi = LiveInboxUi & {
@@ -212,6 +225,77 @@ export async function handleInboxSlashCommand(
     ui.setNotice(`${last.createdAt} ${last.subject}\n\n${last.body}${attachments}`)
     ui.clearNoticeLater(15000)
   }
+  ui.setInput('')
+}
+
+export async function handleDreamSlashCommand(
+  cwd: string,
+  raw: string,
+  command: DreamCommand,
+  dreamController: DreamController | null | undefined,
+  ui: Pick<LocalCommandUi, 'setError' | 'setInput' | 'setNotice' | 'clearNoticeLater' | 'deliverLocalCommandExchange'>,
+): Promise<void> {
+  if (command.kind === 'dreamRun') {
+    if (!dreamController) {
+      ui.setError('/dream run 需要 subconscious-agent 已启动')
+      ui.setInput('')
+      return
+    }
+    ui.setError(null)
+    ui.setNotice('Jess 开始做梦了，完成后会写入 dream diary 和 prompt context…')
+    const result = await dreamController.runDreamNow({
+      mode: command.mode,
+      source: 'manual',
+      reason: 'manual slash command',
+      writeInbox: true,
+    })
+    if (result.run.status === 'completed') {
+      ui.deliverLocalCommandExchange(
+        raw,
+        [
+          `Dream run completed: ${result.run.id}`,
+          result.deep?.dreamDiary.summary ? `summary: ${result.deep.dreamDiary.summary}` : '',
+          result.deep?.promptContext.longHorizonObjective ? `objective: ${result.deep.promptContext.longHorizonObjective}` : '',
+        ].filter(Boolean).join('\n'),
+      )
+      ui.setNotice('梦境整理完成')
+      ui.clearNoticeLater(5000)
+    } else if (result.run.status === 'skipped') {
+      ui.deliverLocalCommandExchange(raw, '没有足够的新内容，本次梦境已跳过。')
+    } else {
+      ui.setError(result.run.error ?? 'Dream run failed')
+    }
+    ui.setInput('')
+    return
+  }
+
+  if (command.kind === 'dreamDiary') {
+    const diary = await loadLatestDreamDiary(cwd)
+    ui.setError(null)
+    ui.deliverLocalCommandExchange(
+      raw,
+      diary
+        ? [
+            `${diary.title} (${diary.createdAt})`,
+            '',
+            diary.summary,
+            '',
+            '理解：',
+            ...diary.whatIUnderstood.slice(0, 6).map((item) => `- ${item}`),
+            diary.currentObjective ? `\n当前长期目标：\n${diary.currentObjective}` : '',
+          ].filter(Boolean).join('\n')
+        : '还没有梦境笔记。可以用 /dream run 手动触发一次。',
+    )
+    ui.setInput('')
+    return
+  }
+
+  const context = await loadDreamPromptContext(cwd)
+  ui.setError(null)
+  ui.deliverLocalCommandExchange(
+    raw,
+    dreamPromptContextToPromptBlock(context) || '还没有 Dream Context。可以用 /dream run 手动触发一次。',
+  )
   ui.setInput('')
 }
 

@@ -34,6 +34,14 @@ describe('parseChatSlashCommand', () => {
     expect(parseChatSlashCommand('/roll nope')).toEqual({ kind: 'roll', layers: null })
   })
 
+  it('parses dream commands', () => {
+    expect(parseChatSlashCommand('/dream')).toEqual({ kind: 'dreamDiary' })
+    expect(parseChatSlashCommand('/dream diary')).toEqual({ kind: 'dreamDiary' })
+    expect(parseChatSlashCommand('/dream context')).toEqual({ kind: 'dreamContext' })
+    expect(parseChatSlashCommand('/dream run')).toEqual({ kind: 'dreamRun', mode: 'full' })
+    expect(parseChatSlashCommand('/dream run light')).toEqual({ kind: 'dreamRun', mode: 'light' })
+  })
+
   it('ignores non-registered commands', () => {
     expect(parseChatSlashCommand('/snap image')).toBeNull()
     expect(parseChatSlashCommand('hello')).toBeNull()
@@ -41,6 +49,7 @@ describe('parseChatSlashCommand', () => {
 
   it('keeps help text centralized', () => {
     expect(CHAT_HELP_TEXT).toContain('/schedule')
+    expect(CHAT_HELP_TEXT).toContain('/dream')
     expect(CHAT_HELP_TEXT).toContain('/avatargen')
   })
 })

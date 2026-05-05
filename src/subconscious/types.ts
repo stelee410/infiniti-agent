@@ -13,6 +13,13 @@ export type MetaState = {
   engagement: number
   speechStyle: string
   gesture?: string
+  longHorizonObjective?: {
+    objective: string
+    reason: string
+    createdAt: string
+    expiresAt: string
+    confidence: number
+  }
   updatedAt: string
 }
 
@@ -99,6 +106,9 @@ export type SubconsciousStore = {
     lastRetrievedMemoryIds?: string[]
     lastHeartbeatAt?: string
     lastHeartbeatDurationMs?: number
+    lastDreamAt?: string
+    lastDreamRunId?: string
+    lastDreamError?: string
     historyScanRunning?: boolean
     lastHistoryScanError?: string
   }

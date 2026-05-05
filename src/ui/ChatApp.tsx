@@ -73,6 +73,7 @@ import {
   handleConfigSlashCommand,
   handleCompactSlashCommand,
   handleDebugSlashCommand,
+  handleDreamSlashCommand,
   handleExitSlashCommand,
   handleHelpSlashCommand,
   handleInboxSlashCommand,
@@ -737,6 +738,36 @@ export function ChatApp({
               setInput,
               setNotice,
               clearNoticeLater: (ms) => setTimeout(() => setNotice(null), ms),
+            })
+            return
+          }
+          case 'dreamRun': {
+            await handleDreamSlashCommand(cwd, raw, slashCommand, subconsciousRef.current, {
+              setError,
+              setInput,
+              setNotice,
+              clearNoticeLater: (ms) => setTimeout(() => setNotice(null), ms),
+              deliverLocalCommandExchange,
+            })
+            return
+          }
+          case 'dreamDiary': {
+            await handleDreamSlashCommand(cwd, raw, slashCommand, subconsciousRef.current, {
+              setError,
+              setInput,
+              setNotice,
+              clearNoticeLater: (ms) => setTimeout(() => setNotice(null), ms),
+              deliverLocalCommandExchange,
+            })
+            return
+          }
+          case 'dreamContext': {
+            await handleDreamSlashCommand(cwd, raw, slashCommand, subconsciousRef.current, {
+              setError,
+              setInput,
+              setNotice,
+              clearNoticeLater: (ms) => setTimeout(() => setNotice(null), ms),
+              deliverLocalCommandExchange,
             })
             return
           }
