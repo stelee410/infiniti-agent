@@ -148,7 +148,7 @@ export async function runDream(opts: {
     await saveDreamPromptContext(opts.cwd, deep.promptContext)
     if (opts.writeInbox && deep.dreamDiary.messageToUser) {
       await writeInboxMessage(opts.cwd, {
-        subject: 'Jess 的梦里想到一件事',
+        subject: '我梦里想到一件事',
         body: deep.dreamDiary.messageToUser,
         meta: { source: 'dream-runtime', dreamRunId: run.id },
       }).catch(() => undefined)

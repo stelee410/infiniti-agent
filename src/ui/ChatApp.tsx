@@ -649,7 +649,7 @@ export function ChatApp({
         return
       }
       if (liveUi && subconsciousRef.current?.isDreaming()) {
-        setNotice('Jess 正在做梦，醒来后再回应你。')
+        setNotice('我正在做梦，醒来后再回应你。')
         setTimeout(() => setNotice(null), 3000)
         setInput('')
         return

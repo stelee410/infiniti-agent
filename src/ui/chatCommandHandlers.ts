@@ -242,7 +242,7 @@ export async function handleDreamSlashCommand(
       return
     }
     ui.setError(null)
-    ui.setNotice('Jess 开始做梦了，完成后会写入 dream diary 和 prompt context…')
+    ui.setNotice('我开始做梦了，完成后会写入 dream diary 和 prompt context…')
     const result = await dreamController.runDreamNow({
       mode: command.mode,
       source: 'manual',

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { isAbsolute, join, normalize, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { LiveUiConfig } from '../config/types.js'
@@ -60,6 +60,11 @@ export type ResolvedSpriteExpressionDir = {
   warnings: string[]
 }
 
+export type ResolvedAvatarFallback = {
+  avatarPath: string
+  avatarFileUrl: string
+}
+
 /**
  * 解析 `liveUi.spriteExpressions.dir`（相对 cwd），供 Electron 注入 `INFINITI_LIVEUI_SPRITE_EXPRESSION_DIR`。
  */
@@ -84,6 +89,61 @@ export function resolveSpriteExpressionDirForUi(
   const href = pathToFileURL(abs).href
   const dirFileUrl = href.endsWith('/') ? href : `${href}/`
   return { dirFileUrl, warnings }
+}
+
+function readEnvLocalAgentCode(cwd: string): string | null {
+  try {
+    const raw = readFileSync(join(cwd, '.env.local'), 'utf8')
+    for (const line of raw.split(/\r?\n/)) {
+      const match = /^LINKYUN_AGENT_CODE=(.*)$/.exec(line.trim())
+      if (!match) continue
+      let value = match[1]?.trim() ?? ''
+      if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+        value = value.slice(1, -1)
+      }
+      return value || null
+    }
+  } catch {
+    return null
+  }
+  return null
+}
+
+function findAvatarFile(dir: string): string | null {
+  try {
+    const hit = readdirSync(dir).find((name) => /^avatar\.(png|jpe?g|webp|gif)$/i.test(name))
+    return hit ? join(dir, hit) : null
+  } catch {
+    return null
+  }
+}
+
+export function resolveAvatarFallbackForUi(cwd: string): ResolvedAvatarFallback | null {
+  const refRoot = join(cwd, '.infiniti-agent', 'ref')
+  const agentCode = readEnvLocalAgentCode(cwd)
+  const candidates: string[] = []
+  if (agentCode && !/[./\\]/.test(agentCode)) {
+    candidates.push(join(refRoot, agentCode))
+  }
+  try {
+    for (const name of readdirSync(refRoot)) {
+      const dir = join(refRoot, name)
+      if (statSync(dir).isDirectory()) candidates.push(dir)
+    }
+  } catch {
+    return null
+  }
+
+  for (const dir of [...new Set(candidates)]) {
+    const avatarPath = findAvatarFile(dir)
+    if (avatarPath) {
+      return {
+        avatarPath,
+        avatarFileUrl: pathToFileURL(avatarPath).href,
+      }
+    }
+  }
+  return null
 }
 
 /**

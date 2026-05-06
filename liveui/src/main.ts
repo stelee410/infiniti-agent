@@ -99,6 +99,8 @@ declare global {
       model3FileUrl: string
       /** 含尾斜杠的 `file:` URL，指向含 `exp_01.png`…的目录（与 CLI `spriteExpressions.dir` 一致） */
       spriteExpressionDirFileUrl?: string
+      /** spriteExpressions 不可用时展示在控制条左上角的头像 */
+      avatarFallbackFileUrl?: string
       voiceMic?: Partial<LiveUiVoiceMicWire>
       /** `infiniti-agent live --zoom <n>` 注入：人物显示缩放（0.4 ~ 1.5），1 = 不缩放 */
       figureZoom?: number
@@ -1005,6 +1007,18 @@ async function bootstrap(): Promise<void> {
   if (wantsReal2d && !spriteExpressionDirFileUrl) {
     console.warn('[liveui] real2d 需要 spriteExpressions.dir，未配置时回退 Live2D/占位')
   }
+  const fallbackAvatar = document.getElementById('liveui-avatar-fallback') as HTMLImageElement | null
+  const fallbackAvatarUrl = window.infinitiLiveUi?.avatarFallbackFileUrl?.trim() ?? ''
+  let useCompactAvatarFallback = false
+  if (!spriteExpressionDirFileUrl && fallbackAvatar && fallbackAvatarUrl) {
+    fallbackAvatar.src = fallbackAvatarUrl
+    fallbackAvatar.hidden = false
+    useCompactAvatarFallback = true
+    fallbackAvatar.addEventListener('error', () => {
+      fallbackAvatar.hidden = true
+      useCompactAvatarFallback = false
+    }, { once: true })
+  }
 
   spriteEmotionToIdOverride = null
   streamManifestForStrip = null
@@ -1133,23 +1147,21 @@ async function bootstrap(): Promise<void> {
       void liveModel.motion('Idle', 0).catch(() => {})
       console.debug('[liveui] Live2D Cubism4 模型已加载', modelUrl)
     } catch (e) {
-      console.warn('[liveui] Live2D 加载失败，使用占位圆形:', e)
+      console.warn(
+        useCompactAvatarFallback
+          ? '[liveui] Live2D 加载失败，已使用控制条头像兜底'
+          : '[liveui] Live2D 加载失败，隐藏默认占位:',
+        e,
+      )
       liveModel = null
-      app.stage.addChild(face)
-      app.stage.addChild(mouth)
-      applyPlaceholderExpression('neutral')
-      redrawPlaceholderMouth()
-      wireHover(face)
-      layoutFigureInStage()
       scheduleDynamicWindowFit()
     }
   } else if (!expressionSprite && !useReal2d) {
-    app.stage.addChild(face)
-    app.stage.addChild(mouth)
-    applyPlaceholderExpression('neutral')
-    redrawPlaceholderMouth()
-    wireHover(face)
-    layoutFigureInStage()
+    console.debug(
+      useCompactAvatarFallback
+        ? '[liveui] 使用控制条头像兜底，隐藏默认占位'
+        : '[liveui] 无可用形象资源，隐藏默认占位',
+    )
     scheduleDynamicWindowFit()
   }
 

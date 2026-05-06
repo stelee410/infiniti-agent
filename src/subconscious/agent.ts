@@ -561,6 +561,7 @@ export class SubconsciousAgent {
 
   private renderAwakePose(): void {
     if (!this.liveUi) return
+    this.liveUi.sendStatusPill('就绪', 'ready')
     this.liveUi.sendAction({ gaze: 'center' })
   }
 

@@ -46,8 +46,8 @@ vi.mock('../llm/oneShotCompletion.js', () => ({
             reason: '这是当前项目的明确工程方向。',
           },
         ],
-        selfReflection: '这次梦境理解到，用户想要的是可落地的后台认知循环，而不是普通摘要。',
-        behaviorGuidance: ['优先给出单机可落地方案。', '不要引入多用户隔离。'],
+        selfReflection: '我意识到自己需要把这次经历整理成可落地的后台认知循环，而不是普通摘要。',
+        behaviorGuidance: ['我醒来后优先给出单机可落地方案。', '我不要引入多用户隔离。'],
         longHorizonObjectiveCandidate: {
           objective: '帮助用户完成 Dream Runtime 的工程落地。',
           reason: '最近讨论持续集中在 dream runtime。',
@@ -59,7 +59,7 @@ vi.mock('../llm/oneShotCompletion.js', () => ({
       return JSON.stringify({
         creativeInsights: [
           {
-            idea: '把 Dream Runtime 拆成事实线和灵感线，灵感只进 dream ideas，不进长期事实记忆。',
+            idea: '我想把 Dream Runtime 拆成事实线和灵感线，灵感只进 dream ideas，不进长期事实记忆。',
             type: 'architecture_idea',
             groundedIn: ['用户担心 dream context 污染主 prompt', '当前系统已有 diary 和 prompt context'],
             usefulness: 0.93,
@@ -69,7 +69,7 @@ vi.mock('../llm/oneShotCompletion.js', () => ({
         ],
         nextQuestions: ['灵感线是否需要用户确认后才转成任务？'],
         possibleExperiments: ['每次梦只选择一个 unresolved thread 做创造性深挖。'],
-        messageToUser: '我梦里想到：Dream Runtime 可以有事实线和灵感线，避免创造性污染长期记忆。',
+        messageToUser: '我梦里想到：我可以把 Dream Runtime 分成事实线和灵感线，避免创造性污染长期记忆。',
       })
     }
     return '{}'
@@ -123,7 +123,8 @@ describe('dream runtime', () => {
 
     const diaryPath = join(localAgentDir(cwd), 'dreams', 'diaries', '2026-05-05T04-00-00-000Z.md')
     const diary = await readFile(diaryPath, 'utf8')
-    expect(diary).toContain('Jess 的梦境笔记')
+    expect(diary).toContain('我的梦境笔记')
+    expect(diary).not.toContain('Jess 的梦境笔记')
     expect(diary).toContain('后台认知循环')
     expect(diary).toContain('Creative Insights')
     expect(diary).toContain('事实线和灵感线')

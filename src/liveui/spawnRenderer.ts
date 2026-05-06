@@ -27,6 +27,8 @@ export type LiveUiElectronSpawnOptions = {
   model3FileUrl?: string
   /** 含尾斜杠的 `file:` URL，指向含 `exp_01.png`…的目录 */
   spriteExpressionDirFileUrl?: string
+  /** spriteExpressions 不可用时，在对话框左上角展示的圆形头像 file URL */
+  avatarFallbackFileUrl?: string
   /** JSON：`{ speechRmsThreshold, silenceEndMs, suppressInterruptDuringTts }` */
   voiceMicJson?: string
   /**
@@ -65,6 +67,9 @@ export function spawnLiveElectron(port: number, opts?: LiveUiElectronSpawnOption
       ...(opts?.model3FileUrl ? { INFINITI_LIVEUI_MODEL3_FILE_URL: opts.model3FileUrl } : {}),
       ...(opts?.spriteExpressionDirFileUrl
         ? { INFINITI_LIVEUI_SPRITE_EXPRESSION_DIR: opts.spriteExpressionDirFileUrl }
+        : {}),
+      ...(opts?.avatarFallbackFileUrl
+        ? { INFINITI_LIVEUI_AVATAR_FALLBACK_FILE_URL: opts.avatarFallbackFileUrl }
         : {}),
       ...(opts?.voiceMicJson ? { INFINITI_LIVEUI_VOICE_MIC: opts.voiceMicJson } : {}),
       ...(typeof opts?.figureZoom === 'number' && Number.isFinite(opts.figureZoom)

@@ -1,7 +1,9 @@
 import type { InfinitiConfig } from '../config/types.js'
 import {
+  resolveAvatarFallbackForUi,
   resolveLive2dModelForUi,
   resolveSpriteExpressionDirForUi,
+  type ResolvedAvatarFallback,
   type ResolvedLive2dModel,
   type ResolvedSpriteExpressionDir,
 } from '../liveui/resolveModelPath.js'
@@ -18,6 +20,7 @@ export type LiveCommandPlan = {
   renderer: 'live2d' | 'sprite' | 'real2d'
   model3FileUrl?: string
   spriteExpressionDirFileUrl?: string
+  avatarFallbackFileUrl?: string
   voiceMicJson: string
   figureZoomOverride?: number
   warnings: string[]
@@ -28,6 +31,7 @@ export type LiveCommandDeps = {
   envPort?: string
   resolveSpriteExpressionDirForUi: (cwd: string, liveUi: InfinitiConfig['liveUi']) => ResolvedSpriteExpressionDir | null
   resolveLive2dModelForUi: (cwd: string, liveUi: InfinitiConfig['liveUi']) => ResolvedLive2dModel | null
+  resolveAvatarFallbackForUi: (cwd: string) => ResolvedAvatarFallback | null
   buildLiveUiVoiceMicEnvJson: (liveUi: InfinitiConfig['liveUi'], opts: { auto?: boolean }) => string
 }
 
@@ -43,6 +47,7 @@ export function defaultLiveCommandDeps(): LiveCommandDeps {
     envPort: process.env.INFINITI_LIVEUI_PORT,
     resolveSpriteExpressionDirForUi,
     resolveLive2dModelForUi,
+    resolveAvatarFallbackForUi,
     buildLiveUiVoiceMicEnvJson,
   }
 }
@@ -56,6 +61,7 @@ export function resolveLiveCommandPlan(
   const port = parseLivePort(opts.port, cfg.liveUi?.port, deps.envPort)
   const spriteResolved = deps.resolveSpriteExpressionDirForUi(cwd, cfg.liveUi)
   const live2dResolved = deps.resolveLive2dModelForUi(cwd, cfg.liveUi)
+  const avatarFallback = deps.resolveAvatarFallbackForUi(cwd)
   const warnings = [
     ...(spriteResolved?.warnings ?? []),
     ...(live2dResolved?.warnings ?? []),
@@ -73,6 +79,9 @@ export function resolveLiveCommandPlan(
   } else if (useSpriteOnly) {
     info.push('已启用 spriteExpressions（PNG），不使用 Live2D 模型 URL')
   }
+  if (!useSprite && avatarFallback?.avatarFileUrl) {
+    info.push('spriteExpressions 不可用，已启用圆形头像兜底')
+  }
 
   const figureZoomOverride = parseLiveZoomOverride(opts.zoom)
   if (figureZoomOverride !== undefined) {
@@ -86,6 +95,7 @@ export function resolveLiveCommandPlan(
     renderer: useReal2d ? 'real2d' : useSpriteOnly ? 'sprite' : 'live2d',
     model3FileUrl: useReal2d || useSpriteOnly ? undefined : live2dResolved?.model3FileUrl,
     spriteExpressionDirFileUrl: useReal2d || useSpriteOnly ? spriteResolved?.dirFileUrl : undefined,
+    avatarFallbackFileUrl: !useSprite ? avatarFallback?.avatarFileUrl : undefined,
     voiceMicJson: deps.buildLiveUiVoiceMicEnvJson(cfg.liveUi, { auto: opts.auto === true }),
     figureZoomOverride,
     warnings,
