@@ -13,6 +13,12 @@ export type BuiltinToolName =
   | 'snap_photo'
   | 'avatargen_real2d'
   | 'seedance_video'
+  | 'request_h5_applet'
+  | 'launch_h5_applet'
+  | 'list_h5_applets'
+  | 'create_h5_applet'
+  | 'update_h5_applet'
+  | 'destroy_h5_applet'
   | 'read_file'
   | 'glob_files'
   | 'grep_files'
@@ -25,6 +31,114 @@ export const BUILTIN_TOOLS: Array<{
   description: string
   parameters: JsonSchema
 }> = [
+  {
+    name: 'request_h5_applet',
+    description:
+      '按用户需求请求一个 LiveUI 快应用。优先查本地缓存：命中则直接启动；未命中则异步交给 H5 子 agent 生成，生成完成后缓存到本地并在 LiveUI 聊天界面显示可点击启动图标。适合“我需要做一个快应用/幸运转盘/投票器”等渐进式披露流程。',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        title: { type: 'string', description: '快应用名称，例如 幸运转盘' },
+        description: { type: 'string', description: '用户需求描述，可包含玩法、字段、奖项等' },
+        launch_mode: {
+          type: 'string',
+          enum: ['live_panel', 'floating', 'fullscreen', 'overlay'],
+          description: '布局模式，默认 live_panel',
+        },
+      },
+      required: ['title'],
+    },
+  },
+  {
+    name: 'launch_h5_applet',
+    description:
+      '从本地快应用缓存启动一个 H5 applet。可传 key/id，也可传 title 进行匹配。',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        key: { type: 'string', description: '缓存 key 或 id，可选' },
+        title: { type: 'string', description: '快应用标题，可选' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'list_h5_applets',
+    description:
+      '列出本地已缓存的 LiveUI 快应用，用于判断是否已有可直接启动的 applet。',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'create_h5_applet',
+    description:
+      '在 LiveUI 数字人窗口中创建并启动一个临时 H5 applet。仅支持单文件 HTML、内联 CSS/JS；运行在 sandbox iframe 中。适合抽奖、投票、表单、小游戏、看板等实时交互界面。',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        title: { type: 'string', description: 'applet 标题，例如 Lucky Wheel' },
+        description: { type: 'string', description: '简短说明，可选' },
+        launch_mode: {
+          type: 'string',
+          enum: ['live_panel', 'floating', 'fullscreen', 'overlay'],
+          description: '布局模式，默认 live_panel',
+        },
+        permissions: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            network: { type: 'boolean', description: '是否允许网络访问，默认 false' },
+            storage: { enum: [false, 'session'], description: '存储权限，默认 session；不允许 localStorage' },
+            microphone: { type: 'boolean' },
+            camera: { type: 'boolean' },
+            clipboard: { type: 'boolean' },
+            fullscreen: { type: 'boolean' },
+          },
+        },
+        html: { type: 'string', description: '完整 HTML 文档或片段；必须使用内联 CSS/JS，不可引用远程脚本' },
+      },
+      required: ['title', 'html'],
+    },
+  },
+  {
+    name: 'update_h5_applet',
+    description:
+      '热更新一个正在运行的 H5 applet。replace 会替换完整 HTML；css 会注入/替换热更新样式；state 会向 applet 派发 linkyun:state-patch 事件。',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        app_id: { type: 'string', description: 'create_h5_applet 返回的 app_id' },
+        patch_type: {
+          type: 'string',
+          enum: ['replace', 'css', 'state'],
+          description: '更新类型',
+        },
+        content: { type: 'string', description: 'replace 为 HTML，css 为 CSS 文本，state 为 JSON 字符串或普通文本' },
+      },
+      required: ['app_id', 'patch_type', 'content'],
+    },
+  },
+  {
+    name: 'destroy_h5_applet',
+    description:
+      '销毁一个正在运行的 H5 applet，并从 LiveUI 窗口移除 iframe。',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        app_id: { type: 'string', description: 'create_h5_applet 返回的 app_id' },
+      },
+      required: ['app_id'],
+    },
+  },
   {
     name: 'read_file',
     description:

@@ -23,6 +23,7 @@ import {
   handleReloadSlashCommand,
   handleRollSlashCommand,
   handleScheduleSlashCommand,
+  handleShowMeMagicSlashCommand,
   handleSpeakSlashCommand,
   handleUndoSlashCommand,
 } from './chatCommandHandlers.js'
@@ -251,6 +252,29 @@ describe('handleUndoSlashCommand', () => {
 })
 
 describe('simple local command handlers', () => {
+  it('launches Show Me Magic through the cached applet launch path', async () => {
+    const u = ui()
+    const liveUi = {
+      openInbox: vi.fn(),
+      openConfigPanel: vi.fn(),
+      createH5Applet: vi.fn(),
+      launchH5Applet: vi.fn(),
+      sendH5AppletLibrary: vi.fn(),
+    }
+
+    await handleShowMeMagicSlashCommand(cwd, liveUi, u)
+
+    expect(liveUi.createH5Applet).not.toHaveBeenCalled()
+    expect(liveUi.launchH5Applet).toHaveBeenCalledWith('official_show_me_magic')
+    expect(liveUi.sendH5AppletLibrary).toHaveBeenCalledWith([
+      expect.objectContaining({
+        key: 'official_show_me_magic',
+        title: 'Show Me Magic',
+      }),
+    ])
+    expect(u.setNotice).not.toHaveBeenCalled()
+  })
+
   it('handles exit, clear, reload, and help command plumbing', async () => {
     const messages = [{ role: 'user' as const, content: 'hello' }]
     const exitApp = vi.fn()

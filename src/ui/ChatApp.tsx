@@ -30,8 +30,10 @@ import {
   type SlashItem,
 } from './slashCompletions.js'
 import { parseSpeakCommandLine } from '../liveui/speakCommandLine.js'
-import type { LiveUiInteractionKind, LiveUiSession } from '../liveui/wsSession.js'
+import type { LiveUiAppletEvent, LiveUiInteractionKind, LiveUiSession } from '../liveui/wsSession.js'
 import type { LiveUiFileAttachment, LiveUiStatusVariant, LiveUiVisionAttachment } from '../liveui/protocol.js'
+import { listCachedH5Applets, readCachedH5Applet } from '../liveui/h5AppletCache.js'
+import { H5AppletValidator, normalizePermissions } from '../liveui/appletRuntime.js'
 import { enqueueSnapPhotoJob } from '../snap/asyncSnap.js'
 import { enqueueSeedanceVideoJob, seedanceReferenceImagesFromLiveInputs } from '../video/asyncVideo.js'
 import { enqueueAvatarGenJob } from '../avatar/asyncAvatarGen.js'
@@ -82,6 +84,7 @@ import {
   handleReloadSlashCommand,
   handleRollSlashCommand,
   handleScheduleSlashCommand,
+  handleShowMeMagicSlashCommand,
   handleSpeakSlashCommand,
   handleUndoSlashCommand,
 } from './chatCommandHandlers.js'
@@ -203,6 +206,20 @@ function attachmentSummary(attachments: LiveUiFileAttachment[]): string {
     docCount ? `${docCount} 个文档` : '',
   ].filter(Boolean)
   return parts.length ? `\n\n[已附带${parts.join('、')}]` : ''
+}
+
+function formatAppletEventPayload(payload: unknown): string {
+  if (payload == null) return ''
+  try {
+    return JSON.stringify(payload).slice(0, 1200)
+  } catch {
+    return String(payload).slice(0, 1200)
+  }
+}
+
+function shouldSilenceAppletEvent(event: LiveUiAppletEvent): boolean {
+  if (event.title === 'Show Me Magic') return true
+  return event.event === 'magic_loaded' || event.event === 'magic_burst' || event.event === 'manual_ping'
 }
 
 function validateConfigPanelSave(raw: unknown): asserts raw is InfinitiConfig {
@@ -782,6 +799,12 @@ export function ChatApp({
           case 'help':
             handleHelpSlashCommand({ setError, setInput })
             return
+          case 'showMeMagic':
+            await handleShowMeMagicSlashCommand(cwd, liveUi, {
+              setError,
+              setInput,
+            })
+            return
           case 'compact':
             handleCompactSlashCommand(cwd, config, messages, slashCommand, subconsciousRef.current, {
               setError,
@@ -940,6 +963,7 @@ export function ChatApp({
           mcp,
           skipPermissions: dangerouslySkipPermissions,
           editHistory: editHistoryRef.current,
+          liveUi,
           memoryCoordinator: subconsciousRef.current ?? undefined,
           signal: ac.signal,
           onToolDispatch: (name) => {
@@ -1194,6 +1218,68 @@ export function ChatApp({
       void handleSubmit(prompts[kind])
     })
   }, [liveUi, handleSubmit])
+
+  useEffect(() => {
+    if (!liveUi) return
+    return liveUi.onAppletEvent((event: LiveUiAppletEvent) => {
+      if (shouldSilenceAppletEvent(event)) return
+      if (busyRef.current) return
+      if (subconsciousRef.current?.isDreaming()) return
+      const payload = formatAppletEventPayload(event.payload)
+      void handleSubmit(
+        `（H5 applet 事件：app_id=${event.appId}，event=${event.event}${payload ? `，payload=${payload}` : ''}。请根据这个用户交互继续回应；如果需要更新界面，请调用 update_h5_applet；如果流程结束，请调用 destroy_h5_applet。）`,
+      )
+    })
+  }, [liveUi, handleSubmit])
+
+  useEffect(() => {
+    if (!liveUi) return
+    void listCachedH5Applets(cwd).then((items) => liveUi.sendH5AppletLibrary(items)).catch(() => undefined)
+    return liveUi.onAppletLaunch((key) => {
+      void (async () => {
+        const cached = await readCachedH5Applet(cwd, key)
+        if (!cached) {
+          liveUi.sendH5AppletGeneration({
+            status: 'failed',
+            title: '快应用',
+            description: '',
+            key,
+            error: '未找到本地缓存',
+          })
+          return
+        }
+        const cacheCheck = new H5AppletValidator().validateHtml(
+          cached.html,
+          normalizePermissions(cached.permissions),
+        )
+        if (!cacheCheck.ok) {
+          liveUi.sendH5AppletGeneration({
+            status: 'failed',
+            title: cached.title,
+            description: cached.description,
+            key,
+            error: `缓存未通过校验：${cacheCheck.errors.join('; ')}`,
+          })
+          return
+        }
+        liveUi.createH5Applet({
+          title: cached.title,
+          description: cached.description,
+          launchMode: cached.launchMode,
+          permissions: cached.permissions,
+          html: cached.html,
+        })
+      })().catch((e) => {
+        liveUi.sendH5AppletGeneration({
+          status: 'failed',
+          title: '快应用',
+          description: '',
+          key,
+          error: formatChatError(e),
+        })
+      })
+    })
+  }, [cwd, liveUi])
 
   useEffect(() => {
     if (!liveUi) return

@@ -40,8 +40,7 @@
         min-height: 48px;
       }
       body.liveui-minimal-mode #liveui-user-line {
-        min-height: 40px;
-        max-height: 72px;
+        height: 40px;
       }
       /* 底部：字幕 + 参考截图的深色控制条（左按钮簇 + 右输入） */
       #liveui-bottom-dock {
@@ -76,6 +75,14 @@
       body.liveui-camera-capture-open #liveui-bottom-dock,
       body.liveui-camera-capture-open #liveui-inbox,
       body.liveui-camera-capture-open .liveui-debug-edge {
+        display: none !important;
+      }
+      body.liveui-h5-applet-open #app,
+      body.liveui-h5-applet-open #liveui-real2d-stage,
+      body.liveui-h5-applet-open #speech-bubble,
+      body.liveui-h5-applet-open #liveui-bottom-dock,
+      body.liveui-h5-applet-open #liveui-slash-menu,
+      body.liveui-h5-applet-open .liveui-debug-edge {
         display: none !important;
       }
       .liveui-debug-edge {
@@ -1007,17 +1014,14 @@
         outline: none;
         -webkit-app-region: no-drag;
         app-region: no-drag;
-        min-height: 40px;
-        max-height: 168px;
+        /* 固定尺寸：超出内容触发内部滚动条，绝不撑大 dock。*/
+        /* 之前 field-sizing: content 让 textarea 按内容自适应，*/
+        /* 进而让 #liveui-bottom-dock 高度抖动，触发 ResizeObserver -> applyReal2dStageLayout */
+        /* 重排链路；这是 /showmemagic 启动后人物变大问题的结构性根源。 */
+        height: 56px;
         resize: none;
         overflow-y: auto;
-        field-sizing: content;
         line-height: 1.45;
-      }
-      @supports not (field-sizing: content) {
-        #liveui-user-line {
-          min-height: 72px;
-        }
       }
       #liveui-user-line::placeholder {
         color: rgba(255, 255, 255, 0.38);
@@ -1259,7 +1263,192 @@
       #liveui-config-status.err {
         color: #fca5a5;
       }
+      #liveui-h5-runtime {
+        position: fixed;
+        z-index: 140;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        width: 80vw;
+        height: 80vh;
+        max-width: calc(100vw - 24px);
+        max-height: calc(100vh - 24px);
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        pointer-events: none;
+      }
+      #liveui-h5-runtime.liveui-h5-runtime--empty {
+        display: none;
+      }
+      .liveui-h5-launcher {
+        position: fixed;
+        z-index: 145;
+        right: 14px;
+        bottom: calc(var(--liveui-h5-bottom-reserve, 132px) + 10px);
+        max-width: min(92vw, 390px);
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        flex-wrap: wrap;
+        gap: 8px;
+        pointer-events: auto;
+        -webkit-app-region: no-drag;
+        app-region: no-drag;
+      }
+      .liveui-h5-launcher--empty {
+        display: none;
+      }
+      .liveui-h5-launcher-status,
+      .liveui-h5-launcher-btn {
+        min-height: 38px;
+        box-sizing: border-box;
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        border: 1px solid rgba(125, 211, 252, 0.38);
+        border-radius: 8px;
+        background: rgba(15, 23, 42, 0.88);
+        color: rgba(255, 255, 255, 0.92);
+        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+      }
+      .liveui-h5-launcher-status {
+        padding: 0 12px;
+        font: 700 13px/1.2 system-ui, -apple-system, 'Segoe UI', sans-serif;
+      }
+      .liveui-h5-launcher-btn {
+        max-width: 154px;
+        padding: 4px 10px 4px 5px;
+        cursor: pointer;
+        font: 700 13px/1.2 system-ui, -apple-system, 'Segoe UI', sans-serif;
+      }
+      .liveui-h5-launcher-btn:hover {
+        background: rgba(30, 41, 59, 0.95);
+        border-color: rgba(125, 211, 252, 0.72);
+      }
+      .liveui-h5-launcher-icon {
+        width: 28px;
+        height: 28px;
+        flex: 0 0 auto;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 7px;
+        background: linear-gradient(135deg, #7c3aed, #0891b2);
+        color: #fff;
+        font: 800 15px/1 system-ui, sans-serif;
+      }
+      .liveui-h5-launcher-label {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .liveui-h5-applet {
+        box-sizing: border-box;
+        width: 100%;
+        height: 100%;
+        min-height: 0;
+        max-height: 100%;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        border: 1px solid rgba(148, 163, 184, 0.26);
+        border-radius: 8px;
+        background: #020617;
+        box-shadow: 0 18px 50px rgba(0, 0, 0, 0.34);
+        pointer-events: auto;
+        -webkit-app-region: no-drag;
+        app-region: no-drag;
+      }
+      .liveui-h5-applet--fullscreen,
+      .liveui-h5-applet--overlay {
+        position: relative;
+        inset: auto;
+        width: 100%;
+        height: 100%;
+        min-height: 0;
+        max-height: 100%;
+      }
+      .liveui-h5-applet-head {
+        height: 38px;
+        flex: 0 0 auto;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 0 8px 0 12px;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+        background: rgba(2, 6, 23, 0.78);
+      }
+      .liveui-h5-applet-title {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: rgba(255, 255, 255, 0.9);
+        font: 700 13px/1.2 system-ui, -apple-system, 'Segoe UI', sans-serif;
+        letter-spacing: 0;
+      }
+      .liveui-h5-applet-close {
+        width: 30px;
+        height: 30px;
+        flex: 0 0 auto;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        margin: 0;
+        padding: 0;
+        border: 0;
+        border-radius: 8px;
+        background: transparent;
+        color: rgba(226, 232, 240, 0.8);
+        cursor: pointer;
+      }
+      .liveui-h5-applet-close:hover {
+        background: rgba(248, 113, 113, 0.16);
+        color: #fecaca;
+      }
+      .liveui-h5-applet-close svg {
+        width: 18px;
+        height: 18px;
+        pointer-events: none;
+      }
+      .liveui-h5-applet-frame-shell {
+        flex: 1 1 auto;
+        width: 100%;
+        height: 100%;
+        min-height: 0;
+        display: flex;
+        align-items: flex-start;
+        justify-content: center;
+        overflow: hidden;
+        background: #020617;
+      }
+      .liveui-h5-applet-frame {
+        flex: 0 0 auto;
+        width: var(--liveui-h5-virtual-width, 100%);
+        height: var(--liveui-h5-virtual-height, 100%);
+        border: 0;
+        background: #020617;
+        transform: scale(var(--liveui-h5-frame-scale, 1));
+        transform-origin: top center;
+      }
       @media (max-width: 560px) {
+        #liveui-h5-runtime {
+          left: 50%;
+          right: auto;
+          transform: translate(-50%, -50%);
+          top: 50%;
+          width: calc(100vw - 16px);
+          height: min(80vh, 768px);
+        }
+        .liveui-h5-launcher {
+          left: 8px;
+          right: 8px;
+          bottom: calc(var(--liveui-h5-bottom-reserve, 118px) + 8px);
+          max-width: none;
+        }
         #liveui-config-panel {
           inset: 8px;
         }
@@ -1308,6 +1497,7 @@
     <div id="speech-bubble" aria-hidden="true">
       <div id="speech-bubble-text" class="liveui-md-root"></div>
     </div>
+    <div id="liveui-h5-runtime" class="liveui-h5-runtime--empty" aria-live="polite"></div>
     <div id="liveui-debug-emotion" class="liveui-debug-edge" hidden aria-hidden="true"></div>
     <div id="liveui-debug-relationship" class="liveui-debug-edge" hidden aria-hidden="true"></div>
     <div id="liveui-camera-countdown" hidden aria-hidden="true">

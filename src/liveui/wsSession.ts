@@ -15,6 +15,7 @@ import type {
   LiveUiStatusVariant,
   LiveUiFileAttachment,
   LiveUiVisionAttachment,
+  LiveUiH5AppletLibraryItem,
 } from './protocol.js'
 import { parseSpeakCommandLine } from './speakCommandLine.js'
 import { StreamMouthEstimator } from './streamMouth.js'
@@ -23,6 +24,12 @@ import { markdownToTtsPlainText } from '../tts/markdownToTtsPlainText.js'
 import type { AsrEngine } from '../asr/whisperAsr.js'
 import { captureVisionSnapshotResult } from './visionCapture.js'
 import { parseLiveUiClientMessage, type LiveUiClientMessage } from './clientMessages.js'
+import {
+  H5AppletManager,
+  type H5AppletCreateInput,
+  type H5AppletPatchType,
+  type H5AppletRecord,
+} from './appletRuntime.js'
 
 export type LiveUiConnectionListener = (connected: boolean) => void
 export type LiveUiUserLineListener = (line: string) => void
@@ -36,6 +43,15 @@ export type LiveUiInboxSaveAsListener = (sourcePath: string, destinationPath: st
 /** 渲染端点击 Live2D 头部 / 身体等，由 Node 转成一条合成用户消息请求模型回应 */
 export type LiveUiInteractionKind = 'head_pat' | 'body_poke'
 export type LiveUiInteractionListener = (kind: LiveUiInteractionKind) => void
+export type LiveUiAppletEvent = {
+  appId: string
+  title?: string
+  event: string
+  payload: unknown
+  receivedAt: string
+}
+export type LiveUiAppletEventListener = (event: LiveUiAppletEvent) => void
+export type LiveUiAppletLaunchListener = (key: string) => void
 
 export function isAllowedLiveUiMediaPath(filePath: string, roots: string[]): boolean {
   const target = resolve(filePath)
@@ -60,6 +76,9 @@ export class LiveUiSession {
   private inboxMarkReadListeners = new Set<LiveUiInboxMarkReadListener>()
   private inboxSaveAsListeners = new Set<LiveUiInboxSaveAsListener>()
   private interactionListeners = new Set<LiveUiInteractionListener>()
+  private appletEventListeners = new Set<LiveUiAppletEventListener>()
+  private appletLaunchListeners = new Set<LiveUiAppletLaunchListener>()
+  private applets = new H5AppletManager()
   private mouthTimer: ReturnType<typeof setInterval> | undefined
   private electronChild: ChildProcess | null = null
   private ttsEngine: TtsEngine | null = null
@@ -72,6 +91,7 @@ export class LiveUiSession {
   private pendingVisionAttachment: LiveUiVisionAttachment | undefined
   private pendingFileAttachments: LiveUiFileAttachment[] = []
   private lastStatusPill: { label: string; variant: LiveUiStatusVariant } = { label: '就绪', variant: 'ready' }
+  private lastAppletLibrary: LiveUiH5AppletLibraryItem[] = []
 
   private readonly mediaRoots: string[]
 
@@ -260,6 +280,36 @@ export class LiveUiSession {
     }
   }
 
+  onAppletEvent(fn: LiveUiAppletEventListener): () => void {
+    this.appletEventListeners.add(fn)
+    return () => {
+      this.appletEventListeners.delete(fn)
+    }
+  }
+
+  private emitAppletEvent(event: LiveUiAppletEvent): void {
+    for (const f of this.appletEventListeners) {
+      f(event)
+    }
+  }
+
+  onAppletLaunch(fn: LiveUiAppletLaunchListener): () => void {
+    this.appletLaunchListeners.add(fn)
+    return () => {
+      this.appletLaunchListeners.delete(fn)
+    }
+  }
+
+  private emitAppletLaunch(key: string): void {
+    for (const f of this.appletLaunchListeners) {
+      f(key)
+    }
+  }
+
+  launchH5Applet(key: string): void {
+    this.broadcast({ type: 'H5_APPLET_LAUNCH', data: { key } } as LiveUiMessage)
+  }
+
   private emitConn(): void {
     const ok = this.clientConnected
     for (const f of this.listeners) f(ok)
@@ -283,6 +333,10 @@ export class LiveUiSession {
         ws.send(JSON.stringify({ type: 'TTS_STATUS', data: { available: this.ttsEngine != null, enabled: this.ttsEnabled } }))
         ws.send(JSON.stringify({ type: 'ASR_STATUS', data: { available: this.asrEngine != null } }))
         ws.send(JSON.stringify({ type: 'STATUS_PILL', data: this.lastStatusPill }))
+        ws.send(JSON.stringify({ type: 'H5_APPLET_LIBRARY', data: { items: this.lastAppletLibrary } }))
+        for (const applet of this.applets.list()) {
+          if (applet.status !== 'destroyed') ws.send(JSON.stringify(this.appletCreateMessage(applet)))
+        }
       }
       ws.on('message', (buf) => {
         try {
@@ -377,6 +431,26 @@ export class LiveUiSession {
       case 'LIVEUI_INTERACTION':
         this.emitInteraction(message.kind)
         return
+      case 'H5_APPLET_EVENT':
+        const applet = this.applets.get(message.appId)
+        this.emitAppletEvent({
+          appId: message.appId,
+          title: applet?.title,
+          event: message.event,
+          payload: message.payload,
+          receivedAt: new Date().toISOString(),
+        })
+        return
+      case 'H5_APPLET_CLOSE_REQUEST':
+        try {
+          this.destroyH5Applet(message.appId)
+        } catch {
+          this.broadcast({ type: 'H5_APPLET_DESTROY', data: { appId: message.appId } } as LiveUiMessage)
+        }
+        return
+      case 'H5_APPLET_LAUNCH_REQUEST':
+        this.emitAppletLaunch(message.key)
+        return
     }
   }
 
@@ -466,6 +540,62 @@ export class LiveUiSession {
         c.send(s)
       }
     }
+  }
+
+  createH5Applet(input: H5AppletCreateInput): H5AppletRecord {
+    const applet = this.applets.create(input)
+    this.broadcast(this.appletCreateMessage(applet))
+    return applet
+  }
+
+  updateH5Applet(appId: string, patchType: H5AppletPatchType, content: string): H5AppletRecord {
+    const applet = this.applets.update({ appId, patchType, content })
+    this.broadcast({
+      type: 'H5_APPLET_UPDATE',
+      data: {
+        appId,
+        patchType,
+        content: patchType === 'replace' ? applet.html : content,
+      },
+    } as LiveUiMessage)
+    if (patchType !== 'replace') this.applets.markRunning(appId)
+    return this.applets.get(appId) ?? applet
+  }
+
+  destroyH5Applet(appId: string): H5AppletRecord {
+    const applet = this.applets.destroy(appId)
+    this.broadcast({ type: 'H5_APPLET_DESTROY', data: { appId } } as LiveUiMessage)
+    return applet
+  }
+
+  sendH5AppletLibrary(items: LiveUiH5AppletLibraryItem[]): void {
+    this.lastAppletLibrary = items
+    this.broadcast({ type: 'H5_APPLET_LIBRARY', data: { items } } as LiveUiMessage)
+  }
+
+  sendH5AppletGeneration(data: {
+    status: 'started' | 'completed' | 'failed'
+    title: string
+    description: string
+    key?: string
+    error?: string
+  }): void {
+    this.broadcast({ type: 'H5_APPLET_GENERATION', data } as LiveUiMessage)
+  }
+
+  private appletCreateMessage(applet: H5AppletRecord): LiveUiMessage {
+    return {
+      type: 'H5_APPLET_CREATE',
+      data: {
+        appId: applet.appId,
+        title: applet.title,
+        description: applet.description,
+        launchMode: applet.launchMode,
+        permissions: applet.permissions,
+        html: applet.html,
+        status: 'running',
+      },
+    } as LiveUiMessage
   }
 
   sendMouth(value01: number): void {

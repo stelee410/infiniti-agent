@@ -1,10 +1,11 @@
 export type LiveUiWindowBounds = { width: number; height: number }
-export type LiveUiWindowMode = 'avatar' | 'config' | 'inbox' | 'camera' | 'minimal'
+export type LiveUiWindowMode = 'avatar' | 'config' | 'inbox' | 'camera' | 'h5Applet' | 'minimal'
 export type LiveUiWindowLayoutRequest =
   | { mode: 'avatar'; reason: string; compactHeight?: number }
   | { mode: 'config'; reason: string; open: boolean }
   | { mode: 'inbox'; reason: string; open: boolean }
   | { mode: 'camera'; reason: string; open: boolean }
+  | { mode: 'h5Applet'; reason: string; open: boolean }
   | { mode: 'minimal'; reason: string; open: boolean; bounds?: LiveUiWindowBounds }
 
 export type LiveUiWindowBridge = {
@@ -13,6 +14,7 @@ export type LiveUiWindowBridge = {
   setConfigPanelOpen?: (open: boolean) => void
   setInboxOpen?: (open: boolean) => void
   setCameraCaptureOpen?: (open: boolean) => void
+  setH5AppletOpen?: (open: boolean) => void
   setMinimalModeOpen?: (open: boolean, bounds?: LiveUiWindowBounds) => void
 }
 
@@ -22,6 +24,7 @@ export type LiveUiWindowManager = {
   setConfigPanelOpen(open: boolean): void
   setInboxOpen(open: boolean): void
   setCameraCaptureOpen(open: boolean): void
+  setH5AppletOpen(open: boolean): void
   setMinimalModeOpen(open: boolean, bounds?: LiveUiWindowBounds): void
   setInteractive(interactive: boolean): void
 }
@@ -52,6 +55,13 @@ export function createLiveUiWindowManager(bridge?: LiveUiWindowBridge): LiveUiWi
       case 'camera':
         bridge?.setCameraCaptureOpen?.(request.open)
         return
+      case 'h5Applet':
+        if (bridge?.setH5AppletOpen) {
+          bridge.setH5AppletOpen(request.open)
+        } else {
+          setInteractive(request.open)
+        }
+        return
       case 'minimal':
         bridge?.setMinimalModeOpen?.(request.open, request.bounds)
         return
@@ -71,6 +81,9 @@ export function createLiveUiWindowManager(bridge?: LiveUiWindowBridge): LiveUiWi
     },
     setCameraCaptureOpen(open) {
       requestLayout({ mode: 'camera', reason: 'camera-capture', open })
+    },
+    setH5AppletOpen(open) {
+      requestLayout({ mode: 'h5Applet', reason: 'h5-applet', open })
     },
     setMinimalModeOpen(open, bounds) {
       requestLayout({ mode: 'minimal', reason: 'minimal-mode', open, bounds })

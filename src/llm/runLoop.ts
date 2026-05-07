@@ -13,6 +13,7 @@ import type { AvatarGenReferenceImage } from '../avatar/real2dAvatarGen.js'
 import type { McpManager } from '../mcp/manager.js'
 import type { EditHistory } from '../session/editHistory.js'
 import type { ToolRunContext } from '../tools/runner.js'
+import type { LiveUiSession } from '../liveui/wsSession.js'
 import {
   CONFIRMABLE_BUILTIN_TOOLS,
   formatToolConfirmDetail,
@@ -188,6 +189,7 @@ export type RunLoopOptions = {
   /** 跳过所有安全评估（--dangerously-skip-permissions） */
   skipPermissions?: boolean
   editHistory?: EditHistory
+  liveUi?: LiveUiSession | null
   memoryCoordinator?: ToolRunContext['memoryCoordinator']
   onToolDispatch?: (name: string) => void
   /** 外部中断信号（语音打断等场景） */
@@ -252,6 +254,7 @@ export async function runToolLoop(opts: RunLoopOptions): Promise<{
         seedanceImages: latestSeedanceReferenceImages(opts.messages),
         avatarGenImages: latestAvatarGenReferenceImages(opts.messages),
         editHistory: opts.editHistory,
+        liveUi: opts.liveUi,
         memoryCoordinator: opts.memoryCoordinator,
       })
     }

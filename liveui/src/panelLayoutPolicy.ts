@@ -27,6 +27,19 @@ export function shouldApplyReal2dResizeLayout(state: {
   return true
 }
 
+/**
+ * 快应用打开/关闭整个生命周期内冻结 real2d stage 布局。
+ * 否则在 dock/control-bar 被 CSS 隐藏的瞬间，applyReal2dStageLayout 会读到
+ * controlBar.top = 0，把整窗口高度作为 stage height，永久把 real2dStableStageHeight
+ * 单调推升到工作区高度，从而把 avatar canvas resize 得过大。
+ */
+export function shouldFreezeReal2dStageLayoutForH5(state: {
+  h5AppletOpen: boolean
+  pendingH5AppletCloseWindowSize: WindowSize | null
+}): boolean {
+  return state.h5AppletOpen || state.pendingH5AppletCloseWindowSize != null
+}
+
 export function shouldResetReal2dCompactScaleOnConfigClose(
   open: boolean,
   reason?: ConfigPanelCloseReason,

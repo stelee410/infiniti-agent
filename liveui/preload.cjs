@@ -64,6 +64,9 @@ contextBridge.exposeInMainWorld('infinitiLiveUi', {
   setCameraCaptureOpen: (open) => {
     ipcRenderer.send('liveui-camera-capture-open', !!open)
   },
+  setH5AppletOpen: (open) => {
+    ipcRenderer.send('liveui-h5-applet-open', !!open)
+  },
   setMinimalModeOpen: (open, bounds) => {
     ipcRenderer.send('liveui-minimal-mode-open', { open: !!open, ...(bounds || {}) })
   },

@@ -22,6 +22,8 @@ import { restoreEditSnapshot } from '../tools/repoTools.js'
 import { formatChatError } from '../utils/formatError.js'
 import { CHAT_HELP_TEXT, type ChatSlashCommand } from './chatSlashCommands.js'
 import { splitTtsSegments } from '../tts/streamSegments.js'
+import { showMeMagicAppletHtml } from '../liveui/showMeMagicApplet.js'
+import { listCachedH5Applets, writeCachedH5Applet } from '../liveui/h5AppletCache.js'
 
 type ScheduleCommand = Extract<
   ChatSlashCommand,
@@ -56,6 +58,22 @@ type DreamController = {
 
 export type ChatCommandLiveUi = LiveInboxUi & {
   openConfigPanel(cwd: string, config: unknown): void
+  createH5Applet(input: {
+    title: string
+    description?: string
+    launchMode?: 'live_panel' | 'floating' | 'fullscreen' | 'overlay'
+    permissions?: { network?: boolean; storage?: false | 'session' }
+    html: string
+  }): { appId: string; status: string }
+  launchH5Applet(key: string): void
+  sendH5AppletLibrary?(items: Array<{
+    id: string
+    key: string
+    title: string
+    description: string
+    launchMode: 'live_panel' | 'floating' | 'fullscreen' | 'overlay'
+    updatedAt: string
+  }>): void
 }
 
 export type SpeakCommandLiveUi = {
@@ -131,6 +149,31 @@ export function handleHelpSlashCommand(
   ui: Pick<LocalCommandUi, 'setError' | 'setInput'>,
 ): void {
   ui.setError(CHAT_HELP_TEXT)
+  ui.setInput('')
+}
+
+export async function handleShowMeMagicSlashCommand(
+  cwd: string,
+  liveUi: ChatCommandLiveUi | null | undefined,
+  ui: Pick<LocalCommandUi, 'setError' | 'setInput'>,
+): Promise<void> {
+  if (!liveUi) {
+    ui.setError('/showmemagic 需要 LiveUI：请用 `infiniti-agent live` 启动。')
+    ui.setInput('')
+    return
+  }
+  const cached = await writeCachedH5Applet(cwd, {
+    id: 'official_show_me_magic',
+    key: 'official_show_me_magic',
+    title: 'Show Me Magic',
+    description: '官方 H5/SVG/CSS 动画与交互测试页',
+    launchMode: 'live_panel',
+    permissions: { network: false, storage: 'session' },
+    html: showMeMagicAppletHtml(),
+  })
+  liveUi.sendH5AppletLibrary?.(await listCachedH5Applets(cwd))
+  liveUi.launchH5Applet(cached.key)
+  ui.setError(null)
   ui.setInput('')
 }
 

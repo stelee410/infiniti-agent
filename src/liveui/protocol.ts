@@ -207,6 +207,80 @@ export type LiveUiInboxSaveResultMessage = {
   }
 }
 
+export type LiveUiH5AppletPermissions = {
+  network: boolean
+  storage: false | 'session'
+  microphone?: boolean
+  camera?: boolean
+  clipboard?: boolean
+  fullscreen?: boolean
+}
+
+export type LiveUiH5AppletLaunchMode = 'live_panel' | 'floating' | 'fullscreen' | 'overlay'
+
+export type LiveUiH5AppletCreateMessage = {
+  type: 'H5_APPLET_CREATE'
+  data: {
+    appId: string
+    title: string
+    description: string
+    launchMode: LiveUiH5AppletLaunchMode
+    permissions: LiveUiH5AppletPermissions
+    html: string
+    status: 'running'
+  }
+}
+
+export type LiveUiH5AppletUpdateMessage = {
+  type: 'H5_APPLET_UPDATE'
+  data: {
+    appId: string
+    patchType: 'replace' | 'css' | 'state'
+    content: string
+  }
+}
+
+export type LiveUiH5AppletDestroyMessage = {
+  type: 'H5_APPLET_DESTROY'
+  data: {
+    appId: string
+  }
+}
+
+export type LiveUiH5AppletLibraryItem = {
+  id: string
+  key: string
+  title: string
+  description: string
+  launchMode: LiveUiH5AppletLaunchMode
+  updatedAt: string
+}
+
+export type LiveUiH5AppletLibraryMessage = {
+  type: 'H5_APPLET_LIBRARY'
+  data: {
+    items: LiveUiH5AppletLibraryItem[]
+  }
+}
+
+export type LiveUiH5AppletLaunchMessage = {
+  type: 'H5_APPLET_LAUNCH'
+  data: {
+    key: string
+  }
+}
+
+export type LiveUiH5AppletGenerationMessage = {
+  type: 'H5_APPLET_GENERATION'
+  data: {
+    status: 'started' | 'completed' | 'failed'
+    title: string
+    description: string
+    key?: string
+    error?: string
+  }
+}
+
 export type LiveUiMessage =
   | LiveUiSyncParamMessage
   | LiveUiActionMessage
@@ -227,6 +301,12 @@ export type LiveUiMessage =
   | LiveUiInboxUpdateMessage
   | LiveUiInboxOpenMessage
   | LiveUiInboxSaveResultMessage
+  | LiveUiH5AppletCreateMessage
+  | LiveUiH5AppletUpdateMessage
+  | LiveUiH5AppletDestroyMessage
+  | LiveUiH5AppletLibraryMessage
+  | LiveUiH5AppletLaunchMessage
+  | LiveUiH5AppletGenerationMessage
 
 export function isLiveUiMessage(x: unknown): x is LiveUiMessage {
   if (!x || typeof x !== 'object') return false
@@ -310,6 +390,57 @@ export function isLiveUiMessage(x: unknown): x is LiveUiMessage {
     if (!d || typeof d !== 'object') return false
     const dd = d as { ok?: unknown; message?: unknown }
     return typeof dd.ok === 'boolean' && typeof dd.message === 'string'
+  }
+  if (o.type === 'H5_APPLET_CREATE') {
+    const d = (x as { data?: unknown }).data
+    if (!d || typeof d !== 'object') return false
+    const dd = d as Record<string, unknown>
+    return (
+      typeof dd.appId === 'string' &&
+      typeof dd.title === 'string' &&
+      typeof dd.description === 'string' &&
+      typeof dd.html === 'string' &&
+      dd.status === 'running' &&
+      (dd.launchMode === 'live_panel' || dd.launchMode === 'floating' || dd.launchMode === 'fullscreen' || dd.launchMode === 'overlay') &&
+      !!dd.permissions &&
+      typeof dd.permissions === 'object'
+    )
+  }
+  if (o.type === 'H5_APPLET_UPDATE') {
+    const d = (x as { data?: unknown }).data
+    if (!d || typeof d !== 'object') return false
+    const dd = d as Record<string, unknown>
+    return (
+      typeof dd.appId === 'string' &&
+      typeof dd.content === 'string' &&
+      (dd.patchType === 'replace' || dd.patchType === 'css' || dd.patchType === 'state')
+    )
+  }
+  if (o.type === 'H5_APPLET_DESTROY') {
+    const d = (x as { data?: unknown }).data
+    if (!d || typeof d !== 'object') return false
+    return typeof (d as { appId?: unknown }).appId === 'string'
+  }
+  if (o.type === 'H5_APPLET_LIBRARY') {
+    const d = (x as { data?: unknown }).data
+    if (!d || typeof d !== 'object') return false
+    const items = (d as { items?: unknown }).items
+    return Array.isArray(items)
+  }
+  if (o.type === 'H5_APPLET_LAUNCH') {
+    const d = (x as { data?: unknown }).data
+    if (!d || typeof d !== 'object') return false
+    return typeof (d as { key?: unknown }).key === 'string'
+  }
+  if (o.type === 'H5_APPLET_GENERATION') {
+    const d = (x as { data?: unknown }).data
+    if (!d || typeof d !== 'object') return false
+    const dd = d as { status?: unknown; title?: unknown; description?: unknown }
+    return (
+      (dd.status === 'started' || dd.status === 'completed' || dd.status === 'failed') &&
+      typeof dd.title === 'string' &&
+      typeof dd.description === 'string'
+    )
   }
   if (o.type === 'TTS_STATUS' || o.type === 'ASR_STATUS') {
     const d = (x as { data?: unknown }).data

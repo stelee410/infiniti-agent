@@ -56,6 +56,30 @@ describe('createLiveUiWindowManager', () => {
     expect(setIgnoreMouseEvents).not.toHaveBeenCalled()
   })
 
+  it('routes H5 applet layout through the shared window manager', () => {
+    const setH5AppletOpen = vi.fn()
+    const setIgnoreMouseEvents = vi.fn()
+    const manager = createLiveUiWindowManager({ setH5AppletOpen, setIgnoreMouseEvents })
+
+    manager.requestLayout({ mode: 'h5Applet', reason: 'show-me-magic', open: true })
+    manager.setH5AppletOpen(false)
+
+    expect(setH5AppletOpen).toHaveBeenNthCalledWith(1, true)
+    expect(setH5AppletOpen).toHaveBeenNthCalledWith(2, false)
+    expect(setIgnoreMouseEvents).not.toHaveBeenCalled()
+  })
+
+  it('falls back to mouse interactivity for H5 applets without a bridge channel', () => {
+    const setIgnoreMouseEvents = vi.fn()
+    const manager = createLiveUiWindowManager({ setIgnoreMouseEvents })
+
+    manager.setH5AppletOpen(true)
+    manager.setH5AppletOpen(false)
+
+    expect(setIgnoreMouseEvents).toHaveBeenNthCalledWith(1, false, { forward: true })
+    expect(setIgnoreMouseEvents).toHaveBeenNthCalledWith(2, true, { forward: true })
+  })
+
   it('falls back to mouse interactivity for inbox overlays without a bridge channel', () => {
     const setIgnoreMouseEvents = vi.fn()
     const manager = createLiveUiWindowManager({ setIgnoreMouseEvents })

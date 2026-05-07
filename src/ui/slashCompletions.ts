@@ -106,6 +106,13 @@ const COMMAND_ITEMS: SlashItem[] = [
     insert: '/speak ',
   },
   {
+    id: '/showmemagic',
+    kind: 'command',
+    label: '/showmemagic',
+    desc: '打开官方 H5/SVG/CSS 动画测试页（也支持 /showmethemagic）',
+    insert: '/showmemagic ',
+  },
+  {
     id: '/snap',
     kind: 'command',
     label: '/snap',

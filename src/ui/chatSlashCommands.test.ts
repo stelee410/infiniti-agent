@@ -7,6 +7,8 @@ describe('parseChatSlashCommand', () => {
     expect(parseChatSlashCommand('/new')).toEqual({ kind: 'clear' })
     expect(parseChatSlashCommand('/reload-skills')).toEqual({ kind: 'reload' })
     expect(parseChatSlashCommand('/help')).toEqual({ kind: 'help' })
+    expect(parseChatSlashCommand('/showmemagic')).toEqual({ kind: 'showMeMagic' })
+    expect(parseChatSlashCommand('/showmemagci')).toEqual({ kind: 'showMeMagic' })
   })
 
   it('parses schedule commands and ids', () => {

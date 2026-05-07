@@ -39,6 +39,10 @@ export function localJobsDir(cwd: string): string {
   return join(cwd, LOCAL_DIR_NAME, 'jobs')
 }
 
+export function localH5AppletsDir(cwd: string): string {
+  return join(cwd, LOCAL_DIR_NAME, 'h5-applets')
+}
+
 export function localDreamsDir(cwd: string): string {
   return join(cwd, LOCAL_DIR_NAME, 'dreams')
 }
