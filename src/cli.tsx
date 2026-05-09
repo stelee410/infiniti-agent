@@ -633,7 +633,16 @@ async function main(): Promise<void> {
     .option('--login', '强制重新登录并刷新 .env.local')
     .option('--pull', '强制以服务器最新 .agent 为准，下载并覆盖当前 layout')
     .option('--push', '强制以本地 layout 为准，导出并上传 .agent')
-    .action(async (cmd: { apiBase?: string; workspace?: string; agent?: string; login?: boolean; pull?: boolean; push?: boolean }) => {
+    .option('--with-version', '列出服务器 .agent 版本，选择指定版本下载并覆盖当前 layout')
+    .action(async (cmd: {
+      apiBase?: string
+      workspace?: string
+      agent?: string
+      login?: boolean
+      pull?: boolean
+      push?: boolean
+      withVersion?: boolean
+    }) => {
       try {
         await runLinkyunSync(cwd, {
           apiBase: cmd.apiBase,
@@ -642,6 +651,7 @@ async function main(): Promise<void> {
           forceLogin: cmd.login,
           pull: cmd.pull,
           push: cmd.push,
+          withVersion: cmd.withVersion,
         })
       } catch (e) {
         console.error((e as Error).message)

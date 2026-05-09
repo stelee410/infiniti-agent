@@ -21,6 +21,7 @@ import { enqueueAvatarGenJob } from '../avatar/asyncAvatarGen.js'
 import type { BuiltinToolName } from './definitions.js'
 import { H5AppletValidator, normalizePermissions, type H5AppletLaunchMode, type H5AppletPatchType, type H5AppletPermissions } from '../liveui/appletRuntime.js'
 import {
+  deleteCachedH5Applet,
   findCachedH5Applet,
   generateH5AppletHtml,
   h5AppletCacheKey,
@@ -365,6 +366,28 @@ export const builtinToolHandlers: Record<BuiltinToolName, ToolHandler> = {
     const items = await listCachedH5Applets(ctx.sessionCwd)
     ctx.liveUi?.sendH5AppletLibrary(items)
     return JSON.stringify({ ok: true, count: items.length, items })
+  },
+
+  delete_h5_applet_cache: async (args, ctx) => {
+    const key = String(args.key ?? '').trim()
+    const title = String(args.title ?? '').trim()
+    if (!key && !title) return toolError('请提供 key/id 或 title')
+    const deleted = await deleteCachedH5Applet(ctx.sessionCwd, {
+      keyOrId: key || undefined,
+      title: title || undefined,
+    })
+    if (!deleted) return toolError('未找到本地快应用缓存')
+    const items = await listCachedH5Applets(ctx.sessionCwd)
+    ctx.liveUi?.sendH5AppletLibrary(items)
+    return JSON.stringify({
+      ok: true,
+      deleted: {
+        id: deleted.id,
+        key: deleted.key,
+        title: deleted.title,
+      },
+      count: items.length,
+    })
   },
 
   create_h5_applet: (args, ctx) => {

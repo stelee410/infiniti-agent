@@ -16,6 +16,7 @@ export type BuiltinToolName =
   | 'request_h5_applet'
   | 'launch_h5_applet'
   | 'list_h5_applets'
+  | 'delete_h5_applet_cache'
   | 'create_h5_applet'
   | 'update_h5_applet'
   | 'destroy_h5_applet'
@@ -72,6 +73,20 @@ export const BUILTIN_TOOLS: Array<{
       type: 'object',
       additionalProperties: false,
       properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'delete_h5_applet_cache',
+    description:
+      '删除本地快应用缓存，并刷新 LiveUI 快应用菜单。可传 key/id，也可传 title 匹配。只删除缓存，不关闭正在运行的 applet；关闭运行中 applet 请使用 destroy_h5_applet。',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        key: { type: 'string', description: '缓存 key 或 id，可选' },
+        title: { type: 'string', description: '快应用标题，可选' },
+      },
       required: [],
     },
   },

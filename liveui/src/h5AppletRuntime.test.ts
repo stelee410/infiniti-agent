@@ -92,6 +92,11 @@ describe('createH5AppletHost', () => {
         updatedAt: '2026-01-01T00:00:00.000Z',
       },
     ])
+    const trigger = document.querySelector('.liveui-h5-launcher-trigger') as HTMLButtonElement | null
+    expect(trigger).not.toBeNull()
+    trigger!.click()
+    const menu = document.querySelector('.liveui-h5-launcher-menu') as HTMLElement | null
+    expect(menu?.hidden).toBe(false)
     const btn = document.querySelector('.liveui-h5-launcher-btn') as HTMLButtonElement | null
     expect(btn).not.toBeNull()
     btn!.click()
@@ -119,7 +124,7 @@ describe('createH5AppletHost', () => {
   })
 
   it('exposes a single launch entry: host.launch is the same reference used by the launcher buttons', () => {
-    // 结构性保证：launcher 按钮的 click 处理器调用的就是 host.launch；
+    // 结构性保证：launcher 菜单项的 click 处理器调用的就是 host.launch；
     // 任何修改不应让两条入口分叉到不同实现。
     const events: Event[] = []
     const host = createH5AppletHost({
@@ -144,11 +149,37 @@ describe('createH5AppletHost', () => {
     const afterDirect = events.slice(beforeButton)
 
     events.length = beforeButton
+    const trigger = document.querySelector('.liveui-h5-launcher-trigger') as HTMLButtonElement
+    trigger.click()
     const btn = document.querySelector('.liveui-h5-launcher-btn') as HTMLButtonElement
     btn.click()
     const afterButton = events.slice(beforeButton)
 
     expect(afterDirect).toEqual(afterButton)
+  })
+
+  it('uses one launcher trigger and puts every cached applet inside the menu', () => {
+    const events: Event[] = []
+    const host = createH5AppletHost({
+      root: newRoot(),
+      socket: makeFakeSocket(events),
+    })
+    host.setLibrary(Array.from({ length: 12 }, (_, i) => ({
+      id: `app-${i}`,
+      key: `app-${i}`,
+      title: `Applet ${i}`,
+      description: '',
+      launchMode: 'live_panel' as const,
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    })))
+
+    expect(document.querySelectorAll('.liveui-h5-launcher-trigger')).toHaveLength(1)
+    expect(document.querySelectorAll('.liveui-h5-launcher-btn')).toHaveLength(12)
+
+    const menu = document.querySelector('.liveui-h5-launcher-menu') as HTMLElement
+    expect(menu.hidden).toBe(true)
+    ;(document.querySelector('.liveui-h5-launcher-trigger') as HTMLButtonElement).click()
+    expect(menu.hidden).toBe(false)
   })
 
   it('records onOpenChange once per applet create and tears it down on destroy', () => {
@@ -258,6 +289,7 @@ describe('H5 applet path consistency: icon click vs slash-command driven launch'
         updatedAt: '2026-01-01T00:00:00.000Z',
       },
     ])
+    ;(document.querySelector('.liveui-h5-launcher-trigger') as HTMLButtonElement).click()
     const btn = document.querySelector('.liveui-h5-launcher-btn') as HTMLButtonElement
     btn.click()
     vi.useRealTimers()
@@ -319,6 +351,7 @@ describe('H5 applet path consistency: icon click vs slash-command driven launch'
             launchMode: 'live_panel', updatedAt: '2026-01-01T00:00:00.000Z',
           },
         ])
+        ;(document.querySelector('.liveui-h5-launcher-trigger') as HTMLButtonElement).click()
         ;(document.querySelector('.liveui-h5-launcher-btn') as HTMLButtonElement).click()
       } else {
         host.launch('k')

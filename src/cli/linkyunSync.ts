@@ -334,6 +334,7 @@ export type LinkyunSyncOptions = {
   forceLogin?: boolean
   pull?: boolean
   push?: boolean
+  withVersion?: boolean
 }
 
 function buildHeaders(apiKey: string, workspaceCode?: string): Record<string, string> {
@@ -604,19 +605,61 @@ async function listAgentArchives(
   return data.archives ?? []
 }
 
-async function downloadLatestAgentArchive(
-  cwd: string,
+function archiveLabel(archive: AgentArchiveSummary): string {
+  const created = archive.created_at ?? '(unknown time)'
+  const file = archive.original_filename ?? 'unknown.agent'
+  const size = typeof archive.file_size === 'number' ? ` · ${Math.round(archive.file_size / 1024)}KB` : ''
+  const checksum = archive.checksum_sha256 ? ` · ${archive.checksum_sha256.slice(0, 10)}` : ''
+  return `[${archive.id}] ${created} · ${file}${size}${checksum}`
+}
+
+async function chooseArchiveVersion(archives: AgentArchiveSummary[]): Promise<AgentArchiveSummary | null> {
+  if (!archives.length) {
+    console.error('服务器上没有可选择的 .agent 归档版本。')
+    process.exitCode = 2
+    return null
+  }
+
+  console.error('\n可选 .agent 版本（最新在前，输入序号）:\n')
+  archives.forEach((archive, i) => {
+    console.error(`  ${i + 1}) ${archiveLabel(archive)}`)
+  })
+
+  const rl = readline.createInterface({ input, output })
+  try {
+    const pickRaw = (await rl.question('\n请选择版本序号: ')).trim()
+    const pick = Number(pickRaw)
+    if (!Number.isFinite(pick) || pick < 1 || pick > archives.length) {
+      console.error('无效序号')
+      process.exitCode = 2
+      return null
+    }
+    return archives[pick - 1]!
+  } finally {
+    rl.close()
+  }
+}
+
+async function downloadAgentArchive(
   apiBase: string,
   headers: Record<string, string>,
   agentCode: string,
+  archive: AgentArchiveSummary | 'latest',
 ): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), 'infiniti-agent-sync-'))
   const dest = join(dir, `${agentCode}.agent`)
-  const url = apiV1(apiBase, `/agents/by-code/${encodeURIComponent(agentCode)}/agent-archives/latest/download`)
+  const url =
+    archive === 'latest'
+      ? apiV1(apiBase, `/agents/by-code/${encodeURIComponent(agentCode)}/agent-archives/latest/download`)
+      : archive.download_url?.startsWith('http://') || archive.download_url?.startsWith('https://')
+        ? archive.download_url
+        : archive.download_url
+          ? `${normalizeApiBase(apiBase)}${archive.download_url.startsWith('/') ? archive.download_url : `/${archive.download_url}`}`
+        : apiV1(apiBase, `/agents/by-code/${encodeURIComponent(agentCode)}/agent-archives/${archive.id}/download`)
   const res = await getBinary(url, headers)
   if (!res.ok || res.buf.length === 0) {
     await rm(dir, { recursive: true, force: true })
-    throw new Error(`下载最新 .agent 归档失败: HTTP ${res.status}`)
+    throw new Error(`下载 .agent 归档失败: HTTP ${res.status}`)
   }
   await writeFile(dest, res.buf)
   return dest
@@ -661,10 +704,13 @@ async function syncAgentArchive(
   headers: Record<string, string>,
   agentCode: string,
   localSessionBeforeSync: number | null,
-  opts: Pick<LinkyunSyncOptions, 'pull' | 'push'>,
+  opts: Pick<LinkyunSyncOptions, 'pull' | 'push' | 'withVersion'>,
 ): Promise<void> {
   if (opts.pull && opts.push) {
     throw new Error('不能同时指定 --pull 和 --push')
+  }
+  if (opts.withVersion && opts.push) {
+    throw new Error('不能同时指定 --with-version 和 --push')
   }
 
   if (opts.push) {
@@ -685,9 +731,36 @@ async function syncAgentArchive(
   const latest = archives[0]
   const remoteMs = archiveTimeMs(latest)
 
+  if (opts.withVersion) {
+    const selected = await chooseArchiveVersion(archives)
+    if (!selected) return
+    const selectedMs = archiveTimeMs(selected)
+    const downloaded = await downloadAgentArchive(apiBase, headers, agentCode, selected)
+    try {
+      const backup = await backupCriticalFiles(cwd, 'manual-version-pull')
+      await importAgentArchive(cwd, downloaded, { force: true })
+      await alignLocalSessionMtime(cwd, selectedMs)
+      await recordSyncHistory(cwd, {
+        agentCode,
+        mode: 'manual',
+        decision: 'version-pull',
+        status: 'ok',
+        localSessionMtime: isoFromMs(localSessionBeforeSync),
+        remoteVersion: selected.created_at,
+        resultVersion: selected.created_at,
+      })
+      console.error(
+        `✓ 已从服务器下载并导入指定 .agent 版本: ${archiveLabel(selected)}${backup ? `（备份: ${backup}）` : ''}`,
+      )
+    } finally {
+      await rm(dirname(downloaded), { recursive: true, force: true })
+    }
+    return
+  }
+
   if (opts.pull) {
     if (!latest) throw new Error('服务器上没有可下载的 .agent 归档')
-    const downloaded = await downloadLatestAgentArchive(cwd, apiBase, headers, agentCode)
+    const downloaded = await downloadAgentArchive(apiBase, headers, agentCode, 'latest')
     try {
       await backupCriticalFiles(cwd, 'manual-pull')
       await importAgentArchive(cwd, downloaded, { force: true })
@@ -709,7 +782,7 @@ async function syncAgentArchive(
   }
 
   if (latest && remoteMs !== null && (localSessionBeforeSync === null || remoteMs > localSessionBeforeSync)) {
-    const downloaded = await downloadLatestAgentArchive(cwd, apiBase, headers, agentCode)
+    const downloaded = await downloadAgentArchive(apiBase, headers, agentCode, 'latest')
     try {
       await backupCriticalFiles(cwd, 'manual-remote-newer')
       await importAgentArchive(cwd, downloaded, { force: true })
@@ -803,7 +876,7 @@ export async function runLinkyunStartupSync(cwd: string): Promise<boolean> {
     })
     return true
   }
-  const downloaded = await downloadLatestAgentArchive(cwd, apiBase, headers, agentCode)
+  const downloaded = await downloadAgentArchive(apiBase, headers, agentCode, 'latest')
   try {
     const backup = await backupCriticalFiles(cwd, 'startup-pull')
     await importAgentArchive(cwd, downloaded, { force: true })

@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import type { InfinitiConfig } from '../config/types.js'
@@ -78,6 +78,22 @@ export async function findCachedH5Applet(
   const titleNorm = normalizeTitle(title)
   const all = await listCacheEntries(cwd)
   return all.find((a) => normalizeTitle(a.title) === titleNorm) ?? null
+}
+
+export async function deleteCachedH5Applet(cwd: string, input: {
+  keyOrId?: string
+  title?: string
+}): Promise<CachedH5Applet | null> {
+  const keyOrId = input.keyOrId?.trim()
+  const title = input.title?.trim()
+  const app = keyOrId
+    ? await readCachedH5Applet(cwd, keyOrId)
+    : title
+      ? await findCachedH5Applet(cwd, title)
+      : null
+  if (!app) return null
+  await rm(join(localH5AppletsDir(cwd), `${safeFileName(app.key)}.json`), { force: true })
+  return app
 }
 
 export async function writeCachedH5Applet(

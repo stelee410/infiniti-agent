@@ -57,6 +57,7 @@ export function createH5AppletHost(opts: {
   let libraryItems: H5AppletLibraryItem[] = []
   let generationText = ''
   let resizeObserver: ResizeObserver | null = null
+  let launcherMenuOpen = false
 
   const launch = (key: string): void => {
     const normalized = key.trim()
@@ -67,33 +68,91 @@ export function createH5AppletHost(opts: {
 
   const launcher = document.createElement('div')
   launcher.className = 'liveui-h5-launcher liveui-h5-launcher--empty'
-  opts.root.before(launcher)
+  const windowTools = document.getElementById('liveui-window-tools')
+  if (windowTools?.firstElementChild) {
+    windowTools.firstElementChild.after(launcher)
+  } else {
+    opts.root.before(launcher)
+  }
+
+  const setLauncherMenuOpen = (open: boolean): void => {
+    launcherMenuOpen = open
+    launcher.classList.toggle('liveui-h5-launcher--open', launcherMenuOpen)
+    const trigger = launcher.querySelector<HTMLButtonElement>('.liveui-h5-launcher-trigger')
+    const menu = launcher.querySelector<HTMLElement>('.liveui-h5-launcher-menu')
+    trigger?.setAttribute('aria-expanded', String(launcherMenuOpen))
+    if (menu) menu.hidden = !launcherMenuOpen
+  }
 
   const renderLauncher = (): void => {
     launcher.replaceChildren()
+    const hasContent = generationText || libraryItems.length > 0
+    if (!hasContent) {
+      launcherMenuOpen = false
+      launcher.classList.add('liveui-h5-launcher--empty')
+      launcher.classList.remove('liveui-h5-launcher--open')
+      return
+    }
+
+    const trigger = document.createElement('button')
+    trigger.type = 'button'
+    trigger.className = 'liveui-window-tool liveui-h5-launcher-trigger'
+    trigger.title = '快应用'
+    trigger.setAttribute('aria-label', '打开快应用菜单')
+    trigger.setAttribute('aria-haspopup', 'menu')
+    trigger.setAttribute('aria-expanded', String(launcherMenuOpen))
+    const triggerIcon = document.createElement('span')
+    triggerIcon.className = 'liveui-h5-launcher-trigger-icon'
+    triggerIcon.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M13 2 4 14h6l-1 8 11-14h-7l1-6z"/></svg>'
+    trigger.append(triggerIcon)
+    trigger.addEventListener('click', (ev) => {
+      ev.preventDefault()
+      ev.stopPropagation()
+      setLauncherMenuOpen(!launcherMenuOpen)
+    })
+
+    const menu = document.createElement('div')
+    menu.className = 'liveui-h5-launcher-menu'
+    menu.setAttribute('role', 'menu')
+    menu.hidden = !launcherMenuOpen
     if (generationText) {
       const status = document.createElement('div')
       status.className = 'liveui-h5-launcher-status'
       status.textContent = generationText
-      launcher.append(status)
+      menu.append(status)
     }
-    for (const item of libraryItems.slice(0, 8)) {
+    for (const item of libraryItems) {
       const btn = document.createElement('button')
       btn.type = 'button'
       btn.className = 'liveui-h5-launcher-btn'
       btn.title = item.description ? `${item.title} - ${item.description}` : item.title
       btn.setAttribute('aria-label', `启动 ${item.title}`)
+      btn.setAttribute('role', 'menuitem')
       const icon = document.createElement('span')
       icon.className = 'liveui-h5-launcher-icon'
       icon.textContent = item.title.trim().slice(0, 1) || '快'
+      const text = document.createElement('span')
+      text.className = 'liveui-h5-launcher-text'
       const label = document.createElement('span')
       label.className = 'liveui-h5-launcher-label'
       label.textContent = item.title
-      btn.append(icon, label)
-      btn.addEventListener('click', () => launch(item.key))
-      launcher.append(btn)
+      const desc = document.createElement('span')
+      desc.className = 'liveui-h5-launcher-desc'
+      desc.textContent = item.description || '点击启动快应用'
+      text.append(label, desc)
+      const arrow = document.createElement('span')
+      arrow.className = 'liveui-h5-launcher-arrow'
+      arrow.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="m9.29 6.71 1.42-1.42L17.41 12l-6.7 6.71-1.42-1.42L14.59 12 9.29 6.71z"/></svg>'
+      btn.append(icon, text, arrow)
+      btn.addEventListener('click', () => {
+        setLauncherMenuOpen(false)
+        launch(item.key)
+      })
+      menu.append(btn)
     }
-    launcher.classList.toggle('liveui-h5-launcher--empty', !generationText && libraryItems.length === 0)
+    launcher.append(menu, trigger)
+    launcher.classList.remove('liveui-h5-launcher--empty')
+    launcher.classList.toggle('liveui-h5-launcher--open', launcherMenuOpen)
   }
 
   const updateBottomReserve = (): void => {
@@ -232,6 +291,17 @@ export function createH5AppletHost(opts: {
   }
 
   window.addEventListener('message', onMessage)
+  const onDocumentPointerDown = (ev: PointerEvent): void => {
+    if (!launcherMenuOpen) return
+    const target = ev.target
+    if (target instanceof Node && launcher.contains(target)) return
+    setLauncherMenuOpen(false)
+  }
+  const onDocumentKeyDown = (ev: KeyboardEvent): void => {
+    if (ev.key === 'Escape') setLauncherMenuOpen(false)
+  }
+  document.addEventListener('pointerdown', onDocumentPointerDown)
+  document.addEventListener('keydown', onDocumentKeyDown)
 
   return {
     launch,
@@ -263,6 +333,8 @@ export function createH5AppletHost(opts: {
       for (const appId of [...mounted.keys()]) remove(appId)
       window.removeEventListener('message', onMessage)
       window.removeEventListener('resize', updateBottomReserve)
+      document.removeEventListener('pointerdown', onDocumentPointerDown)
+      document.removeEventListener('keydown', onDocumentKeyDown)
       resizeObserver?.disconnect()
       launcher.remove()
     },
