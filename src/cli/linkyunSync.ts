@@ -734,12 +734,12 @@ async function syncAgentArchive(
   if (opts.withVersion) {
     const selected = await chooseArchiveVersion(archives)
     if (!selected) return
-    const selectedMs = archiveTimeMs(selected)
     const downloaded = await downloadAgentArchive(apiBase, headers, agentCode, selected)
     try {
       const backup = await backupCriticalFiles(cwd, 'manual-version-pull')
       await importAgentArchive(cwd, downloaded, { force: true })
-      await alignLocalSessionMtime(cwd, selectedMs)
+      const restoredAtMs = Date.now()
+      await alignLocalSessionMtime(cwd, restoredAtMs)
       await recordSyncHistory(cwd, {
         agentCode,
         mode: 'manual',
@@ -747,10 +747,10 @@ async function syncAgentArchive(
         status: 'ok',
         localSessionMtime: isoFromMs(localSessionBeforeSync),
         remoteVersion: selected.created_at,
-        resultVersion: selected.created_at,
+        resultVersion: isoFromMs(restoredAtMs),
       })
       console.error(
-        `✓ 已从服务器下载并导入指定 .agent 版本: ${archiveLabel(selected)}${backup ? `（备份: ${backup}）` : ''}`,
+        `✓ 已从服务器下载并导入指定 .agent 版本: ${archiveLabel(selected)}；已刷新本地 session.json 时间戳${backup ? `（备份: ${backup}）` : ''}`,
       )
     } finally {
       await rm(dirname(downloaded), { recursive: true, force: true })
