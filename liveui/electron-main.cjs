@@ -96,6 +96,7 @@ function createWindow() {
   let preConfigBounds = null
   let preInboxBounds = null
   let preCameraBounds = null
+  let preH5AppletBounds = null
   let preMinimalBounds = null
 
   const win = new BrowserWindow({
@@ -155,7 +156,7 @@ function createWindow() {
   /** 调整高度并保持底边不动：由渲染端在首帧布局后请求，去掉头顶大块留白。 */
   ipcMain.on('liveui-compact-height', (_e, payload) => {
     try {
-      if (preConfigBounds || preInboxBounds) return
+      if (preConfigBounds || preInboxBounds || preH5AppletBounds) return
       const h = payload && Number.isFinite(payload.height) ? Math.round(payload.height) : 0
       if (h <= 0) return
       const cur = win.getBounds()
@@ -206,6 +207,21 @@ function createWindow() {
       } else if (preCameraBounds) {
         win.setBounds(preCameraBounds)
         preCameraBounds = null
+        if (!debugWindow) win.setIgnoreMouseEvents(true, { forward: true })
+      }
+    } catch { /* window may be destroyed */ }
+  })
+
+  ipcMain.on('liveui-h5-applet-open', (_e, open) => {
+    try {
+      if (open) {
+        if (!preH5AppletBounds) preH5AppletBounds = win.getBounds()
+        win.setIgnoreMouseEvents(false)
+        const display = require('electron').screen.getDisplayMatching(win.getBounds())
+        win.setBounds(display.workArea)
+      } else if (preH5AppletBounds) {
+        win.setBounds(preH5AppletBounds)
+        preH5AppletBounds = null
         if (!debugWindow) win.setIgnoreMouseEvents(true, { forward: true })
       }
     } catch { /* window may be destroyed */ }

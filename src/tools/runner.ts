@@ -1,5 +1,6 @@
 import type { InfinitiConfig } from '../config/types.js'
 import type { LiveUiVisionAttachment } from '../liveui/protocol.js'
+import type { LiveUiSession } from '../liveui/wsSession.js'
 import type { AvatarGenReferenceImage } from '../avatar/real2dAvatarGen.js'
 import type { SeedanceReferenceImage } from '../video/generateSeedanceVideo.js'
 import type { MemoryAction } from '../memory/structured.js'
@@ -16,6 +17,7 @@ export type ToolRunContext = {
   seedanceImages?: SeedanceReferenceImage[]
   avatarGenImages?: AvatarGenReferenceImage[]
   editHistory?: EditHistory
+  liveUi?: LiveUiSession | null
   memoryCoordinator?: {
     executeMemoryAction(act: MemoryAction): Promise<unknown>
     executeProfileAction(act: ProfileAction): Promise<unknown>

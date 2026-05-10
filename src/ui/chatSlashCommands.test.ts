@@ -7,6 +7,8 @@ describe('parseChatSlashCommand', () => {
     expect(parseChatSlashCommand('/new')).toEqual({ kind: 'clear' })
     expect(parseChatSlashCommand('/reload-skills')).toEqual({ kind: 'reload' })
     expect(parseChatSlashCommand('/help')).toEqual({ kind: 'help' })
+    expect(parseChatSlashCommand('/showmemagic')).toEqual({ kind: 'showMeMagic' })
+    expect(parseChatSlashCommand('/showmemagci')).toEqual({ kind: 'showMeMagic' })
   })
 
   it('parses schedule commands and ids', () => {
@@ -47,10 +49,36 @@ describe('parseChatSlashCommand', () => {
     expect(parseChatSlashCommand('hello')).toBeNull()
   })
 
+  it('parses /sendImage /sendVideo /sendFile with optional caption', () => {
+    expect(parseChatSlashCommand('/sendImage ./out.png')).toEqual({
+      kind: 'sendMedia',
+      mediaKind: 'image',
+      path: './out.png',
+    })
+    expect(parseChatSlashCommand('/sendVideo /tmp/clip.mp4 看这段')).toEqual({
+      kind: 'sendMedia',
+      mediaKind: 'video',
+      path: '/tmp/clip.mp4',
+      caption: '看这段',
+    })
+    expect(parseChatSlashCommand('/sendFile "/Users/me/path with space.pdf" 报告')).toEqual({
+      kind: 'sendMedia',
+      mediaKind: 'file',
+      path: '/Users/me/path with space.pdf',
+      caption: '报告',
+    })
+    expect(parseChatSlashCommand('/sendImage')).toEqual({
+      kind: 'sendMedia',
+      mediaKind: 'image',
+      path: '',
+    })
+  })
+
   it('keeps help text centralized', () => {
     expect(CHAT_HELP_TEXT).toContain('/schedule')
     expect(CHAT_HELP_TEXT).not.toContain('/dream')
     expect(CHAT_HELP_TEXT).not.toContain('/debug')
     expect(CHAT_HELP_TEXT).toContain('/avatargen')
+    expect(CHAT_HELP_TEXT).toContain('/sendImage')
   })
 })

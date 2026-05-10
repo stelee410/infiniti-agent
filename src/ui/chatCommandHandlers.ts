@@ -22,6 +22,8 @@ import { restoreEditSnapshot } from '../tools/repoTools.js'
 import { formatChatError } from '../utils/formatError.js'
 import { CHAT_HELP_TEXT, type ChatSlashCommand } from './chatSlashCommands.js'
 import { splitTtsSegments } from '../tts/streamSegments.js'
+import { showMeMagicAppletHtml } from '../liveui/showMeMagicApplet.js'
+import { listCachedH5Applets, writeCachedH5Applet } from '../liveui/h5AppletCache.js'
 
 type ScheduleCommand = Extract<
   ChatSlashCommand,
@@ -31,6 +33,7 @@ type ScheduleCommand = Extract<
 type InboxCommand = Extract<ChatSlashCommand, { kind: 'inbox' | 'lastEmail' }>
 type DreamCommand = Extract<ChatSlashCommand, { kind: 'dreamRun' | 'dreamDiary' | 'dreamContext' }>
 type RollCommand = Extract<ChatSlashCommand, { kind: 'roll' }>
+type SendMediaCommand = Extract<ChatSlashCommand, { kind: 'sendMedia' }>
 type PermissionCommand = Extract<ChatSlashCommand, { kind: 'permission' }>
 type CompactCommand = Extract<ChatSlashCommand, { kind: 'compact' }>
 type DebugOverlayController = {
@@ -56,6 +59,22 @@ type DreamController = {
 
 export type ChatCommandLiveUi = LiveInboxUi & {
   openConfigPanel(cwd: string, config: unknown): void
+  createH5Applet(input: {
+    title: string
+    description?: string
+    launchMode?: 'live_panel' | 'floating' | 'fullscreen' | 'overlay'
+    permissions?: { network?: boolean; storage?: false | 'session' }
+    html: string
+  }): { appId: string; status: string }
+  launchH5Applet(key: string): void
+  sendH5AppletLibrary?(items: Array<{
+    id: string
+    key: string
+    title: string
+    description: string
+    launchMode: 'live_panel' | 'floating' | 'fullscreen' | 'overlay'
+    updatedAt: string
+  }>): void
 }
 
 export type SpeakCommandLiveUi = {
@@ -131,6 +150,31 @@ export function handleHelpSlashCommand(
   ui: Pick<LocalCommandUi, 'setError' | 'setInput'>,
 ): void {
   ui.setError(CHAT_HELP_TEXT)
+  ui.setInput('')
+}
+
+export async function handleShowMeMagicSlashCommand(
+  cwd: string,
+  liveUi: ChatCommandLiveUi | null | undefined,
+  ui: Pick<LocalCommandUi, 'setError' | 'setInput'>,
+): Promise<void> {
+  if (!liveUi) {
+    ui.setError('/showmemagic 需要 LiveUI：请用 `infiniti-agent live` 启动。')
+    ui.setInput('')
+    return
+  }
+  const cached = await writeCachedH5Applet(cwd, {
+    id: 'official_show_me_magic',
+    key: 'official_show_me_magic',
+    title: 'Show Me Magic',
+    description: '官方 H5/SVG/CSS 动画与交互测试页',
+    launchMode: 'live_panel',
+    permissions: { network: false, storage: 'session' },
+    html: showMeMagicAppletHtml(),
+  })
+  liveUi.sendH5AppletLibrary?.(await listCachedH5Applets(cwd))
+  liveUi.launchH5Applet(cached.key)
+  ui.setError(null)
   ui.setInput('')
 }
 
@@ -408,6 +452,58 @@ export function handleMemorySlashCommand(
 ): void {
   ui.setError('记忆系统：memory.json（结构化记忆）+ user_profile.json（用户画像）— 在 .infiniti-agent/ 下')
   ui.setInput('')
+}
+
+export type SendMediaLiveUi = {
+  sendAssistantMedia(args: {
+    filePath: string
+    kind: 'image' | 'video' | 'file'
+    caption?: string
+    timeoutMs?: number
+  }): Promise<{ ok: boolean; error?: string; requestId: string }>
+}
+
+export async function handleSendMediaSlashCommand(
+  cwd: string,
+  command: SendMediaCommand,
+  liveUi: SendMediaLiveUi | null | undefined,
+  ui: Pick<LocalCommandUi, 'setError' | 'setInput' | 'setNotice' | 'clearNoticeLater'>,
+): Promise<void> {
+  ui.setInput('')
+  if (!command.path.trim()) {
+    ui.setError(`/${command.mediaKind === 'image' ? 'sendImage' : command.mediaKind === 'video' ? 'sendVideo' : 'sendFile'} 需要文件路径，例如 /sendImage ./out.png`)
+    return
+  }
+  if (!liveUi) {
+    ui.setError('未连接 LiveUI 客户端（如 infiniti-weixin-bridge），无法投递媒体。')
+    return
+  }
+  const { isAbsolute, resolve } = await import('node:path')
+  const { stat } = await import('node:fs/promises')
+  const resolved = isAbsolute(command.path) ? command.path : resolve(cwd, command.path)
+  try {
+    const info = await stat(resolved)
+    if (!info.isFile()) {
+      ui.setError(`不是文件: ${resolved}`)
+      return
+    }
+  } catch (e) {
+    ui.setError(`无法访问文件 ${resolved}: ${(e as Error).message}`)
+    return
+  }
+  ui.setNotice(`正在投递 ${command.mediaKind}: ${resolved}…`)
+  const result = await liveUi.sendAssistantMedia({
+    filePath: resolved,
+    kind: command.mediaKind,
+    ...(command.caption ? { caption: command.caption } : {}),
+  })
+  if (result.ok) {
+    ui.setError(null)
+    ui.setNotice(`✓ ${command.mediaKind} 已交给客户端 (${result.requestId})`)
+    ui.clearNoticeLater(4000)
+  } else {
+    ui.setError(`投递失败: ${result.error ?? '未知错误'}`)
+  }
 }
 
 export function handlePermissionSlashCommand(

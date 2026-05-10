@@ -1,8 +1,10 @@
 import { type ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
 import { createReadStream, statSync } from 'node:fs'
+import { mkdtemp, writeFile } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
-import { extname, isAbsolute, relative, resolve } from 'node:path'
+import { tmpdir } from 'node:os'
+import { extname, isAbsolute, join, relative, resolve } from 'node:path'
 import { WebSocketServer, WebSocket } from 'ws'
 import type {
   LiveUiActionMessage,
@@ -15,6 +17,8 @@ import type {
   LiveUiStatusVariant,
   LiveUiFileAttachment,
   LiveUiVisionAttachment,
+  LiveUiH5AppletLibraryItem,
+  LiveUiAssistantVoiceMessage,
 } from './protocol.js'
 import { parseSpeakCommandLine } from './speakCommandLine.js'
 import { StreamMouthEstimator } from './streamMouth.js'
@@ -23,6 +27,12 @@ import { markdownToTtsPlainText } from '../tts/markdownToTtsPlainText.js'
 import type { AsrEngine } from '../asr/whisperAsr.js'
 import { captureVisionSnapshotResult } from './visionCapture.js'
 import { parseLiveUiClientMessage, type LiveUiClientMessage } from './clientMessages.js'
+import {
+  H5AppletManager,
+  type H5AppletCreateInput,
+  type H5AppletPatchType,
+  type H5AppletRecord,
+} from './appletRuntime.js'
 
 export type LiveUiConnectionListener = (connected: boolean) => void
 export type LiveUiUserLineListener = (line: string) => void
@@ -36,6 +46,15 @@ export type LiveUiInboxSaveAsListener = (sourcePath: string, destinationPath: st
 /** 渲染端点击 Live2D 头部 / 身体等，由 Node 转成一条合成用户消息请求模型回应 */
 export type LiveUiInteractionKind = 'head_pat' | 'body_poke'
 export type LiveUiInteractionListener = (kind: LiveUiInteractionKind) => void
+export type LiveUiAppletEvent = {
+  appId: string
+  title?: string
+  event: string
+  payload: unknown
+  receivedAt: string
+}
+export type LiveUiAppletEventListener = (event: LiveUiAppletEvent) => void
+export type LiveUiAppletLaunchListener = (key: string) => void
 
 export function isAllowedLiveUiMediaPath(filePath: string, roots: string[]): boolean {
   const target = resolve(filePath)
@@ -43,6 +62,27 @@ export function isAllowedLiveUiMediaPath(filePath: string, roots: string[]): boo
     const rel = relative(resolve(root), target)
     return rel === '' || (!!rel && !rel.startsWith('..') && !isAbsolute(rel))
   })
+}
+
+type AssistantVoiceExportState = {
+  generation: number
+  selected: boolean
+  started: boolean
+  finalized: boolean
+}
+
+type AssistantMediaPending = {
+  resolve: (result: { ok: boolean; error?: string }) => void
+  timer: ReturnType<typeof setTimeout>
+}
+
+export type AssistantMediaSendResult = { ok: boolean; error?: string; requestId: string }
+
+let assistantMediaSeq = 0
+
+function nextAssistantMediaRequestId(): string {
+  assistantMediaSeq += 1
+  return `am-${Date.now().toString(36)}-${assistantMediaSeq}`
 }
 
 export class LiveUiSession {
@@ -60,6 +100,9 @@ export class LiveUiSession {
   private inboxMarkReadListeners = new Set<LiveUiInboxMarkReadListener>()
   private inboxSaveAsListeners = new Set<LiveUiInboxSaveAsListener>()
   private interactionListeners = new Set<LiveUiInteractionListener>()
+  private appletEventListeners = new Set<LiveUiAppletEventListener>()
+  private appletLaunchListeners = new Set<LiveUiAppletLaunchListener>()
+  private applets = new H5AppletManager()
   private mouthTimer: ReturnType<typeof setInterval> | undefined
   private electronChild: ChildProcess | null = null
   private ttsEngine: TtsEngine | null = null
@@ -67,17 +110,31 @@ export class LiveUiSession {
   private ttsSequence = 0
   private ttsPending: Promise<void> = Promise.resolve()
   private ttsGeneration = 0
+  private voiceExport: AssistantVoiceExportState | null = null
+  private assistantMediaPending = new Map<string, AssistantMediaPending>()
   private asrEngine: AsrEngine | null = null
   private lastVisionCapture: { requestId: string; vision: LiveUiVisionAttachment } | undefined
   private pendingVisionAttachment: LiveUiVisionAttachment | undefined
   private pendingFileAttachments: LiveUiFileAttachment[] = []
   private lastStatusPill: { label: string; variant: LiveUiStatusVariant } = { label: '就绪', variant: 'ready' }
+  private lastAppletLibrary: LiveUiH5AppletLibraryItem[] = []
 
   private readonly mediaRoots: string[]
+  private readonly assistantVoicePossible: number
+  private readonly streamTtsPlayback: boolean
+  private readonly random: () => number
 
-  constructor(port: number, opts: { mediaRoots?: string[] } = {}) {
+  constructor(port: number, opts: {
+    mediaRoots?: string[]
+    assistantVoicePossible?: number
+    streamTtsPlayback?: boolean
+    random?: () => number
+  } = {}) {
     this.port = port
     this.mediaRoots = (opts.mediaRoots ?? []).map((p) => resolve(p))
+    this.assistantVoicePossible = clampProbability(opts.assistantVoicePossible ?? 0)
+    this.streamTtsPlayback = opts.streamTtsPlayback ?? true
+    this.random = opts.random ?? Math.random
   }
 
   setTtsEnabled(enabled: boolean): void {
@@ -260,6 +317,36 @@ export class LiveUiSession {
     }
   }
 
+  onAppletEvent(fn: LiveUiAppletEventListener): () => void {
+    this.appletEventListeners.add(fn)
+    return () => {
+      this.appletEventListeners.delete(fn)
+    }
+  }
+
+  private emitAppletEvent(event: LiveUiAppletEvent): void {
+    for (const f of this.appletEventListeners) {
+      f(event)
+    }
+  }
+
+  onAppletLaunch(fn: LiveUiAppletLaunchListener): () => void {
+    this.appletLaunchListeners.add(fn)
+    return () => {
+      this.appletLaunchListeners.delete(fn)
+    }
+  }
+
+  private emitAppletLaunch(key: string): void {
+    for (const f of this.appletLaunchListeners) {
+      f(key)
+    }
+  }
+
+  launchH5Applet(key: string): void {
+    this.broadcast({ type: 'H5_APPLET_LAUNCH', data: { key } } as LiveUiMessage)
+  }
+
   private emitConn(): void {
     const ok = this.clientConnected
     for (const f of this.listeners) f(ok)
@@ -283,6 +370,10 @@ export class LiveUiSession {
         ws.send(JSON.stringify({ type: 'TTS_STATUS', data: { available: this.ttsEngine != null, enabled: this.ttsEnabled } }))
         ws.send(JSON.stringify({ type: 'ASR_STATUS', data: { available: this.asrEngine != null } }))
         ws.send(JSON.stringify({ type: 'STATUS_PILL', data: this.lastStatusPill }))
+        ws.send(JSON.stringify({ type: 'H5_APPLET_LIBRARY', data: { items: this.lastAppletLibrary } }))
+        for (const applet of this.applets.list()) {
+          if (applet.status !== 'destroyed') ws.send(JSON.stringify(this.appletCreateMessage(applet)))
+        }
       }
       ws.on('message', (buf) => {
         try {
@@ -377,7 +468,71 @@ export class LiveUiSession {
       case 'LIVEUI_INTERACTION':
         this.emitInteraction(message.kind)
         return
+      case 'H5_APPLET_EVENT':
+        const applet = this.applets.get(message.appId)
+        this.emitAppletEvent({
+          appId: message.appId,
+          title: applet?.title,
+          event: message.event,
+          payload: message.payload,
+          receivedAt: new Date().toISOString(),
+        })
+        return
+      case 'H5_APPLET_CLOSE_REQUEST':
+        try {
+          this.destroyH5Applet(message.appId)
+        } catch {
+          this.broadcast({ type: 'H5_APPLET_DESTROY', data: { appId: message.appId } } as LiveUiMessage)
+        }
+        return
+      case 'H5_APPLET_LAUNCH_REQUEST':
+        this.emitAppletLaunch(message.key)
+        return
+      case 'ASSISTANT_MEDIA_RESULT':
+        this.handleAssistantMediaResult(message.requestId, message.ok, message.error)
+        return
     }
+  }
+
+  /** 给已连接的客户端（headless 模式下通常是 bridge）发送一份媒体投递请求，等待回执。 */
+  async sendAssistantMedia(args: {
+    filePath: string
+    kind: 'image' | 'video' | 'file'
+    caption?: string
+    timeoutMs?: number
+  }): Promise<AssistantMediaSendResult> {
+    const requestId = nextAssistantMediaRequestId()
+    const timeoutMs = args.timeoutMs ?? 60_000
+    if (this.clients.size === 0) {
+      return { ok: false, error: 'no live client connected', requestId }
+    }
+    const promise = new Promise<{ ok: boolean; error?: string }>((resolve) => {
+      const timer = setTimeout(() => {
+        if (this.assistantMediaPending.delete(requestId)) {
+          resolve({ ok: false, error: `media send timed out after ${timeoutMs}ms` })
+        }
+      }, timeoutMs)
+      this.assistantMediaPending.set(requestId, { resolve, timer })
+    })
+    this.broadcast({
+      type: 'ASSISTANT_MEDIA',
+      data: {
+        requestId,
+        filePath: args.filePath,
+        kind: args.kind,
+        ...(args.caption ? { caption: args.caption } : {}),
+      },
+    } as LiveUiMessage)
+    const result = await promise
+    return { ...result, requestId }
+  }
+
+  private handleAssistantMediaResult(requestId: string, ok: boolean, error: string | undefined): void {
+    const pending = this.assistantMediaPending.get(requestId)
+    if (!pending) return
+    this.assistantMediaPending.delete(requestId)
+    clearTimeout(pending.timer)
+    pending.resolve({ ok, ...(error ? { error } : {}) })
   }
 
   private handleHttpRequest(req: IncomingMessage, res: ServerResponse): void {
@@ -468,6 +623,62 @@ export class LiveUiSession {
     }
   }
 
+  createH5Applet(input: H5AppletCreateInput): H5AppletRecord {
+    const applet = this.applets.create(input)
+    this.broadcast(this.appletCreateMessage(applet))
+    return applet
+  }
+
+  updateH5Applet(appId: string, patchType: H5AppletPatchType, content: string): H5AppletRecord {
+    const applet = this.applets.update({ appId, patchType, content })
+    this.broadcast({
+      type: 'H5_APPLET_UPDATE',
+      data: {
+        appId,
+        patchType,
+        content: patchType === 'replace' ? applet.html : content,
+      },
+    } as LiveUiMessage)
+    if (patchType !== 'replace') this.applets.markRunning(appId)
+    return this.applets.get(appId) ?? applet
+  }
+
+  destroyH5Applet(appId: string): H5AppletRecord {
+    const applet = this.applets.destroy(appId)
+    this.broadcast({ type: 'H5_APPLET_DESTROY', data: { appId } } as LiveUiMessage)
+    return applet
+  }
+
+  sendH5AppletLibrary(items: LiveUiH5AppletLibraryItem[]): void {
+    this.lastAppletLibrary = items
+    this.broadcast({ type: 'H5_APPLET_LIBRARY', data: { items } } as LiveUiMessage)
+  }
+
+  sendH5AppletGeneration(data: {
+    status: 'started' | 'completed' | 'failed'
+    title: string
+    description: string
+    key?: string
+    error?: string
+  }): void {
+    this.broadcast({ type: 'H5_APPLET_GENERATION', data } as LiveUiMessage)
+  }
+
+  private appletCreateMessage(applet: H5AppletRecord): LiveUiMessage {
+    return {
+      type: 'H5_APPLET_CREATE',
+      data: {
+        appId: applet.appId,
+        title: applet.title,
+        description: applet.description,
+        launchMode: applet.launchMode,
+        permissions: applet.permissions,
+        html: applet.html,
+        status: 'running',
+      },
+    } as LiveUiMessage
+  }
+
   sendMouth(value01: number): void {
     const v = Math.max(0, Math.min(1, value01))
     this.broadcast({ type: 'SYNC_PARAM', data: { id: 'ParamMouthOpenY', value: v } })
@@ -499,6 +710,72 @@ export class LiveUiSession {
     this.ttsSequence = 0
     this.ttsPending = Promise.resolve()
     this.broadcast({ type: 'AUDIO_RESET' })
+  }
+
+  beginAssistantTurn(): void {
+    this.resetAudio()
+    this.startAssistantVoiceExportTurn()
+  }
+
+  private startAssistantVoiceExportTurn(): void {
+    const selected =
+      this.assistantVoicePossible > 0 &&
+      this.ttsEngine != null &&
+      this.ttsEnabled &&
+      this.random() < this.assistantVoicePossible
+    this.voiceExport = {
+      generation: this.ttsGeneration,
+      selected,
+      started: false,
+      finalized: false,
+    }
+    if (selected) {
+      this.voiceExport.started = true
+      this.broadcast({ type: 'ASSISTANT_VOICE', data: { status: 'started' } } as LiveUiAssistantVoiceMessage)
+    }
+  }
+
+  async finalizeAssistantVoice(text: string): Promise<void> {
+    const state = this.voiceExport
+    if (!state || state.generation !== this.ttsGeneration || state.finalized || !state.selected) return
+    state.finalized = true
+    const plain = markdownToTtsPlainText(text)
+    if (!plain.trim() || !this.ttsEngine || !this.ttsEnabled) {
+      console.error(`[liveui] voice export 跳过：text=${plain.length} hasEngine=${!!this.ttsEngine} ttsEnabled=${this.ttsEnabled}`)
+      this.broadcast({ type: 'ASSISTANT_VOICE', data: { status: 'skipped' } } as LiveUiAssistantVoiceMessage)
+      return
+    }
+    const engine = this.ttsEngine
+    const generation = this.ttsGeneration
+    try {
+      const out = await synthesizeAssistantVoiceForExport(engine, plain)
+      if (generation !== this.ttsGeneration) {
+        console.error(`[liveui] voice export 终止：本轮 generation 已变更`)
+        return
+      }
+      if (!out || out.data.length === 0) {
+        console.warn(`[liveui] voice export 失败：合成无音频`)
+        this.broadcast({ type: 'ASSISTANT_VOICE', data: { status: 'failed', error: 'no audio produced' } } as LiveUiAssistantVoiceMessage)
+        return
+      }
+      const filePath = await writeAssistantVoiceFile(out)
+      console.error(`[liveui] voice export 文件写入: ${filePath} (${out.data.length}B, ${out.format} ${out.sampleRate}Hz)`)
+      const data: Extract<LiveUiAssistantVoiceMessage['data'], { status: 'completed' }> = {
+        status: 'completed',
+        format: out.format,
+        sampleRate: out.sampleRate,
+        filePath,
+      }
+      if (out.channels != null) data.channels = out.channels
+      this.broadcast({ type: 'ASSISTANT_VOICE', data } as LiveUiAssistantVoiceMessage)
+    } catch (e) {
+      if (generation !== this.ttsGeneration) return
+      console.warn(`[liveui] voice export 抛错: ${(e as Error).message}`)
+      this.broadcast({
+        type: 'ASSISTANT_VOICE',
+        data: { status: 'failed', error: (e as Error).message },
+      } as LiveUiAssistantVoiceMessage)
+    }
   }
 
   /**
@@ -611,6 +888,10 @@ export class LiveUiSession {
     return this.ttsEngine != null && this.ttsEnabled
   }
 
+  get shouldStreamTtsPlayback(): boolean {
+    return this.hasTts && this.streamTtsPlayback
+  }
+
   startMouthPump(): void {
     this.stopMouthPump()
     this.mouthTimer = setInterval(() => {
@@ -657,6 +938,138 @@ export class LiveUiSession {
       this.electronChild = null
     }
   }
+}
+
+function clampProbability(value: number): number {
+  if (!Number.isFinite(value)) return 0
+  return Math.max(0, Math.min(1, value))
+}
+
+/**
+ * Headless 语音导出：优先走 stream，已收音频后再开始计 2 秒 idle，超时则主动 abort 上游并落盘；
+ * 不支持 stream 的引擎走整段 synthesize。
+ */
+async function synthesizeAssistantVoiceForExport(
+  engine: TtsEngine,
+  text: string,
+): Promise<
+  | {
+      data: Buffer
+      format: 'mp3' | 'wav' | 'pcm_s16le'
+      sampleRate: number
+      channels?: number
+    }
+  | undefined
+> {
+  if (!engine.synthesizeStream) {
+    console.error(`[liveui] voice export 走 synthesize（非流式）`)
+    const out = await engine.synthesize(text)
+    if (out.data.length === 0) return undefined
+    return out
+  }
+
+  const controller = new AbortController()
+  let idleTimer: NodeJS.Timeout | undefined
+  const IDLE_MS = 2000
+  let aborted = false
+  let chunkCount = 0
+  let totalBytes = 0
+  let firstChunkAt = 0
+  const tStart = Date.now()
+  const armIdle = () => {
+    if (idleTimer) clearTimeout(idleTimer)
+    idleTimer = setTimeout(() => {
+      aborted = true
+      const since = Date.now() - tStart
+      console.error(`[liveui] voice export idle ${IDLE_MS}ms 截断（已收 ${chunkCount} chunks / ${totalBytes} bytes，总耗时 ${since}ms）`)
+      controller.abort()
+    }, IDLE_MS)
+  }
+
+  const pcmChunks: Buffer[] = []
+  let pcmSampleRate = 0
+  let pcmChannels = 1
+  let wholeBuffer: Buffer | undefined
+  let wholeFormat: 'mp3' | 'wav' | undefined
+  let wholeSampleRate = 0
+
+  console.error(`[liveui] voice export 开始 stream: ${text.slice(0, 60)}${text.length > 60 ? '…' : ''}`)
+  try {
+    await engine.synthesizeStream(text, async (out) => {
+      if (out.data.length === 0) return
+      chunkCount += 1
+      totalBytes += out.data.length
+      if (!firstChunkAt) {
+        firstChunkAt = Date.now()
+        console.error(`[liveui] voice export 首包: ${out.format} ${out.sampleRate}Hz ${out.channels ?? 1}ch ${out.data.length}B (首包 ${firstChunkAt - tStart}ms)`)
+      }
+      if (out.format === 'pcm_s16le') {
+        pcmChunks.push(out.data)
+        if (!pcmSampleRate) pcmSampleRate = out.sampleRate
+        if (out.channels != null) pcmChannels = out.channels
+      } else {
+        wholeBuffer = wholeBuffer ? Buffer.concat([wholeBuffer, out.data]) : out.data
+        wholeFormat = out.format
+        wholeSampleRate = out.sampleRate
+      }
+      // 收到第一块后才开始计 idle；之后每收到一块就重置。
+      armIdle()
+    }, controller.signal)
+  } catch (e) {
+    if (!aborted) {
+      // Real upstream error; only swallow if we already collected usable audio.
+      const haveAny = pcmChunks.length > 0 || (wholeBuffer && wholeBuffer.length > 0)
+      if (!haveAny) throw e
+      console.warn(`[liveui] voice export stream 抛错但已有音频，落盘已收部分: ${(e as Error).message}`)
+    }
+  } finally {
+    if (idleTimer) clearTimeout(idleTimer)
+  }
+
+  const elapsed = Date.now() - tStart
+  console.error(`[liveui] voice export 完成: chunks=${chunkCount} bytes=${totalBytes} elapsed=${elapsed}ms aborted=${aborted}`)
+
+  if (wholeBuffer && wholeBuffer.length > 0 && wholeFormat) {
+    return { data: wholeBuffer, format: wholeFormat, sampleRate: wholeSampleRate }
+  }
+  if (pcmChunks.length === 0) return undefined
+  const pcm = Buffer.concat(pcmChunks)
+  if (pcm.length === 0) return undefined
+  const wav = pcm16leToWavBuffer(pcm, pcmSampleRate || 24000, pcmChannels)
+  return { data: wav, format: 'wav', sampleRate: pcmSampleRate || 24000 }
+}
+
+function pcm16leToWavBuffer(pcm: Buffer, sampleRate: number, numChannels: number): Buffer {
+  const bitsPerSample = 16
+  const blockAlign = (numChannels * bitsPerSample) / 8
+  const byteRate = sampleRate * blockAlign
+  const dataSize = pcm.length
+  const header = Buffer.alloc(44)
+  header.write('RIFF', 0)
+  header.writeUInt32LE(36 + dataSize, 4)
+  header.write('WAVE', 8)
+  header.write('fmt ', 12)
+  header.writeUInt32LE(16, 16)
+  header.writeUInt16LE(1, 20)
+  header.writeUInt16LE(numChannels, 22)
+  header.writeUInt32LE(sampleRate, 24)
+  header.writeUInt32LE(byteRate, 28)
+  header.writeUInt16LE(blockAlign, 32)
+  header.writeUInt16LE(bitsPerSample, 34)
+  header.write('data', 36)
+  header.writeUInt32LE(dataSize, 40)
+  return Buffer.concat([header, pcm])
+}
+
+async function writeAssistantVoiceFile(out: {
+  data: Buffer
+  format: 'mp3' | 'wav' | 'pcm_s16le'
+}): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), 'infiniti-agent-voice-'))
+  const ext = out.format === 'mp3' ? 'mp3' : 'wav'
+  const filePath = join(dir, `reply.${ext}`)
+  await writeFile(filePath, out.data)
+  return filePath
 }
 
 function mediaMimeType(filePath: string): string {

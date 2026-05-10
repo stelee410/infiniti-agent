@@ -17,6 +17,10 @@ export type LiveUiClientMessage =
   | { type: 'INBOX_SAVE_AS'; sourcePath: string; destinationPath: string; requestId?: string }
   | { type: 'MIC_AUDIO'; audioBase64: string; format: string }
   | { type: 'LIVEUI_INTERACTION'; kind: LiveUiInteractionKind }
+  | { type: 'H5_APPLET_EVENT'; appId: string; event: string; payload: unknown }
+  | { type: 'H5_APPLET_CLOSE_REQUEST'; appId: string }
+  | { type: 'H5_APPLET_LAUNCH_REQUEST'; key: string }
+  | { type: 'ASSISTANT_MEDIA_RESULT'; requestId: string; ok: boolean; error?: string }
 
 export function parseLiveUiClientMessage(raw: string): LiveUiClientMessage | null {
   let parsed: { type?: unknown; data?: unknown }
@@ -103,6 +107,35 @@ export function parseLiveUiClientMessage(raw: string): LiveUiClientMessage | nul
     case 'LIVEUI_INTERACTION': {
       if (!data || (data.kind !== 'head_pat' && data.kind !== 'body_poke')) return null
       return { type: 'LIVEUI_INTERACTION', kind: data.kind }
+    }
+    case 'H5_APPLET_EVENT': {
+      if (!data || typeof data.appId !== 'string' || typeof data.event !== 'string') return null
+      const event = data.event.trim()
+      if (!data.appId || !event || event.length > 120) return null
+      return {
+        type: 'H5_APPLET_EVENT',
+        appId: data.appId,
+        event,
+        payload: data.payload,
+      }
+    }
+    case 'H5_APPLET_CLOSE_REQUEST': {
+      if (!data || typeof data.appId !== 'string' || !data.appId.trim()) return null
+      return { type: 'H5_APPLET_CLOSE_REQUEST', appId: data.appId.trim() }
+    }
+    case 'H5_APPLET_LAUNCH_REQUEST': {
+      if (!data || typeof data.key !== 'string' || !data.key.trim()) return null
+      return { type: 'H5_APPLET_LAUNCH_REQUEST', key: data.key.trim() }
+    }
+    case 'ASSISTANT_MEDIA_RESULT': {
+      if (!data || typeof data.requestId !== 'string' || !data.requestId) return null
+      if (typeof data.ok !== 'boolean') return null
+      return {
+        type: 'ASSISTANT_MEDIA_RESULT',
+        requestId: data.requestId,
+        ok: data.ok,
+        ...(typeof data.error === 'string' ? { error: data.error } : {}),
+      }
     }
     default:
       return null

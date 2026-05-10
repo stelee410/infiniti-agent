@@ -79,12 +79,14 @@ import {
   shouldApplyReal2dResizeLayout,
   shouldResetReal2dCompactScaleOnConfigClose,
   shouldRunDynamicFigureFit,
+  shouldFreezeReal2dStageLayoutForH5,
   type ConfigPanelCloseReason,
   type WindowSize,
 } from './panelLayoutPolicy.ts'
 import { adaptExpression, type RendererKind } from './expressionAdapter.ts'
 import { Real2dLiveUiAdapter, type Real2dExpressionSlot } from './real2dLiveUiAdapter.ts'
 import { createLiveUiWindowManager } from './windowManager.ts'
+import { createH5AppletHost } from './h5AppletRuntime.ts'
 
 /** 由 expressions.json 注入，覆盖默认 exp_xx 映射 */
 let spriteEmotionToIdOverride: Record<string, string> | null = null
@@ -113,6 +115,8 @@ declare global {
       setInboxOpen?: (open: boolean) => void
       /** Electron：拍照倒计时/闪光时临时铺满屏幕 */
       setCameraCaptureOpen?: (open: boolean) => void
+      /** Electron：H5 快应用打开时临时铺满屏幕，供内部 applet 取 80vw/80vh */
+      setH5AppletOpen?: (open: boolean) => void
       /** Electron：极简模式时收缩/恢复透明窗口边界 */
       setMinimalModeOpen?: (open: boolean, bounds?: { width: number; height: number }) => void
       /** Electron：读取窗口位置，供自绘拖拽按钮使用 */
@@ -221,6 +225,51 @@ type InboxSaveResultMsg = {
   data: { ok?: unknown; message?: unknown }
 }
 
+type H5AppletCreateMsg = {
+  type: 'H5_APPLET_CREATE'
+  data: {
+    appId?: unknown
+    title?: unknown
+    description?: unknown
+    launchMode?: unknown
+    html?: unknown
+  }
+}
+
+type H5AppletUpdateMsg = {
+  type: 'H5_APPLET_UPDATE'
+  data: {
+    appId?: unknown
+    patchType?: unknown
+    content?: unknown
+  }
+}
+
+type H5AppletDestroyMsg = {
+  type: 'H5_APPLET_DESTROY'
+  data: { appId?: unknown }
+}
+
+type H5AppletLibraryMsg = {
+  type: 'H5_APPLET_LIBRARY'
+  data: { items?: unknown }
+}
+
+type H5AppletLaunchMsg = {
+  type: 'H5_APPLET_LAUNCH'
+  data: { key?: unknown }
+}
+
+type H5AppletGenerationMsg = {
+  type: 'H5_APPLET_GENERATION'
+  data: {
+    status?: unknown
+    title?: unknown
+    key?: unknown
+    error?: unknown
+  }
+}
+
 type ChatAttachment = {
   id: string
   name: string
@@ -250,6 +299,12 @@ type Msg =
   | InboxUpdateMsg
   | InboxOpenMsg
   | InboxSaveResultMsg
+  | H5AppletCreateMsg
+  | H5AppletUpdateMsg
+  | H5AppletDestroyMsg
+  | H5AppletLibraryMsg
+  | H5AppletLaunchMsg
+  | H5AppletGenerationMsg
 
 const FACE_RADIUS = 110
 
@@ -395,6 +450,7 @@ async function bootstrap(): Promise<void> {
   const debugRelationshipEl = document.getElementById('liveui-debug-relationship')
   const userLineInput = document.getElementById('liveui-user-line') as HTMLTextAreaElement | null
   const inboxRoot = document.getElementById('liveui-inbox')
+  const h5AppletRoot = document.getElementById('liveui-h5-runtime')
   const inboxToggle = document.getElementById('liveui-inbox-toggle') as HTMLButtonElement | null
   const inboxPanel = document.getElementById('liveui-inbox-panel')
   if (!canvas) return
@@ -494,6 +550,13 @@ async function bootstrap(): Promise<void> {
   }
 
   const applyReal2dStageLayout = (resizeRuntime = true): void => {
+    // 快应用生命周期内绝不改 stage：dock 被 display:none 时 controlBar.top=0，
+    // real2dRuntimeStageHeight 会把整窗高度当成 stage 高度，永久推升 stable，
+    // 关闭后 avatar canvas 残留为工作区高度（人物视觉被放大）。
+    if (shouldFreezeReal2dStageLayoutForH5({
+      h5AppletOpen,
+      pendingH5AppletCloseWindowSize,
+    })) return
     const stage = document.getElementById('liveui-real2d-stage') as HTMLElement | null
     if (!stage) return
     const nextWidth = window.innerWidth
@@ -637,18 +700,23 @@ async function bootstrap(): Promise<void> {
   let cameraCaptureOpen = false
   let cameraReturnWindowSize: WindowSize | null = null
   let pendingCameraCloseWindowSize: WindowSize | null = null
+  let h5AppletOpen = false
+  let h5AppletReturnWindowSize: WindowSize | null = null
+  let pendingH5AppletCloseWindowSize: WindowSize | null = null
+  let suppressDynamicFitUntil = 0
   let syncMinimalWindowBounds = (): void => {}
 
-  const layoutSuspended = (): boolean => configPanelOpen || inboxOpen || cameraCaptureOpen
+  const layoutSuspended = (): boolean => configPanelOpen || inboxOpen || cameraCaptureOpen || h5AppletOpen
 
   const pendingLayoutCloseWindowSize = (): WindowSize | null =>
-    pendingConfigPanelCloseWindowSize ?? pendingInboxCloseWindowSize ?? pendingCameraCloseWindowSize
+    pendingConfigPanelCloseWindowSize ?? pendingInboxCloseWindowSize ?? pendingCameraCloseWindowSize ?? pendingH5AppletCloseWindowSize
 
   const clearPendingLayoutCloseWindowSize = (target: WindowSize | null): void => {
     if (!target) return
     if (pendingConfigPanelCloseWindowSize === target) pendingConfigPanelCloseWindowSize = null
     if (pendingInboxCloseWindowSize === target) pendingInboxCloseWindowSize = null
     if (pendingCameraCloseWindowSize === target) pendingCameraCloseWindowSize = null
+    if (pendingH5AppletCloseWindowSize === target) pendingH5AppletCloseWindowSize = null
   }
 
   let layoutCoordinator: LiveUiLayoutCoordinator | null = null
@@ -656,7 +724,9 @@ async function bootstrap(): Promise<void> {
   const cancelDynamicWindowFit = (): void => layoutCoordinator?.cancelDynamicFit()
 
   const scheduleDynamicWindowFit = (attempt = 0): void =>
-    layoutCoordinator?.scheduleDynamicFit(attempt)
+    Date.now() >= suppressDynamicFitUntil
+      ? layoutCoordinator?.scheduleDynamicFit(attempt)
+      : undefined
 
   /**
    * 在「当前 layout」下读人物可见 bounds，若头顶留白明显则把窗口高度减掉一截。
@@ -1300,6 +1370,13 @@ async function bootstrap(): Promise<void> {
       { width: window.innerWidth, height: window.innerHeight },
       pendingCloseSize,
     )
+    const isH5AppletRestore = pendingCloseSize != null && pendingCloseSize === pendingH5AppletCloseWindowSize
+    // 快应用关闭还原：仅释放 pending，绝不重排 avatar / figure / stage scale。
+    // 与图标点击路径行为完全一致：open 切窗口，close 切回来，组件保持原样。
+    if (isH5AppletRestore && closeWindowRestored) {
+      clearPendingLayoutCloseWindowSize(pendingCloseSize)
+      return
+    }
     if (!shouldApplyReal2dResizeLayout({
       layoutSuspended: layoutSuspended(),
       pendingConfigPanelCloseRestore: pendingCloseSize != null,
@@ -1330,7 +1407,7 @@ async function bootstrap(): Promise<void> {
     }
     layoutFigureInStage()
     positionBubbleOverFigure()
-    scheduleDynamicWindowFit()
+    if (!isH5AppletRestore) scheduleDynamicWindowFit()
   })
 
   const runNormalWindowLayout = (attempt: number): void => {
@@ -1341,7 +1418,7 @@ async function bootstrap(): Promise<void> {
     }
     layoutFigureInStage()
     positionBubbleOverFigure()
-    if (attempt >= 1) scheduleDynamicWindowFit()
+    if (attempt >= 4) scheduleDynamicWindowFit()
   }
 
   const refreshNormalWindowLayout = (attempt = 0): void =>
@@ -1383,7 +1460,11 @@ async function bootstrap(): Promise<void> {
 
   layoutCoordinator = createLiveUiLayoutCoordinator({
     isDynamicFitAllowed: () =>
-      shouldRunDynamicFigureFit({ minimalMode, layoutSuspended: layoutSuspended() }),
+      Date.now() >= suppressDynamicFitUntil &&
+      shouldRunDynamicFigureFit({
+        minimalMode,
+        layoutSuspended: layoutSuspended() || pendingLayoutCloseWindowSize() != null,
+      }),
     isMinimalMode: () => minimalMode,
     syncMinimalWindowBounds: () => syncMinimalWindowBounds(),
     runCompactWindowFit: (attempt) => scheduleCompactWindowHeight(attempt),
@@ -1396,6 +1477,8 @@ async function bootstrap(): Promise<void> {
   if (dockEl && typeof ResizeObserver !== 'undefined') {
     const ro = new ResizeObserver(() => {
       requestAnimationFrame(() => {
+        // 快应用打开/关闭整个生命周期内，绝不让 dock 抖动触发 avatar 重排。
+        if (h5AppletOpen || pendingH5AppletCloseWindowSize != null) return
         const pendingCloseSize = pendingLayoutCloseWindowSize()
         if (!shouldApplyReal2dResizeLayout({
           layoutSuspended: layoutSuspended(),
@@ -1427,6 +1510,42 @@ async function bootstrap(): Promise<void> {
   const port = readPort()
   const wsUrl = `ws://127.0.0.1:${port}`
   const socket = new ReconnectingWebSocket(wsUrl)
+  const h5AppletHost = h5AppletRoot
+    ? createH5AppletHost({
+      root: h5AppletRoot,
+      socket,
+      onInteractiveNeeded: () => forceWindowInteractive(),
+      onBeforeLaunch: () => {
+        // 唯一的 snapshot 入口：图标点击与外部 launch(key)（含 /showmemagic 链路）共用此回调，
+        // 保证两条路径在 WS 往返之前就锁定"打开前窗口尺寸"。
+        h5AppletReturnWindowSize = { width: window.innerWidth, height: window.innerHeight }
+        pendingH5AppletCloseWindowSize = null
+        // 期间冻结所有动态窗口压缩，确保 avatar 状态在快应用生命周期内保持原样。
+        cancelDynamicWindowFit()
+        pendingReal2dCompactHeight = null
+        suppressDynamicFitUntil = Number.POSITIVE_INFINITY
+      },
+      onOpenChange: (open) => {
+        if (open) {
+          // 兜底：如果 applet 不是经 launch() 打开（例如服务端直接 CREATE），仍然记一次 snapshot。
+          h5AppletReturnWindowSize ??= { width: window.innerWidth, height: window.innerHeight }
+          pendingH5AppletCloseWindowSize = null
+          suppressDynamicFitUntil = Number.POSITIVE_INFINITY
+          cancelDynamicWindowFit()
+        } else {
+          pendingH5AppletCloseWindowSize = h5AppletReturnWindowSize
+          h5AppletReturnWindowSize = null
+          suppressDynamicFitUntil = Date.now() + 600
+          cancelDynamicWindowFit()
+        }
+        h5AppletOpen = open
+        document.body.classList.toggle('liveui-h5-applet-open', open)
+        windowManager.requestLayout({ mode: 'h5Applet', reason: 'h5-applet', open })
+        // 不调用 refreshH5AppletClosedLayout：H5 关闭只是窗口大小回退，
+        // 期间不能触发任何 avatar/figure 重排或 stage scale compensation 重算。
+      },
+    })
+    : null
   const configPanel = initConfigPanel({
     socket,
     onOpenChange: (open, reason) => {
@@ -2333,6 +2452,82 @@ async function bootstrap(): Promise<void> {
       } else {
         console.warn('[liveui] inbox save failed:', text)
       }
+    } else if (msg.type === 'H5_APPLET_CREATE') {
+      const data = msg.data
+      if (
+        h5AppletHost &&
+        typeof data?.appId === 'string' &&
+        typeof data.title === 'string' &&
+        typeof data.description === 'string' &&
+        typeof data.html === 'string' &&
+        (data.launchMode === 'live_panel' || data.launchMode === 'floating' || data.launchMode === 'fullscreen' || data.launchMode === 'overlay')
+      ) {
+        h5AppletHost.create({
+          appId: data.appId,
+          title: data.title,
+          description: data.description,
+          launchMode: data.launchMode,
+          html: data.html,
+        })
+      }
+    } else if (msg.type === 'H5_APPLET_UPDATE') {
+      const data = msg.data
+      if (
+        h5AppletHost &&
+        typeof data?.appId === 'string' &&
+        typeof data.content === 'string' &&
+        (data.patchType === 'replace' || data.patchType === 'css' || data.patchType === 'state')
+      ) {
+        h5AppletHost.update({
+          appId: data.appId,
+          patchType: data.patchType,
+          content: data.content,
+        })
+      }
+    } else if (msg.type === 'H5_APPLET_DESTROY') {
+      const appId = typeof msg.data?.appId === 'string' ? msg.data.appId : ''
+      if (h5AppletHost && appId) h5AppletHost.destroy(appId)
+    } else if (msg.type === 'H5_APPLET_LIBRARY') {
+      if (h5AppletHost && Array.isArray(msg.data?.items)) {
+        const items = msg.data.items.flatMap((raw) => {
+          if (!raw || typeof raw !== 'object') return []
+          const item = raw as Record<string, unknown>
+          const launchMode = item.launchMode
+          if (
+            typeof item.id !== 'string' ||
+            typeof item.key !== 'string' ||
+            typeof item.title !== 'string' ||
+            typeof item.description !== 'string' ||
+            typeof item.updatedAt !== 'string' ||
+            (launchMode !== 'live_panel' && launchMode !== 'floating' && launchMode !== 'fullscreen' && launchMode !== 'overlay')
+          ) {
+            return []
+          }
+          return [{
+            id: item.id,
+            key: item.key,
+            title: item.title,
+            description: item.description,
+            launchMode,
+            updatedAt: item.updatedAt,
+          }]
+        })
+        h5AppletHost.setLibrary(items)
+      }
+    } else if (msg.type === 'H5_APPLET_LAUNCH') {
+      const key = typeof msg.data?.key === 'string' ? msg.data.key : ''
+      if (h5AppletHost && key) h5AppletHost.launch(key)
+    } else if (msg.type === 'H5_APPLET_GENERATION') {
+      const status = msg.data?.status
+      const title = typeof msg.data?.title === 'string' ? msg.data.title : '快应用'
+      if (h5AppletHost && (status === 'started' || status === 'completed' || status === 'failed')) {
+        h5AppletHost.setGenerationStatus({
+          status,
+          title,
+          key: typeof msg.data?.key === 'string' ? msg.data.key : undefined,
+          error: typeof msg.data?.error === 'string' ? msg.data.error : undefined,
+        })
+      }
     } else if (msg.type === 'TTS_STATUS') {
       ttsAvailable = !!msg.data?.available
       if (typeof msg.data?.enabled === 'boolean') ttsEnabled = msg.data.enabled
@@ -2527,7 +2722,10 @@ async function bootstrap(): Promise<void> {
     inputHistoryIndex = inputHistory.length
     inputHistoryDraft = ''
     pushComposerDraft()
-    refreshNormalWindowLayout()
+    // 不再调用 refreshNormalWindowLayout()：textarea 已经固定尺寸（见 #liveui-user-line CSS），
+    // 输入与提交都不会改变 dock 高度，因此不需要重排 avatar/figure/stage。
+    // 这是从源头消除"提交触发 layout chain"竞争的关键——/showmemagic 链路上
+    // 不再有任何机会去把 real2dStableStageHeight 推升到工作区高度。
   })
 
   wirePointerInteractions()
@@ -3395,7 +3593,9 @@ async function bootstrap(): Promise<void> {
           dom.closest('#speech-bubble') ||
           dom.closest('#liveui-config-panel') ||
           dom.closest('#liveui-photo-preview') ||
-          dom.closest('#liveui-inbox'))
+          dom.closest('#liveui-inbox') ||
+          dom.closest('#liveui-h5-runtime') ||
+          dom.closest('.liveui-h5-launcher'))
       ) {
         return true
       }

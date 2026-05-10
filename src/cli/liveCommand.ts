@@ -13,6 +13,9 @@ export type LiveCommandOptions = {
   port?: string
   zoom?: string
   auto?: boolean
+  headless?: boolean
+  headness?: boolean
+  voicePossible?: string
 }
 
 export type LiveCommandPlan = {
@@ -23,6 +26,8 @@ export type LiveCommandPlan = {
   avatarFallbackFileUrl?: string
   voiceMicJson: string
   figureZoomOverride?: number
+  headless: boolean
+  voicePossible: number
   warnings: string[]
   info: string[]
 }
@@ -89,6 +94,14 @@ export function resolveLiveCommandPlan(
   } else if (typeof cfg.liveUi?.figureZoom === 'number') {
     info.push(`人物缩放: ${(cfg.liveUi.figureZoom * 100).toFixed(0)}%`)
   }
+  const headless = opts.headless === true || opts.headness === true
+  const voicePossible = headless ? parseLiveVoicePossible(opts.voicePossible, 0.3) : 0
+  if (headless) {
+    info.push('已启用无头模式：仅启动 WebSocket，不打开 LiveUI 窗口')
+    info.push(`无头语音回复概率: ${voicePossible}`)
+  } else if (opts.voicePossible !== undefined) {
+    warnings.push('--voice-possible 只在 --headless 模式生效，当前已忽略')
+  }
 
   return {
     port,
@@ -98,6 +111,8 @@ export function resolveLiveCommandPlan(
     avatarFallbackFileUrl: !useSprite ? avatarFallback?.avatarFileUrl : undefined,
     voiceMicJson: deps.buildLiveUiVoiceMicEnvJson(cfg.liveUi, { auto: opts.auto === true }),
     figureZoomOverride,
+    headless,
+    voicePossible,
     warnings,
     info,
   }
@@ -126,4 +141,13 @@ export function parseLiveZoomOverride(raw: string | undefined): number | undefin
     throw new LiveCommandError('[live] --zoom 取值需在 0.4 ~ 1.5 之间，例如 0.9 表示 90%。')
   }
   return z
+}
+
+export function parseLiveVoicePossible(raw: string | undefined, fallback = 0.3): number {
+  const trimmed = raw?.trim()
+  const value = trimmed ? Number(trimmed) : fallback
+  if (!Number.isFinite(value) || value < 0 || value > 1) {
+    throw new LiveCommandError('[live] --voice-possible 取值需在 0 ~ 1 之间，例如 0.3。')
+  }
+  return value
 }

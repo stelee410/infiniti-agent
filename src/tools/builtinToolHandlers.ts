@@ -19,6 +19,16 @@ import { enqueueSnapPhotoJob } from '../snap/asyncSnap.js'
 import { enqueueSeedanceVideoJob } from '../video/asyncVideo.js'
 import { enqueueAvatarGenJob } from '../avatar/asyncAvatarGen.js'
 import type { BuiltinToolName } from './definitions.js'
+import { H5AppletValidator, normalizePermissions, type H5AppletLaunchMode, type H5AppletPatchType, type H5AppletPermissions } from '../liveui/appletRuntime.js'
+import {
+  deleteCachedH5Applet,
+  findCachedH5Applet,
+  generateH5AppletHtml,
+  h5AppletCacheKey,
+  listCachedH5Applets,
+  readCachedH5Applet,
+  writeCachedH5Applet,
+} from '../liveui/h5AppletCache.js'
 import {
   toolGlobFiles,
   toolGrepFiles,
@@ -227,7 +237,222 @@ async function runBash(command: string, cwd: string, timeoutMs?: number): Promis
   }
 }
 
+function parseLaunchMode(raw: unknown): H5AppletLaunchMode | undefined {
+  return raw === 'live_panel' || raw === 'floating' || raw === 'fullscreen' || raw === 'overlay'
+    ? raw
+    : undefined
+}
+
+function parsePatchType(raw: unknown): H5AppletPatchType | undefined {
+  return raw === 'replace' || raw === 'css' || raw === 'state' ? raw : undefined
+}
+
+function parseAppletPermissions(raw: unknown): Partial<H5AppletPermissions> | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const p = raw as Record<string, unknown>
+  return {
+    ...(typeof p.network === 'boolean' ? { network: p.network } : {}),
+    ...(p.storage === false || p.storage === 'session' ? { storage: p.storage } : {}),
+    ...(typeof p.microphone === 'boolean' ? { microphone: p.microphone } : {}),
+    ...(typeof p.camera === 'boolean' ? { camera: p.camera } : {}),
+    ...(typeof p.clipboard === 'boolean' ? { clipboard: p.clipboard } : {}),
+    ...(typeof p.fullscreen === 'boolean' ? { fullscreen: p.fullscreen } : {}),
+  }
+}
+
+function validateCachedAppletForLaunch(cached: {
+  html: string
+  permissions: Partial<H5AppletPermissions>
+}): string | null {
+  const validation = new H5AppletValidator().validateHtml(
+    cached.html,
+    normalizePermissions(cached.permissions),
+  )
+  return validation.ok ? null : validation.errors.join('; ')
+}
+
 export const builtinToolHandlers: Record<BuiltinToolName, ToolHandler> = {
+  request_h5_applet: async (args, ctx) => {
+    if (!ctx.liveUi) return toolError('LiveUI 未启动。请使用 `infiniti-agent live` 启动数字人窗口后再请求快应用。')
+    const title = String(args.title ?? '').trim()
+    const description = String(args.description ?? '').trim()
+    const launchMode = parseLaunchMode(args.launch_mode) ?? 'live_panel'
+    if (!title) return toolError('title 不能为空')
+
+    const cached = await findCachedH5Applet(ctx.sessionCwd, title, description)
+    const cachedError = cached ? validateCachedAppletForLaunch(cached) : null
+    if (cached && !cachedError) {
+      ctx.liveUi.sendH5AppletLibrary(await listCachedH5Applets(ctx.sessionCwd))
+      ctx.liveUi.launchH5Applet(cached.key)
+      return JSON.stringify({
+        ok: true,
+        cache: 'hit',
+        key: cached.key,
+        status: 'launch_requested',
+        message: '本地已有缓存，已直接启动快应用。',
+      })
+    }
+    if (cachedError) {
+      ctx.liveUi.sendH5AppletGeneration({
+        status: 'failed',
+        title,
+        description,
+        key: cached?.key,
+        error: `缓存未通过校验，已忽略并重新生成：${cachedError}`,
+      })
+    }
+
+    const key = h5AppletCacheKey(title, description)
+    ctx.liveUi.sendH5AppletGeneration({ status: 'started', title, description, key })
+    void (async () => {
+      try {
+        const html = await generateH5AppletHtml({ config: ctx.config, title, description })
+        const validation = new H5AppletValidator().validateHtml(
+          html,
+          normalizePermissions({ network: false, storage: 'session' }),
+        )
+        if (!validation.ok) throw new Error(`生成的快应用未通过安全校验：${validation.errors.join('; ')}`)
+        const saved = await writeCachedH5Applet(ctx.sessionCwd, {
+          key,
+          title,
+          description,
+          launchMode,
+          permissions: { network: false, storage: 'session' },
+          html,
+        })
+        ctx.liveUi?.sendH5AppletGeneration({
+          status: 'completed',
+          title,
+          description,
+          key: saved.key,
+        })
+        ctx.liveUi?.sendH5AppletLibrary(await listCachedH5Applets(ctx.sessionCwd))
+      } catch (e) {
+        ctx.liveUi?.sendH5AppletGeneration({
+          status: 'failed',
+          title,
+          description,
+          key,
+          error: e instanceof Error ? e.message : String(e),
+        })
+      }
+    })()
+    return JSON.stringify({
+      ok: true,
+      cache: 'miss',
+      status: 'generating',
+      key,
+      message: '本地没有缓存，已交给 H5 子 agent 异步编写。完成后会出现在 LiveUI 的快应用图标栏，点击即可启动。',
+    })
+  },
+
+  launch_h5_applet: async (args, ctx) => {
+    if (!ctx.liveUi) return toolError('LiveUI 未启动，无法启动快应用。')
+    const key = String(args.key ?? '').trim()
+    const title = String(args.title ?? '').trim()
+    const cached = key
+      ? await readCachedH5Applet(ctx.sessionCwd, key)
+      : title
+        ? await findCachedH5Applet(ctx.sessionCwd, title)
+        : null
+    if (!cached) return toolError('未找到本地快应用缓存')
+    const cachedError = validateCachedAppletForLaunch(cached)
+    if (cachedError) return toolError(`本地快应用缓存未通过安全校验，请重新生成：${cachedError}`)
+    ctx.liveUi.launchH5Applet(cached.key)
+    return JSON.stringify({ ok: true, status: 'launch_requested', cache: 'hit', key: cached.key })
+  },
+
+  list_h5_applets: async (_args, ctx) => {
+    const items = await listCachedH5Applets(ctx.sessionCwd)
+    ctx.liveUi?.sendH5AppletLibrary(items)
+    return JSON.stringify({ ok: true, count: items.length, items })
+  },
+
+  delete_h5_applet_cache: async (args, ctx) => {
+    const key = String(args.key ?? '').trim()
+    const title = String(args.title ?? '').trim()
+    if (!key && !title) return toolError('请提供 key/id 或 title')
+    const deleted = await deleteCachedH5Applet(ctx.sessionCwd, {
+      keyOrId: key || undefined,
+      title: title || undefined,
+    })
+    if (!deleted) return toolError('未找到本地快应用缓存')
+    const items = await listCachedH5Applets(ctx.sessionCwd)
+    ctx.liveUi?.sendH5AppletLibrary(items)
+    return JSON.stringify({
+      ok: true,
+      deleted: {
+        id: deleted.id,
+        key: deleted.key,
+        title: deleted.title,
+      },
+      count: items.length,
+    })
+  },
+
+  create_h5_applet: (args, ctx) => {
+    if (!ctx.liveUi) return toolError('LiveUI 未启动。请使用 `infiniti-agent live` 启动数字人窗口后再创建 H5 applet。')
+    try {
+      const applet = ctx.liveUi.createH5Applet({
+        title: String(args.title ?? ''),
+        description: args.description != null ? String(args.description) : undefined,
+        launchMode: parseLaunchMode(args.launch_mode),
+        permissions: parseAppletPermissions(args.permissions),
+        html: String(args.html ?? ''),
+      })
+      void writeCachedH5Applet(ctx.sessionCwd, {
+        title: applet.title,
+        description: applet.description,
+        launchMode: applet.launchMode,
+        permissions: applet.permissions,
+        html: String(args.html ?? ''),
+      }).then(async () => {
+        ctx.liveUi?.sendH5AppletLibrary(await listCachedH5Applets(ctx.sessionCwd))
+      }).catch(() => undefined)
+      return JSON.stringify({
+        app_id: applet.appId,
+        status: applet.status,
+        title: applet.title,
+        launch_mode: applet.launchMode,
+      })
+    } catch (e) {
+      return toolError(e instanceof Error ? e.message : String(e))
+    }
+  },
+
+  update_h5_applet: (args, ctx) => {
+    if (!ctx.liveUi) return toolError('LiveUI 未启动，无法热更新 H5 applet。')
+    const appId = String(args.app_id ?? '').trim()
+    const patchType = parsePatchType(args.patch_type)
+    if (!appId) return toolError('app_id 不能为空')
+    if (!patchType) return toolError('patch_type 须为 replace/css/state')
+    try {
+      const applet = ctx.liveUi.updateH5Applet(appId, patchType, String(args.content ?? ''))
+      return JSON.stringify({
+        app_id: applet.appId,
+        status: applet.status,
+        patch_type: patchType,
+      })
+    } catch (e) {
+      return toolError(e instanceof Error ? e.message : String(e))
+    }
+  },
+
+  destroy_h5_applet: (args, ctx) => {
+    if (!ctx.liveUi) return toolError('LiveUI 未启动，无法销毁 H5 applet。')
+    const appId = String(args.app_id ?? '').trim()
+    if (!appId) return toolError('app_id 不能为空')
+    try {
+      const applet = ctx.liveUi.destroyH5Applet(appId)
+      return JSON.stringify({
+        app_id: applet.appId,
+        status: applet.status,
+      })
+    } catch (e) {
+      return toolError(e instanceof Error ? e.message : String(e))
+    }
+  },
+
   http_request: (args) => runHttpRequest({
     method: String(args.method ?? 'GET'),
     url: String(args.url ?? ''),
@@ -482,4 +707,37 @@ export const builtinToolHandlers: Record<BuiltinToolName, ToolHandler> = {
   grep_files: (args, ctx) => toolGrepFiles(ctx.sessionCwd, args),
   write_file: (args, ctx) => toolWriteFile(ctx.sessionCwd, args, { editHistory: ctx.editHistory }),
   str_replace: (args, ctx) => toolStrReplace(ctx.sessionCwd, args, { editHistory: ctx.editHistory }),
+
+  send_image: (args, ctx) => sendAssistantMediaTool(args, ctx, 'image'),
+  send_video: (args, ctx) => sendAssistantMediaTool(args, ctx, 'video'),
+  send_file: (args, ctx) => sendAssistantMediaTool(args, ctx, 'file'),
+}
+
+async function sendAssistantMediaTool(
+  args: ToolArgs,
+  ctx: ToolRunContext,
+  kind: 'image' | 'video' | 'file',
+): Promise<string> {
+  const inputPath = String(args.path ?? '').trim()
+  if (!inputPath) return toolError('path 不能为空')
+  if (!ctx.liveUi) return toolError('未连接 LiveUI 客户端，无法投递媒体')
+  const caption = typeof args.caption === 'string' && args.caption.trim() ? args.caption.trim() : undefined
+  const { isAbsolute, resolve } = await import('node:path')
+  const { stat } = await import('node:fs/promises')
+  const resolved = isAbsolute(inputPath) ? inputPath : resolve(ctx.sessionCwd, inputPath)
+  try {
+    const info = await stat(resolved)
+    if (!info.isFile()) return toolError(`不是文件: ${resolved}`)
+  } catch (e) {
+    return toolError(`无法访问文件 ${resolved}: ${(e as Error).message}`)
+  }
+  const result = await ctx.liveUi.sendAssistantMedia({
+    filePath: resolved,
+    kind,
+    caption,
+  })
+  if (!result.ok) {
+    return toolError(result.error ?? `${kind} 发送失败`)
+  }
+  return JSON.stringify({ ok: true, kind, path: resolved, requestId: result.requestId })
 }

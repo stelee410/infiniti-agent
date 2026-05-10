@@ -51,12 +51,19 @@ export function createVoxcpmTts(cfg: VoxcpmTtsConfig, cwd = process.cwd()): TtsE
         : resolve(cwd, cfg.referenceAudioPath)
       : null
 
-  async function synthesizeStreamImpl(text: string, emit: TtsStreamEmit): Promise<void> {
+  async function synthesizeStreamImpl(
+    text: string,
+    emit: TtsStreamEmit,
+    externalSignal?: AbortSignal,
+  ): Promise<void> {
     const body = await buildStreamForm(text, cfg, referenceResolved, cwd)
+    const signal = externalSignal
+      ? AbortSignal.any([AbortSignal.timeout(timeoutMs), externalSignal])
+      : AbortSignal.timeout(timeoutMs)
     const res = await fetch(streamUrl, {
       method: 'POST',
       body,
-      signal: AbortSignal.timeout(timeoutMs),
+      signal,
     })
     if (!res.ok) {
       const t = await res.text().catch(() => '')

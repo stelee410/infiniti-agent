@@ -30,8 +30,10 @@ import {
   type SlashItem,
 } from './slashCompletions.js'
 import { parseSpeakCommandLine } from '../liveui/speakCommandLine.js'
-import type { LiveUiInteractionKind, LiveUiSession } from '../liveui/wsSession.js'
+import type { LiveUiAppletEvent, LiveUiInteractionKind, LiveUiSession } from '../liveui/wsSession.js'
 import type { LiveUiFileAttachment, LiveUiStatusVariant, LiveUiVisionAttachment } from '../liveui/protocol.js'
+import { listCachedH5Applets, readCachedH5Applet } from '../liveui/h5AppletCache.js'
+import { H5AppletValidator, normalizePermissions } from '../liveui/appletRuntime.js'
 import { enqueueSnapPhotoJob } from '../snap/asyncSnap.js'
 import { enqueueSeedanceVideoJob, seedanceReferenceImagesFromLiveInputs } from '../video/asyncVideo.js'
 import { enqueueAvatarGenJob } from '../avatar/asyncAvatarGen.js'
@@ -68,6 +70,7 @@ import {
   runQueuedMediaCommand,
 } from './queuedMediaCommand.js'
 import { parseChatSlashCommand } from './chatSlashCommands.js'
+import { sendLiveUiAssistantDone } from './liveUiStreamCompletion.js'
 import {
   handleClearSlashCommand,
   handleConfigSlashCommand,
@@ -82,6 +85,8 @@ import {
   handleReloadSlashCommand,
   handleRollSlashCommand,
   handleScheduleSlashCommand,
+  handleSendMediaSlashCommand,
+  handleShowMeMagicSlashCommand,
   handleSpeakSlashCommand,
   handleUndoSlashCommand,
 } from './chatCommandHandlers.js'
@@ -205,6 +210,20 @@ function attachmentSummary(attachments: LiveUiFileAttachment[]): string {
   return parts.length ? `\n\n[已附带${parts.join('、')}]` : ''
 }
 
+function formatAppletEventPayload(payload: unknown): string {
+  if (payload == null) return ''
+  try {
+    return JSON.stringify(payload).slice(0, 1200)
+  } catch {
+    return String(payload).slice(0, 1200)
+  }
+}
+
+function shouldSilenceAppletEvent(event: LiveUiAppletEvent): boolean {
+  if (event.title === 'Show Me Magic') return true
+  return event.event === 'magic_loaded' || event.event === 'magic_burst' || event.event === 'manual_ping'
+}
+
 function validateConfigPanelSave(raw: unknown): asserts raw is InfinitiConfig {
   if (!raw || typeof raw !== 'object') {
     throw new Error('配置格式无效')
@@ -255,6 +274,7 @@ export function ChatApp({
   const streamTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const streamLiveUiRef = useRef(createStreamLiveUiState())
   const ttsCursorRef = useRef(0)
+  const assistantVoiceTurnStartedRef = useRef(false)
   const [liveUiConnected, setLiveUiConnected] = useState(false)
   const [debugOverlayEnabled, setDebugOverlayEnabled] = useState(false)
   const liveUiConnectedRef = useRef(false)
@@ -362,7 +382,7 @@ export function ChatApp({
         .then((greeting) => {
           if (!greeting || !liveUi || busyRef.current || agent.isDreaming()) return
           liveUi.sendAssistantStream(greeting, true, true)
-          if (liveUi.hasTts) {
+          if (liveUi.shouldStreamTtsPlayback) {
             const clean = ttsDisplayCleanForLiveUi(greeting, expressionManifest)
             liveUi.resetAudio()
             for (const seg of splitTtsSegments(clean)) {
@@ -512,7 +532,7 @@ export function ChatApp({
     (content: string, opts: { appendToSession?: boolean } = {}) => {
       if (liveUi) {
         liveUi.sendAssistantStream(content, true, true)
-        if (liveUi.hasTts) {
+        if (liveUi.shouldStreamTtsPlayback) {
           const clean = ttsDisplayCleanForLiveUi(content, expressionManifest)
           liveUi.resetAudio()
           for (const seg of splitTtsSegments(clean)) {
@@ -782,6 +802,12 @@ export function ChatApp({
           case 'help':
             handleHelpSlashCommand({ setError, setInput })
             return
+          case 'showMeMagic':
+            await handleShowMeMagicSlashCommand(cwd, liveUi, {
+              setError,
+              setInput,
+            })
+            return
           case 'compact':
             handleCompactSlashCommand(cwd, config, messages, slashCommand, subconsciousRef.current, {
               setError,
@@ -814,6 +840,15 @@ export function ChatApp({
               setInput,
               setNotice,
               setMessages,
+              clearNoticeLater: (ms) => setTimeout(() => setNotice(null), ms),
+            })
+            return
+          }
+          case 'sendMedia': {
+            await handleSendMediaSlashCommand(cwd, slashCommand, liveUi, {
+              setError,
+              setInput,
+              setNotice,
               clearNoticeLater: (ms) => setTimeout(() => setNotice(null), ms),
             })
             return
@@ -891,6 +926,7 @@ export function ChatApp({
       const ac = new AbortController()
       abortRef.current = ac
       const userLine = raw
+      assistantVoiceTurnStartedRef.current = false
 
       let baseMessages = messages
       maybeStartAutoCompaction({
@@ -940,6 +976,7 @@ export function ChatApp({
           mcp,
           skipPermissions: dangerouslySkipPermissions,
           editHistory: editHistoryRef.current,
+          liveUi,
           memoryCoordinator: subconsciousRef.current ?? undefined,
           signal: ac.signal,
           onToolDispatch: (name) => {
@@ -954,8 +991,11 @@ export function ChatApp({
               busySubtextRef.current = '等待模型响应（多轮工具之间会重新请求）…'
               liveUi?.sendAssistantStream('', true)
               ttsCursorRef.current = 0
-              if (liveUi?.hasTts) {
-                liveUi.resetAudio()
+              if (liveUi?.shouldStreamTtsPlayback) {
+                liveUi.beginAssistantTurn()
+              } else if (liveUi?.hasTts && !assistantVoiceTurnStartedRef.current) {
+                assistantVoiceTurnStartedRef.current = true
+                liveUi.beginAssistantTurn()
               }
             },
             onTextDelta: (_delta, full) => {
@@ -968,7 +1008,7 @@ export function ChatApp({
                 const clean = ttsDisplayCleanForLiveUi(full, expressionManifest)
                 liveUi.mouth.onDisplayText(clean)
                 flushStream(clean)
-                if (liveUi.hasTts) {
+                if (liveUi.shouldStreamTtsPlayback) {
                   const next = collectNewTtsSegments(clean, ttsCursorRef.current)
                   for (const seg of next.segments) {
                     liveUi.enqueueTts(seg)
@@ -995,17 +1035,23 @@ export function ChatApp({
             },
           },
         })
+        sendLiveUiAssistantDone(liveUi, outRaw)
         const out = liveUi ? stripLiveUiTagsFromMessages(outRaw, expressionManifest) : outRaw
         if (liveUi?.hasTts) {
           const lastMsg = outRaw[outRaw.length - 1]
           if (lastMsg?.role === 'assistant' && typeof lastMsg.content === 'string' && lastMsg.content) {
             void subconsciousRef.current?.observeAssistantOutput(lastMsg.content)
             const clean = ttsDisplayCleanForLiveUi(lastMsg.content, expressionManifest)
-            const next = collectNewTtsSegments(clean, ttsCursorRef.current, { final: true })
-            for (const seg of next.segments) {
-              liveUi.enqueueTts(seg)
+            if (liveUi.shouldStreamTtsPlayback) {
+              const next = collectNewTtsSegments(clean, ttsCursorRef.current, { final: true })
+              for (const seg of next.segments) {
+                liveUi.enqueueTts(seg)
+              }
+              ttsCursorRef.current = next.cursor
             }
-            ttsCursorRef.current = next.cursor
+            void liveUi.finalizeAssistantVoice(clean)
+          } else {
+            void liveUi.finalizeAssistantVoice('')
           }
         } else {
           const lastMsg = outRaw[outRaw.length - 1]
@@ -1194,6 +1240,68 @@ export function ChatApp({
       void handleSubmit(prompts[kind])
     })
   }, [liveUi, handleSubmit])
+
+  useEffect(() => {
+    if (!liveUi) return
+    return liveUi.onAppletEvent((event: LiveUiAppletEvent) => {
+      if (shouldSilenceAppletEvent(event)) return
+      if (busyRef.current) return
+      if (subconsciousRef.current?.isDreaming()) return
+      const payload = formatAppletEventPayload(event.payload)
+      void handleSubmit(
+        `（H5 applet 事件：app_id=${event.appId}，event=${event.event}${payload ? `，payload=${payload}` : ''}。请根据这个用户交互继续回应；如果需要更新界面，请调用 update_h5_applet；如果流程结束，请调用 destroy_h5_applet。）`,
+      )
+    })
+  }, [liveUi, handleSubmit])
+
+  useEffect(() => {
+    if (!liveUi) return
+    void listCachedH5Applets(cwd).then((items) => liveUi.sendH5AppletLibrary(items)).catch(() => undefined)
+    return liveUi.onAppletLaunch((key) => {
+      void (async () => {
+        const cached = await readCachedH5Applet(cwd, key)
+        if (!cached) {
+          liveUi.sendH5AppletGeneration({
+            status: 'failed',
+            title: '快应用',
+            description: '',
+            key,
+            error: '未找到本地缓存',
+          })
+          return
+        }
+        const cacheCheck = new H5AppletValidator().validateHtml(
+          cached.html,
+          normalizePermissions(cached.permissions),
+        )
+        if (!cacheCheck.ok) {
+          liveUi.sendH5AppletGeneration({
+            status: 'failed',
+            title: cached.title,
+            description: cached.description,
+            key,
+            error: `缓存未通过校验：${cacheCheck.errors.join('; ')}`,
+          })
+          return
+        }
+        liveUi.createH5Applet({
+          title: cached.title,
+          description: cached.description,
+          launchMode: cached.launchMode,
+          permissions: cached.permissions,
+          html: cached.html,
+        })
+      })().catch((e) => {
+        liveUi.sendH5AppletGeneration({
+          status: 'failed',
+          title: '快应用',
+          description: '',
+          key,
+          error: formatChatError(e),
+        })
+      })
+    })
+  }, [cwd, liveUi])
 
   useEffect(() => {
     if (!liveUi) return

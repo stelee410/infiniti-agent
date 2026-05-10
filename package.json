@@ -1,6 +1,6 @@
 {
   "name": "linkyun-infiniti-agent",
-  "version": "0.8.4",
+  "version": "0.8.5",
   "description": "LinkYun Infiniti Agent — long-running CLI agent (Node.js, React + Ink TUI)",
   "type": "module",
   "files": [
@@ -23,7 +23,7 @@
     "infiniti-agent": "dist/cli.js"
   },
   "scripts": {
-    "build": "tsc && npm run build -w infiniti-agent-liveui",
+    "build": "tsc && node -e \"import('node:fs').then(fs=>fs.chmodSync('dist/cli.js',0o755))\" && npm run build -w infiniti-agent-liveui",
     "prepublishOnly": "npm run build",
     "setup:liveui": "node scripts/merge-liveui-config.mjs",
     "dev": "tsx src/cli.tsx",
@@ -74,6 +74,7 @@
     "@types/node": "^22.10.0",
     "@types/react": "^19.2.14",
     "@types/ws": "^8.5.13",
+    "happy-dom": "^20.9.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vitest": "^4.1.4"
