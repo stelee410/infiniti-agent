@@ -20,6 +20,7 @@ export type LiveUiClientMessage =
   | { type: 'H5_APPLET_EVENT'; appId: string; event: string; payload: unknown }
   | { type: 'H5_APPLET_CLOSE_REQUEST'; appId: string }
   | { type: 'H5_APPLET_LAUNCH_REQUEST'; key: string }
+  | { type: 'ASSISTANT_MEDIA_RESULT'; requestId: string; ok: boolean; error?: string }
 
 export function parseLiveUiClientMessage(raw: string): LiveUiClientMessage | null {
   let parsed: { type?: unknown; data?: unknown }
@@ -125,6 +126,16 @@ export function parseLiveUiClientMessage(raw: string): LiveUiClientMessage | nul
     case 'H5_APPLET_LAUNCH_REQUEST': {
       if (!data || typeof data.key !== 'string' || !data.key.trim()) return null
       return { type: 'H5_APPLET_LAUNCH_REQUEST', key: data.key.trim() }
+    }
+    case 'ASSISTANT_MEDIA_RESULT': {
+      if (!data || typeof data.requestId !== 'string' || !data.requestId) return null
+      if (typeof data.ok !== 'boolean') return null
+      return {
+        type: 'ASSISTANT_MEDIA_RESULT',
+        requestId: data.requestId,
+        ok: data.ok,
+        ...(typeof data.error === 'string' ? { error: data.error } : {}),
+      }
     }
     default:
       return null

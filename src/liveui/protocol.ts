@@ -76,6 +76,49 @@ export type LiveUiAudioResetMessage = {
   type: 'AUDIO_RESET'
 }
 
+/** Agent → bridge：发送一条媒体（图片/视频/文件）消息。bridge 拿到后通过自身 IM 通道转发。 */
+export type LiveUiAssistantMediaMessage = {
+  type: 'ASSISTANT_MEDIA'
+  data: {
+    requestId: string
+    filePath: string
+    kind: 'image' | 'video' | 'file'
+    caption?: string
+  }
+}
+
+/** bridge → agent：媒体发送结果回执（成功/失败）。 */
+export type LiveUiAssistantMediaResultMessage = {
+  type: 'ASSISTANT_MEDIA_RESULT'
+  data: {
+    requestId: string
+    ok: boolean
+    error?: string
+  }
+}
+
+export type LiveUiAssistantVoiceMessage = {
+  type: 'ASSISTANT_VOICE'
+  data:
+    | {
+        status: 'started'
+      }
+    | {
+        status: 'completed'
+        format: 'mp3' | 'wav' | 'pcm_s16le'
+        sampleRate: number
+        channels?: number
+        /** 临时音频文件绝对路径（headless 模式优先使用；bridge 与 agent 同机部署时直接读盘）。 */
+        filePath?: string
+        /** 兼容路径：直接内联 base64 音频。两者至少有一个。 */
+        audioBase64?: string
+      }
+    | {
+        status: 'failed' | 'skipped'
+        error?: string
+      }
+}
+
 /** 告知渲染端 TTS 引擎是否可用（连接时推送）。 */
 export type LiveUiTtsStatusMessage = {
   type: 'TTS_STATUS'
@@ -289,6 +332,9 @@ export type LiveUiMessage =
   | LiveUiStatusPillMessage
   | LiveUiAudioChunkMessage
   | LiveUiAudioResetMessage
+  | LiveUiAssistantVoiceMessage
+  | LiveUiAssistantMediaMessage
+  | LiveUiAssistantMediaResultMessage
   | LiveUiTtsStatusMessage
   | LiveUiAsrStatusMessage
   | LiveUiAsrResultMessage
@@ -366,6 +412,52 @@ export function isLiveUiMessage(x: unknown): x is LiveUiMessage {
     return true
   }
   if (o.type === 'AUDIO_RESET' || o.type === 'INTERRUPT' || o.type === 'VISION_ATTACHMENT_CLEAR' || o.type === 'ATTACHMENT_CLEAR') return true
+  if (o.type === 'ASSISTANT_VOICE') {
+    const d = (x as { data?: unknown }).data
+    if (!d || typeof d !== 'object') return false
+    const dd = d as {
+      status?: unknown
+      audioBase64?: unknown
+      filePath?: unknown
+      format?: unknown
+      sampleRate?: unknown
+      channels?: unknown
+      error?: unknown
+    }
+    if (dd.status === 'started') return true
+    if (dd.status === 'failed' || dd.status === 'skipped') {
+      return dd.error === undefined || typeof dd.error === 'string'
+    }
+    if (dd.status !== 'completed') return false
+    if (dd.format !== 'mp3' && dd.format !== 'wav' && dd.format !== 'pcm_s16le') return false
+    if (typeof dd.sampleRate !== 'number' || !Number.isFinite(dd.sampleRate)) return false
+    if (dd.channels !== undefined && typeof dd.channels !== 'number') return false
+    const hasBase64 = typeof dd.audioBase64 === 'string'
+    const hasPath = typeof dd.filePath === 'string' && dd.filePath.length > 0
+    if (!hasBase64 && !hasPath) return false
+    if (dd.audioBase64 !== undefined && !hasBase64) return false
+    if (dd.filePath !== undefined && typeof dd.filePath !== 'string') return false
+    return true
+  }
+  if (o.type === 'ASSISTANT_MEDIA') {
+    const d = (x as { data?: unknown }).data
+    if (!d || typeof d !== 'object') return false
+    const dd = d as { requestId?: unknown; filePath?: unknown; kind?: unknown; caption?: unknown }
+    if (typeof dd.requestId !== 'string' || !dd.requestId) return false
+    if (typeof dd.filePath !== 'string' || !dd.filePath) return false
+    if (dd.kind !== 'image' && dd.kind !== 'video' && dd.kind !== 'file') return false
+    if (dd.caption !== undefined && typeof dd.caption !== 'string') return false
+    return true
+  }
+  if (o.type === 'ASSISTANT_MEDIA_RESULT') {
+    const d = (x as { data?: unknown }).data
+    if (!d || typeof d !== 'object') return false
+    const dd = d as { requestId?: unknown; ok?: unknown; error?: unknown }
+    if (typeof dd.requestId !== 'string' || !dd.requestId) return false
+    if (typeof dd.ok !== 'boolean') return false
+    if (dd.error !== undefined && typeof dd.error !== 'string') return false
+    return true
+  }
   if (o.type === 'INBOX_UPDATE' || o.type === 'INBOX_OPEN') {
     const d = (x as { data?: unknown }).data
     if (!d || typeof d !== 'object') return false

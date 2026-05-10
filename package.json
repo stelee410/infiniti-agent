@@ -23,7 +23,7 @@
     "infiniti-agent": "dist/cli.js"
   },
   "scripts": {
-    "build": "tsc && npm run build -w infiniti-agent-liveui",
+    "build": "tsc && node -e \"import('node:fs').then(fs=>fs.chmodSync('dist/cli.js',0o755))\" && npm run build -w infiniti-agent-liveui",
     "prepublishOnly": "npm run build",
     "setup:liveui": "node scripts/merge-liveui-config.mjs",
     "dev": "tsx src/cli.tsx",

@@ -26,6 +26,9 @@ export type BuiltinToolName =
   | 'write_file'
   | 'str_replace'
   | 'list_directory'
+  | 'send_image'
+  | 'send_video'
+  | 'send_file'
 
 export const BUILTIN_TOOLS: Array<{
   name: BuiltinToolName
@@ -591,6 +594,66 @@ export const BUILTIN_TOOLS: Array<{
         },
       },
       required: ['prompt'],
+    },
+  },
+  {
+    name: 'send_image',
+    description:
+      '把一张本地图片直接推送给当前会话对端（例如微信用户）。仅在已连接 LiveUI 客户端时生效；适合用户要求“把这张图发给他/我”等场景。可选 caption 会作为图片说明文字一并发送。',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        path: {
+          type: 'string',
+          description: '本地图片路径，可绝对路径或相对当前会话工作目录；扩展名建议 .jpg/.jpeg/.png/.webp/.gif。',
+        },
+        caption: {
+          type: 'string',
+          description: '可选的图片说明文字，会在图片之后作为文字消息发送。',
+        },
+      },
+      required: ['path'],
+    },
+  },
+  {
+    name: 'send_video',
+    description:
+      '把一段本地视频直接推送给当前会话对端。仅在已连接 LiveUI 客户端时生效。可选 caption 会作为视频说明一并发送。',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        path: {
+          type: 'string',
+          description: '本地视频路径，可绝对或相对会话工作目录；建议 .mp4/.mov/.webm。',
+        },
+        caption: {
+          type: 'string',
+          description: '可选的说明文字。',
+        },
+      },
+      required: ['path'],
+    },
+  },
+  {
+    name: 'send_file',
+    description:
+      '把一份本地文件作为附件直接推送给当前会话对端。仅在已连接 LiveUI 客户端时生效。可选 caption 会附加为说明文字。',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        path: {
+          type: 'string',
+          description: '本地文件路径，可绝对或相对会话工作目录。',
+        },
+        caption: {
+          type: 'string',
+          description: '可选的说明文字。',
+        },
+      },
+      required: ['path'],
     },
   },
 ]

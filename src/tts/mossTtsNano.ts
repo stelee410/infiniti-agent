@@ -134,7 +134,11 @@ export function createMossTtsNano(cfg: MossTtsNanoConfig, cwd = process.cwd()): 
     }
   }
 
-  async function synthesizeStreamImpl(text: string, emit: TtsStreamEmit): Promise<void> {
+  async function synthesizeStreamImpl(
+    text: string,
+    emit: TtsStreamEmit,
+    externalSignal?: AbortSignal,
+  ): Promise<void> {
     const { streamId, audioUrl, sampleRate, channels } = await startStreamJson(text)
     const frameBytes = Math.max(2, channels) * 2
     /**
@@ -179,9 +183,12 @@ export function createMossTtsNano(cfg: MossTtsNanoConfig, cwd = process.cwd()): 
 
     try {
       const streamReadMs = Math.max(timeoutMs * 4, 600_000)
+      const audioSignal = externalSignal
+        ? AbortSignal.any([AbortSignal.timeout(streamReadMs), externalSignal])
+        : AbortSignal.timeout(streamReadMs)
       const audioRes = await fetch(audioUrl, {
         method: 'GET',
-        signal: AbortSignal.timeout(streamReadMs),
+        signal: audioSignal,
       })
       if (!audioRes.ok) {
         const t = await audioRes.text().catch(() => '')

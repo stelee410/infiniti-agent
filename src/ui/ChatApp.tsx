@@ -85,6 +85,7 @@ import {
   handleReloadSlashCommand,
   handleRollSlashCommand,
   handleScheduleSlashCommand,
+  handleSendMediaSlashCommand,
   handleShowMeMagicSlashCommand,
   handleSpeakSlashCommand,
   handleUndoSlashCommand,
@@ -273,6 +274,7 @@ export function ChatApp({
   const streamTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const streamLiveUiRef = useRef(createStreamLiveUiState())
   const ttsCursorRef = useRef(0)
+  const assistantVoiceTurnStartedRef = useRef(false)
   const [liveUiConnected, setLiveUiConnected] = useState(false)
   const [debugOverlayEnabled, setDebugOverlayEnabled] = useState(false)
   const liveUiConnectedRef = useRef(false)
@@ -380,7 +382,7 @@ export function ChatApp({
         .then((greeting) => {
           if (!greeting || !liveUi || busyRef.current || agent.isDreaming()) return
           liveUi.sendAssistantStream(greeting, true, true)
-          if (liveUi.hasTts) {
+          if (liveUi.shouldStreamTtsPlayback) {
             const clean = ttsDisplayCleanForLiveUi(greeting, expressionManifest)
             liveUi.resetAudio()
             for (const seg of splitTtsSegments(clean)) {
@@ -530,7 +532,7 @@ export function ChatApp({
     (content: string, opts: { appendToSession?: boolean } = {}) => {
       if (liveUi) {
         liveUi.sendAssistantStream(content, true, true)
-        if (liveUi.hasTts) {
+        if (liveUi.shouldStreamTtsPlayback) {
           const clean = ttsDisplayCleanForLiveUi(content, expressionManifest)
           liveUi.resetAudio()
           for (const seg of splitTtsSegments(clean)) {
@@ -842,6 +844,15 @@ export function ChatApp({
             })
             return
           }
+          case 'sendMedia': {
+            await handleSendMediaSlashCommand(cwd, slashCommand, liveUi, {
+              setError,
+              setInput,
+              setNotice,
+              clearNoticeLater: (ms) => setTimeout(() => setNotice(null), ms),
+            })
+            return
+          }
         }
       }
       const mediaCommand = parseQueuedMediaCommand(raw)
@@ -915,6 +926,7 @@ export function ChatApp({
       const ac = new AbortController()
       abortRef.current = ac
       const userLine = raw
+      assistantVoiceTurnStartedRef.current = false
 
       let baseMessages = messages
       maybeStartAutoCompaction({
@@ -979,8 +991,11 @@ export function ChatApp({
               busySubtextRef.current = '等待模型响应（多轮工具之间会重新请求）…'
               liveUi?.sendAssistantStream('', true)
               ttsCursorRef.current = 0
-              if (liveUi?.hasTts) {
-                liveUi.resetAudio()
+              if (liveUi?.shouldStreamTtsPlayback) {
+                liveUi.beginAssistantTurn()
+              } else if (liveUi?.hasTts && !assistantVoiceTurnStartedRef.current) {
+                assistantVoiceTurnStartedRef.current = true
+                liveUi.beginAssistantTurn()
               }
             },
             onTextDelta: (_delta, full) => {
@@ -993,7 +1008,7 @@ export function ChatApp({
                 const clean = ttsDisplayCleanForLiveUi(full, expressionManifest)
                 liveUi.mouth.onDisplayText(clean)
                 flushStream(clean)
-                if (liveUi.hasTts) {
+                if (liveUi.shouldStreamTtsPlayback) {
                   const next = collectNewTtsSegments(clean, ttsCursorRef.current)
                   for (const seg of next.segments) {
                     liveUi.enqueueTts(seg)
@@ -1027,11 +1042,16 @@ export function ChatApp({
           if (lastMsg?.role === 'assistant' && typeof lastMsg.content === 'string' && lastMsg.content) {
             void subconsciousRef.current?.observeAssistantOutput(lastMsg.content)
             const clean = ttsDisplayCleanForLiveUi(lastMsg.content, expressionManifest)
-            const next = collectNewTtsSegments(clean, ttsCursorRef.current, { final: true })
-            for (const seg of next.segments) {
-              liveUi.enqueueTts(seg)
+            if (liveUi.shouldStreamTtsPlayback) {
+              const next = collectNewTtsSegments(clean, ttsCursorRef.current, { final: true })
+              for (const seg of next.segments) {
+                liveUi.enqueueTts(seg)
+              }
+              ttsCursorRef.current = next.cursor
             }
-            ttsCursorRef.current = next.cursor
+            void liveUi.finalizeAssistantVoice(clean)
+          } else {
+            void liveUi.finalizeAssistantVoice('')
           }
         } else {
           const lastMsg = outRaw[outRaw.length - 1]

@@ -455,11 +455,19 @@ async function main(): Promise<void> {
     .option('--auto', '语音输入使用自动 VAD 模式；默认需按住空格录音，松开发送识别')
     .option('--headless', '无头模式：仅启动 Live WebSocket，不打开 LiveUI 窗口')
     .option('--headness', '无头模式别名：等同于 --headless')
+    .option('--voice-possible <n>', '无头模式下把本轮回复作为语音暴露给 bridge 的概率（0~1，默认 0.3；0=禁用，1=全部语音）')
     .option(
       '--zoom <n>',
       '人物显示缩放（0.4 ~ 1.5；0.9 = 90%、0.8 = 80%；不影响控制条/输入框）',
     )
-    .action(async (cmdOpts: { port?: string; zoom?: string; auto?: boolean; headless?: boolean; headness?: boolean }) => {
+    .action(async (cmdOpts: {
+      port?: string
+      zoom?: string
+      auto?: boolean
+      headless?: boolean
+      headness?: boolean
+      voicePossible?: string
+    }) => {
       await withUiLogFile(cwd, async () => {
         await maybeRunStartupSync()
         if (!configExistsSync(cwd)) {
@@ -491,7 +499,11 @@ async function main(): Promise<void> {
           console.error(`[liveui] ${msg}`)
         }
 
-        const liveUi = new LiveUiSession(livePlan.port, { mediaRoots: [localAgentDir(cwd)] })
+        const liveUi = new LiveUiSession(livePlan.port, {
+          mediaRoots: [localAgentDir(cwd)],
+          assistantVoicePossible: livePlan.voicePossible,
+          streamTtsPlayback: !livePlan.headless,
+        })
         await runChatTui({
           skipPermissions,
           disableThinking,

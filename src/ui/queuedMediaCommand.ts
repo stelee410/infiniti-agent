@@ -53,6 +53,7 @@ export function queuedMediaNotice(kind: QueuedMediaCommandKind): string {
 
 export type QueuedMediaLiveUi = {
   hasTts: boolean
+  shouldStreamTtsPlayback?: boolean
   sendAssistantStream(content: string, done: boolean, replace: boolean): void
   resetAudio(): void
   enqueueTts(text: string): void
@@ -131,7 +132,7 @@ export async function finalizeQueuedMediaCommand(
 
   if (args.liveUi) {
     args.liveUi.sendAssistantStream(args.assistantContent, true, true)
-    if (args.liveUi.hasTts) {
+    if (args.liveUi.shouldStreamTtsPlayback ?? args.liveUi.hasTts) {
       args.liveUi.resetAudio()
       for (const seg of splitTtsSegments(args.cleanForTts(args.assistantContent))) {
         args.liveUi.enqueueTts(seg)

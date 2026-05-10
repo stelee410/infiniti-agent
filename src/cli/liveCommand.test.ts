@@ -3,6 +3,7 @@ import type { InfinitiConfig } from '../config/types.js'
 import {
   LiveCommandError,
   parseLivePort,
+  parseLiveVoicePossible,
   parseLiveZoomOverride,
   resolveLiveCommandPlan,
   type LiveCommandDeps,
@@ -49,6 +50,13 @@ describe('liveCommand', () => {
     expect(parseLiveZoomOverride('0.8')).toBe(0.8)
     expect(parseLiveZoomOverride(undefined)).toBeUndefined()
     expect(() => parseLiveZoomOverride('0.1')).toThrow(LiveCommandError)
+  })
+
+  it('parses headless voice probability with range validation', () => {
+    expect(parseLiveVoicePossible('0')).toBe(0)
+    expect(parseLiveVoicePossible('1')).toBe(1)
+    expect(parseLiveVoicePossible(undefined)).toBe(0.3)
+    expect(() => parseLiveVoicePossible('1.2')).toThrow(LiveCommandError)
   })
 
   it('uses sprite renderer when sprite expressions are available', () => {
@@ -109,7 +117,31 @@ describe('liveCommand', () => {
     )
 
     expect(plan.headless).toBe(true)
+    expect(plan.voicePossible).toBe(0.3)
     expect(plan.info).toContain('已启用无头模式：仅启动 WebSocket，不打开 LiveUI 窗口')
+  })
+
+  it('accepts explicit --voice-possible in headless mode', () => {
+    const plan = resolveLiveCommandPlan(
+      '/project',
+      cfg(),
+      { headless: true, voicePossible: '0' },
+      deps(),
+    )
+
+    expect(plan.voicePossible).toBe(0)
+  })
+
+  it('ignores --voice-possible outside headless mode', () => {
+    const plan = resolveLiveCommandPlan(
+      '/project',
+      cfg(),
+      { voicePossible: '1' },
+      deps(),
+    )
+
+    expect(plan.voicePossible).toBe(0)
+    expect(plan.warnings).toContain('--voice-possible 只在 --headless 模式生效，当前已忽略')
   })
 
   it('accepts --headness as a backwards-compatible alias for headless mode', () => {

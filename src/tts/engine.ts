@@ -17,6 +17,9 @@ export interface TtsEngine {
   /**
    * MOSS `/api/generate-stream`：边收 PCM 边回调；LiveUi 逐块下发 AUDIO_CHUNK。
    * 若存在，wsSession 优先走本路径以实现低延迟。
+   *
+   * 可选 signal：调用方可在 idle 截断时主动 abort 上游请求；引擎只需把它接到
+   * fetch 的 signal 即可，发出的 chunks 仍由 emit 正常返回。
    */
-  synthesizeStream?(text: string, emit: TtsStreamEmit): Promise<void>
+  synthesizeStream?(text: string, emit: TtsStreamEmit, signal?: AbortSignal): Promise<void>
 }

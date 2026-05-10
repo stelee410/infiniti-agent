@@ -707,4 +707,37 @@ export const builtinToolHandlers: Record<BuiltinToolName, ToolHandler> = {
   grep_files: (args, ctx) => toolGrepFiles(ctx.sessionCwd, args),
   write_file: (args, ctx) => toolWriteFile(ctx.sessionCwd, args, { editHistory: ctx.editHistory }),
   str_replace: (args, ctx) => toolStrReplace(ctx.sessionCwd, args, { editHistory: ctx.editHistory }),
+
+  send_image: (args, ctx) => sendAssistantMediaTool(args, ctx, 'image'),
+  send_video: (args, ctx) => sendAssistantMediaTool(args, ctx, 'video'),
+  send_file: (args, ctx) => sendAssistantMediaTool(args, ctx, 'file'),
+}
+
+async function sendAssistantMediaTool(
+  args: ToolArgs,
+  ctx: ToolRunContext,
+  kind: 'image' | 'video' | 'file',
+): Promise<string> {
+  const inputPath = String(args.path ?? '').trim()
+  if (!inputPath) return toolError('path 不能为空')
+  if (!ctx.liveUi) return toolError('未连接 LiveUI 客户端，无法投递媒体')
+  const caption = typeof args.caption === 'string' && args.caption.trim() ? args.caption.trim() : undefined
+  const { isAbsolute, resolve } = await import('node:path')
+  const { stat } = await import('node:fs/promises')
+  const resolved = isAbsolute(inputPath) ? inputPath : resolve(ctx.sessionCwd, inputPath)
+  try {
+    const info = await stat(resolved)
+    if (!info.isFile()) return toolError(`不是文件: ${resolved}`)
+  } catch (e) {
+    return toolError(`无法访问文件 ${resolved}: ${(e as Error).message}`)
+  }
+  const result = await ctx.liveUi.sendAssistantMedia({
+    filePath: resolved,
+    kind,
+    caption,
+  })
+  if (!result.ok) {
+    return toolError(result.error ?? `${kind} 发送失败`)
+  }
+  return JSON.stringify({ ok: true, kind, path: resolved, requestId: result.requestId })
 }
