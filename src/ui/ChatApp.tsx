@@ -70,6 +70,7 @@ import {
   runQueuedMediaCommand,
 } from './queuedMediaCommand.js'
 import { parseChatSlashCommand } from './chatSlashCommands.js'
+import { sendLiveUiAssistantDone } from './liveUiStreamCompletion.js'
 import {
   handleClearSlashCommand,
   handleConfigSlashCommand,
@@ -1019,6 +1020,7 @@ export function ChatApp({
             },
           },
         })
+        sendLiveUiAssistantDone(liveUi, outRaw)
         const out = liveUi ? stripLiveUiTagsFromMessages(outRaw, expressionManifest) : outRaw
         if (liveUi?.hasTts) {
           const lastMsg = outRaw[outRaw.length - 1]
