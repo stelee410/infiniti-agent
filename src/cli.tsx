@@ -241,6 +241,8 @@ async function runChatTui(
     liveUiVoiceMicJson?: string
     /** `live --zoom` 注入：人物显示缩放（0.4 ~ 1.5），不影响控制条/输入框 */
     liveUiFigureZoom?: number
+    /** 仅启动 WebSocket/live agent 处理链路，不打开 Electron LiveUI 窗口。 */
+    liveUiHeadless?: boolean
     onConfigReload?: (config: Awaited<ReturnType<typeof loadConfig>>) => Promise<void>
   } = {},
 ): Promise<void> {
@@ -268,19 +270,23 @@ async function runChatTui(
       await liveUi.start()
       liveUi.startMouthPump()
       await configureLiveUiEngines(liveUi, cfg)
-      const child = spawnLiveElectron(liveUi.port, {
-        renderer: opts.liveUiRenderer,
-        model3FileUrl: opts.liveUiModel3FileUrl,
-        spriteExpressionDirFileUrl: opts.liveUiSpriteExpressionDirFileUrl,
-        avatarFallbackFileUrl: opts.liveUiAvatarFallbackFileUrl,
-        voiceMicJson: opts.liveUiVoiceMicJson,
-        figureZoom: resolveLiveUiFigureZoom(cfg, opts.liveUiFigureZoom),
-      })
-      liveUi.setElectronChild(child)
-      if (!child) {
-        console.error('[liveui] Electron 未启动：已启动 WebSocket，可稍后自行对接渲染端。')
+      if (opts.liveUiHeadless) {
+        console.error(`[liveui] WebSocket ws://127.0.0.1:${liveUi.port} · 无头模式，未启动 Electron`)
       } else {
-        console.error(`[liveui] WebSocket ws://127.0.0.1:${liveUi.port} · Electron 已启动`)
+        const child = spawnLiveElectron(liveUi.port, {
+          renderer: opts.liveUiRenderer,
+          model3FileUrl: opts.liveUiModel3FileUrl,
+          spriteExpressionDirFileUrl: opts.liveUiSpriteExpressionDirFileUrl,
+          avatarFallbackFileUrl: opts.liveUiAvatarFallbackFileUrl,
+          voiceMicJson: opts.liveUiVoiceMicJson,
+          figureZoom: resolveLiveUiFigureZoom(cfg, opts.liveUiFigureZoom),
+        })
+        liveUi.setElectronChild(child)
+        if (!child) {
+          console.error('[liveui] Electron 未启动：已启动 WebSocket，可稍后自行对接渲染端。')
+        } else {
+          console.error(`[liveui] WebSocket ws://127.0.0.1:${liveUi.port} · Electron 已启动`)
+        }
       }
     }
     await mcp.start(cfg)
@@ -447,11 +453,13 @@ async function main(): Promise<void> {
     .description('LiveUI：本地 WebSocket + Electron 透明渲染 + TUI（需 npm run build 生成 liveui/dist）')
     .option('-p, --port <port>', 'WebSocket 端口（覆盖 config.json 中 liveUi.port）')
     .option('--auto', '语音输入使用自动 VAD 模式；默认需按住空格录音，松开发送识别')
+    .option('--headless', '无头模式：仅启动 Live WebSocket，不打开 LiveUI 窗口')
+    .option('--headness', '无头模式别名：等同于 --headless')
     .option(
       '--zoom <n>',
       '人物显示缩放（0.4 ~ 1.5；0.9 = 90%、0.8 = 80%；不影响控制条/输入框）',
     )
-    .action(async (cmdOpts: { port?: string; zoom?: string; auto?: boolean }) => {
+    .action(async (cmdOpts: { port?: string; zoom?: string; auto?: boolean; headless?: boolean; headness?: boolean }) => {
       await withUiLogFile(cwd, async () => {
         await maybeRunStartupSync()
         if (!configExistsSync(cwd)) {
@@ -489,11 +497,12 @@ async function main(): Promise<void> {
           disableThinking,
           liveUi,
           liveUiRenderer: livePlan.renderer,
-        liveUiModel3FileUrl: livePlan.model3FileUrl,
-        liveUiSpriteExpressionDirFileUrl: livePlan.spriteExpressionDirFileUrl,
-        liveUiAvatarFallbackFileUrl: livePlan.avatarFallbackFileUrl,
-        liveUiVoiceMicJson: livePlan.voiceMicJson,
+          liveUiModel3FileUrl: livePlan.model3FileUrl,
+          liveUiSpriteExpressionDirFileUrl: livePlan.spriteExpressionDirFileUrl,
+          liveUiAvatarFallbackFileUrl: livePlan.avatarFallbackFileUrl,
+          liveUiVoiceMicJson: livePlan.voiceMicJson,
           liveUiFigureZoom: livePlan.figureZoomOverride,
+          liveUiHeadless: livePlan.headless,
           onConfigReload: async (nextCfg) => {
             if (nextCfg.liveUi?.port && nextCfg.liveUi.port !== liveUi.port) {
               console.warn(
@@ -501,10 +510,12 @@ async function main(): Promise<void> {
               )
             }
             await configureLiveUiEngines(liveUi, nextCfg)
-            restartLiveUiElectron(liveUi, nextCfg, {
-              auto: cmdOpts.auto === true,
-              figureZoom: livePlan.figureZoomOverride,
-            })
+            if (!livePlan.headless) {
+              restartLiveUiElectron(liveUi, nextCfg, {
+                auto: cmdOpts.auto === true,
+                figureZoom: livePlan.figureZoomOverride,
+              })
+            }
           },
         })
         await maybeRunShutdownPush()

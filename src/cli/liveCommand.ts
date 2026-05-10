@@ -13,6 +13,8 @@ export type LiveCommandOptions = {
   port?: string
   zoom?: string
   auto?: boolean
+  headless?: boolean
+  headness?: boolean
 }
 
 export type LiveCommandPlan = {
@@ -23,6 +25,7 @@ export type LiveCommandPlan = {
   avatarFallbackFileUrl?: string
   voiceMicJson: string
   figureZoomOverride?: number
+  headless: boolean
   warnings: string[]
   info: string[]
 }
@@ -89,6 +92,10 @@ export function resolveLiveCommandPlan(
   } else if (typeof cfg.liveUi?.figureZoom === 'number') {
     info.push(`人物缩放: ${(cfg.liveUi.figureZoom * 100).toFixed(0)}%`)
   }
+  const headless = opts.headless === true || opts.headness === true
+  if (headless) {
+    info.push('已启用无头模式：仅启动 WebSocket，不打开 LiveUI 窗口')
+  }
 
   return {
     port,
@@ -98,6 +105,7 @@ export function resolveLiveCommandPlan(
     avatarFallbackFileUrl: !useSprite ? avatarFallback?.avatarFileUrl : undefined,
     voiceMicJson: deps.buildLiveUiVoiceMicEnvJson(cfg.liveUi, { auto: opts.auto === true }),
     figureZoomOverride,
+    headless,
     warnings,
     info,
   }

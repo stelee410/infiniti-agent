@@ -99,4 +99,27 @@ describe('liveCommand', () => {
     expect(plan.avatarFallbackFileUrl).toBe('file:///project/.infiniti-agent/ref/jess/avatar.jpg')
     expect(plan.info).toContain('spriteExpressions 不可用，已启用圆形头像兜底')
   })
+
+  it('supports headless live mode without renderer startup', () => {
+    const plan = resolveLiveCommandPlan(
+      '/project',
+      cfg(),
+      { headless: true },
+      deps(),
+    )
+
+    expect(plan.headless).toBe(true)
+    expect(plan.info).toContain('已启用无头模式：仅启动 WebSocket，不打开 LiveUI 窗口')
+  })
+
+  it('accepts --headness as a backwards-compatible alias for headless mode', () => {
+    const plan = resolveLiveCommandPlan(
+      '/project',
+      cfg(),
+      { headness: true },
+      deps(),
+    )
+
+    expect(plan.headless).toBe(true)
+  })
 })
