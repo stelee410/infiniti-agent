@@ -7,7 +7,7 @@ import type { InfinitiConfig } from '../config/types.js'
 import type { LiveUiFileAttachment, LiveUiVisionAttachment } from '../liveui/protocol.js'
 import type { PersistedMessage } from '../llm/persisted.js'
 import { localInboxDir } from '../paths.js'
-import { transparentizeStudioBackgroundPng } from './transparentizePngBackground.js'
+import { resolveAvatarChromaKeyColorFromEnv, transparentizeStudioBackgroundPng } from './transparentizePngBackground.js'
 import { openRouterGenerateImageBuffer } from './openRouterImageGen.js'
 import { geminiGenerateImageBuffer } from './geminiImageGen.js'
 import { resolveAvatarGenImageProfile, type ResolvedImageProfile } from '../image/resolveImageProfile.js'
@@ -137,23 +137,20 @@ export function avatarGenReferenceImagesFromMessages(
   return []
 }
 
-function backgroundPrompt(auth: ResolvedImageProfile): string {
-  return auth.transparentBackground
-    ? [
-        'transparent background, no backdrop, no white canvas.',
-        'The output must be a PNG with a true alpha-transparent background. Do not create a white, black, gray, gradient, studio, paper, canvas, checkerboard, or any visible background.',
-      ].join(' ')
-    : [
-        'pure solid white background, clean white studio backdrop.',
-        'Use a flat white background specifically for post-processing cutout. Do not create scenery, texture, paper, canvas, checkerboard, props, text, borders, or shadows touching the image border.',
-      ].join(' ')
+function backgroundPrompt(keyColor: string): string {
+  return [
+    `The entire rectangular background must be one flat solid color: ${keyColor}.`,
+    `Every pixel behind the character, including all four edges and corners, should be the same ${keyColor} color.`,
+    `The character, hair, eyes, skin, accessories, and all clothing must use colors that are clearly different from ${keyColor}.`,
+    'Use a single centered character only, with clean separation from the flat background and no extra objects.',
+  ].join(' ')
 }
 
-function buildPrompt(userPrompt: string, target: typeof TARGETS[number], hasReference: boolean, auth: ResolvedImageProfile): string {
+function buildPrompt(userPrompt: string, target: typeof TARGETS[number], hasReference: boolean, keyColor: string): string {
   const extra = userPrompt.trim()
   const referenceRules = hasReference
     ? [
-        `Using the provided avatar as the reference image, preserve the exact same character identity, hairstyle, outfit, body pose, camera angle, lighting, crop, and scale. ${auth.transparentBackground ? 'Preserve or create a transparent background.' : 'Place the character on a pure solid white background.'}`,
+        `Using the provided avatar as the reference image, preserve the exact same character identity, hairstyle, outfit, body pose, camera angle, lighting, crop, and scale. Place the character on a pure solid ${keyColor} background.`,
         '',
         'Modify only the facial expression or mouth shape according to the target description below.',
       ]
@@ -166,7 +163,7 @@ function buildPrompt(userPrompt: string, target: typeof TARGETS[number], hasRefe
   return [
     ...referenceRules,
     '',
-    backgroundPrompt(auth),
+    backgroundPrompt(keyColor),
     'Do not add props, text, scenery, borders, or extra objects. Keep the character centered and consistent.',
     '',
     `Target file: ${target.name}`,
@@ -195,12 +192,15 @@ function bgToleranceFromEnv(): number | undefined {
   return Number.isFinite(n) ? n : undefined
 }
 
-async function ensureTransparentBackground(cwd: string, name: string, buf: Buffer): Promise<{ buffer: Buffer; hasAlpha: boolean; transparentized: boolean }> {
+async function ensureTransparentBackground(cwd: string, name: string, buf: Buffer, keyColor: string): Promise<{ buffer: Buffer; hasAlpha: boolean; transparentized: boolean }> {
   const alreadyTransparent = await imageHasTransparentPixels(buf)
   if (alreadyTransparent) return { buffer: buf, hasAlpha: true, transparentized: false }
   try {
     const tolerance = bgToleranceFromEnv()
-    const out = await transparentizeStudioBackgroundPng(buf, tolerance)
+    const out = await transparentizeStudioBackgroundPng(buf, {
+      tolerance,
+      backgroundColor: keyColor as `#${string}`,
+    })
     const outHasAlpha = await imageHasTransparentPixels(out)
     await appendAvatarGenLog(cwd, `transparentized ${name} alpha=${outHasAlpha} tolerance=${tolerance ?? 'default'}`)
     return { buffer: out, hasAlpha: outHasAlpha, transparentized: true }
@@ -227,7 +227,7 @@ async function generateOne(
       aspectRatio: auth.aspectRatio ?? '2:3',
       ...(auth.imageSize ? { imageSize: auth.imageSize } : {}),
       ...(auth.quality ? { quality: auth.quality } : {}),
-      transparentBackground: auth.transparentBackground,
+      transparentBackground: false,
       timeoutMs: auth.timeoutMs,
     })
   }
@@ -250,7 +250,6 @@ async function generateOne(
     n: 1,
     size: auth.imageSize ?? '1024x1536',
     quality: auth.quality,
-    ...(auth.transparentBackground ? { background: 'transparent' } : {}),
     output_format: 'png',
     image: await Promise.all(
       refs.map((r, idx) =>
@@ -288,7 +287,7 @@ async function generateBaseWithoutReference(
       aspectRatio: auth.aspectRatio ?? '2:3',
       ...(auth.imageSize ? { imageSize: auth.imageSize } : {}),
       ...(auth.quality ? { quality: auth.quality } : {}),
-      transparentBackground: auth.transparentBackground,
+      transparentBackground: false,
       timeoutMs: auth.timeoutMs,
     })
   }
@@ -310,7 +309,6 @@ async function generateBaseWithoutReference(
     n: 1,
     size: auth.imageSize ?? '1024x1536',
     quality: auth.quality,
-    ...(auth.transparentBackground ? { background: 'transparent' } : {}),
     output_format: 'png',
   } as never, { timeout: auth.timeoutMs || DEFAULT_TIMEOUT_MS })
 
@@ -334,6 +332,7 @@ export async function generateReal2dAvatarSet(
   referenceImages: AvatarGenReferenceImage[],
 ): Promise<Real2dAvatarGenResult> {
   const auth = resolveReal2dAvatarGenAuth(cfg)
+  const keyColor = resolveAvatarChromaKeyColorFromEnv()
 
   const outDir = join(
     localInboxDir(cwd),
@@ -341,7 +340,7 @@ export async function generateReal2dAvatarSet(
     `infiniti-agent-avatargen-real2d-${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID().slice(0, 8)}`,
   )
   await mkdir(outDir, { recursive: true })
-  await appendAvatarGenLog(cwd, `start provider=${auth.provider} model=${auth.model} refs=${referenceImages.length} transparentBackground=${auth.transparentBackground} out=${outDir}`)
+  await appendAvatarGenLog(cwd, `start provider=${auth.provider} model=${auth.model} refs=${referenceImages.length} chromaKey=${keyColor} configuredTransparentBackground=${auth.transparentBackground} out=${outDir}`)
 
   const client = auth.provider === 'openai'
     ? new OpenAI({ apiKey: auth.apiKey, baseURL: auth.baseUrl, timeout: auth.timeoutMs || DEFAULT_TIMEOUT_MS })
@@ -349,11 +348,11 @@ export async function generateReal2dAvatarSet(
   const files: Real2dAvatarGenResult['files'] = []
   let refs = referenceImages
   for (const target of TARGETS) {
-    const prompt = buildPrompt(userPrompt, target, refs.length > 0, auth)
+    const prompt = buildPrompt(userPrompt, target, refs.length > 0, keyColor)
     const rawBuf = refs.length
       ? await generateOne(client, auth, refs, prompt)
       : await generateBaseWithoutReference(client, auth, prompt)
-    const { buffer: buf, hasAlpha, transparentized } = await ensureTransparentBackground(cwd, target.name, rawBuf)
+    const { buffer: buf, hasAlpha, transparentized } = await ensureTransparentBackground(cwd, target.name, rawBuf, keyColor)
     const dest = join(outDir, target.name)
     await writeFile(dest, buf)
     files.push({ name: target.name, path: dest, bytes: buf.length, hasAlpha })
