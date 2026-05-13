@@ -288,6 +288,14 @@ export function ChatApp({
   const [slashIndex, setSlashIndex] = useState(0)
   const busyRef = useRef(false)
   busyRef.current = busy
+  /**
+   * 同步 turn 锁：handleSubmit 进入 turn 时立即置 true，finally 块置 false。
+   * 不依赖 React 的 setBusy/busyRef（那条路径要等下一次 render 才生效，
+   * 两条 user 消息在同一 microtask 内到达会双双 race 通过 busyRef 检查）。
+   */
+  const turnLockRef = useRef(false)
+  /** 锁住时收到的普通文本输入：turn 结束后顺序 drain 处理。 */
+  const pendingInputsRef = useRef<string[]>([])
   const abortRef = useRef<AbortController | null>(null)
   const liveUiInteractionCooldownRef = useRef(0)
   const [notice, setNotice] = useState<string | null>(null)
@@ -684,7 +692,16 @@ export function ChatApp({
         return
       }
 
-      if (busyRef.current) return
+      if (turnLockRef.current) {
+        // 斜杠命令是 UI 控制，仍然简单忽略（不入队列）；普通文本入队，turn 结束后顺序处理。
+        if (!raw.trim().startsWith('/')) {
+          pendingInputsRef.current.push(raw)
+          setNotice(`上一条还在回复中，已记下「${raw.slice(0, 16)}${raw.length > 16 ? '…' : ''}」，等一下答完了一起回。`)
+          setTimeout(() => setNotice(null), 4000)
+          setInput('')
+        }
+        return
+      }
 
       const slashCommand = parseChatSlashCommand(raw)
       if (slashCommand) {
@@ -920,6 +937,7 @@ export function ChatApp({
         return
       }
 
+      turnLockRef.current = true
       setBusy(true)
       setError(null)
       busySubtextRef.current = '等待模型响应（首包/跨境 API 可能较慢）…'
@@ -1116,6 +1134,13 @@ export function ChatApp({
         busySubtextRef.current = null
         resetStream()
         setBusy(false)
+        turnLockRef.current = false
+        // Drain queued inputs that arrived while this turn was running.
+        // Use setTimeout(0) so we yield to React render/state flush first.
+        const nextQueued = pendingInputsRef.current.shift()
+        if (nextQueued !== undefined) {
+          setTimeout(() => void handleSubmit(nextQueued), 0)
+        }
       }
     },
     [
