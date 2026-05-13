@@ -726,9 +726,9 @@ async function runOpenAI(
         { role: 'system' as const, content: opts.system },
         ...toOpenAIMessages(working),
       ],
-      ...(useTools
-        ? { tools: openaiTools, parallel_tool_calls: true as const }
-        : {}),
+      // parallel_tool_calls 不显式传：OpenAI 自家默认就是 true、行为不变；
+      // mimo / 国产兼容层很多不认这个字段，看到就报 "Param Incorrect" 502。
+      ...(useTools ? { tools: openaiTools } : {}),
       stream: true as const,
     }
     let streamResp: Awaited<ReturnType<typeof client.chat.completions.create>>
