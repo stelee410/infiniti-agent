@@ -1261,18 +1261,21 @@ export function ChatApp({
       { role: 'assistant', content: fullText },
     ]
 
-    // 异步 augment：不 await，不阻塞下一轮
+    // 异步 augment：不 await，不阻塞下一轮。augmenter 不再产出"新回答"，
+    // 只做 intent 判断 + 写 memory + 准备下一轮 recall 片段 + 记录 tool plan。
     if (callAugmenterRef.current && fullText.trim()) {
       const task = callAugmenterRef.current
         .augment(userText, fullText)
         .then((result) => {
-          if (result && callModeActiveRef.current) {
-            callAugmentationBufferRef.current.push(result)
+          if (!result || !callModeActiveRef.current) return
+          if (result.recallSnippet) {
+            callAugmentationBufferRef.current.push(result.recallSnippet)
             // 缓冲过大时只留最近 3 条，避免 system 越塞越长
             if (callAugmentationBufferRef.current.length > 3) {
               callAugmentationBufferRef.current = callAugmentationBufferRef.current.slice(-3)
             }
           }
+          // memorized / toolPlanned 是侧效果（写 memory / 日志），不进 prompt。
         })
         .catch((e: unknown) => {
           console.warn('[call] augmenter 失败:', (e as Error).message)
