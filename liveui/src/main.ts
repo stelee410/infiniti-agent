@@ -2538,8 +2538,14 @@ async function bootstrap(): Promise<void> {
       updateMicBtn()
       maybeAutoStartAsr()
     } else if (msg.type === 'ASR_RESULT') {
-      const text = msg.data?.text
-      if (typeof text === 'string' && text.trim()) {
+      const text = typeof msg.data?.text === 'string' ? msg.data.text : ''
+      if (inputDictationAwaitingAsr) {
+        acceptInputDictationTranscript(text)
+        if (text.trim()) {
+          rememberInputHistory(text.trim())
+          touchConvActivity()
+        }
+      } else if (text.trim()) {
         rememberInputHistory(text.trim())
         if (userLineInput && !voiceMode) {
           userLineInput.value = text.trim()
@@ -2681,6 +2687,27 @@ async function bootstrap(): Promise<void> {
   })
 
   userLineInput?.addEventListener('keydown', (ev) => {
+    // Hold-space-to-dictate: 单按空格仍然是空格；按住 OS 触发 repeat
+    // 后进入 inline 语音听写。
+    if ((ev.key === ' ' || ev.code === 'Space') && !ev.shiftKey && !ev.metaKey && !ev.ctrlKey && !ev.altKey && !ev.isComposing) {
+      if (inputDictationActive) {
+        ev.preventDefault()
+        return
+      }
+      if (!ev.repeat) {
+        // 第一次按下：在 default action 插入空格前 snapshot value+selection
+        if (userLineInput) {
+          inputDictationPreValue = userLineInput.value
+          inputDictationPreSelStart = userLineInput.selectionStart ?? userLineInput.value.length
+          inputDictationPreSelEnd = userLineInput.selectionEnd ?? userLineInput.value.length
+        }
+      } else if (asrAvailable && !voiceMicAuto && !voiceMode) {
+        // 长按 → 进入 inline 听写
+        ev.preventDefault()
+        void beginInputDictation()
+        return
+      }
+    }
     if (slashMenuOpenLive && slashRows.length > 0) {
       if (ev.key === 'Tab') {
         ev.preventDefault()
@@ -2711,6 +2738,11 @@ async function bootstrap(): Promise<void> {
       }
     }
     if (ev.key !== 'Enter' || ev.shiftKey || ev.isComposing) return
+    // dictation 进行中（录音 / 等 ASR）禁止 Enter 提交，避免把 placeholder 当 prompt 发出去
+    if (inputDictationActive || inputDictationAwaitingAsr) {
+      ev.preventDefault()
+      return
+    }
     ev.preventDefault()
     const v = userLineInput.value.trimEnd()
     if (!v.trim()) return
@@ -2726,6 +2758,20 @@ async function bootstrap(): Promise<void> {
     // 输入与提交都不会改变 dock 高度，因此不需要重排 avatar/figure/stage。
     // 这是从源头消除"提交触发 layout chain"竞争的关键——/showmemagic 链路上
     // 不再有任何机会去把 real2dStableStageHeight 推升到工作区高度。
+  })
+
+  userLineInput?.addEventListener('keyup', (ev) => {
+    if (ev.key !== ' ' && ev.code !== 'Space') return
+    if (!inputDictationActive) return
+    ev.preventDefault()
+    endInputDictation()
+  })
+
+  userLineInput?.addEventListener('blur', () => {
+    if (inputDictationActive) {
+      // 失去焦点视作取消，避免按住空格后切窗口卡住
+      cancelInputDictation(null)
+    }
   })
 
   wirePointerInteractions()
@@ -2931,6 +2977,21 @@ async function bootstrap(): Promise<void> {
   let interruptSent = false
   let pttSpaceDown = false
   let pttRecording = false
+  /**
+   * Inline-in-input dictation: user holds Space inside #liveui-user-line.
+   * - The single Space tap still inserts a normal space.
+   * - When OS key-repeat fires, we roll the typed space(s) back, snapshot input
+   *   state, open mic (if we don't own it yet), and stream MIC_AUDIO to agent.
+   * - On release we wait for ASR_RESULT and splice the transcript at the
+   *   original cursor position (no auto-send — user presses Enter).
+   */
+  let inputDictationActive = false
+  let inputDictationAwaitingAsr = false
+  let inputDictationOwnsMic = false
+  let inputDictationPreValue = ''
+  let inputDictationPreSelStart = 0
+  let inputDictationPreSelEnd = 0
+  let inputDictationAsrTimer: ReturnType<typeof setTimeout> | undefined
 
   /** 进入「在说话」前需连续满足频谱门控的帧数，抑制突发噪声误触 */
   let vadSpeechLikelyStreak = 0
@@ -3054,6 +3115,158 @@ async function bootstrap(): Promise<void> {
     if (!startSegmentRecording()) return
     pttRecording = true
     updateMicBtn()
+  }
+
+  /** 浮窗式 notice：value 为空时显示在 placeholder 上 ~3 秒后清掉。 */
+  let inputNoticeToken = 0
+  const showLiveNotice = (msg: string): void => {
+    console.warn(`[liveui] ${msg}`)
+    if (!userLineInput) return
+    const myToken = ++inputNoticeToken
+    userLineInput.placeholder = msg
+    setTimeout(() => {
+      if (inputNoticeToken === myToken && userLineInput) {
+        userLineInput.placeholder = ''
+      }
+    }, 3000)
+  }
+
+  const cancelInputDictation = (reason: string | null): void => {
+    if (!inputDictationActive && !inputDictationAwaitingAsr) return
+    inputDictationActive = false
+    inputDictationAwaitingAsr = false
+    if (inputDictationAsrTimer) {
+      clearTimeout(inputDictationAsrTimer)
+      inputDictationAsrTimer = undefined
+    }
+    stopSegmentRecording()
+    if (inputDictationOwnsMic) {
+      if (micStream) {
+        micStream.getTracks().forEach((t) => t.stop())
+        micStream = null
+      }
+      if (micAudioCtx) {
+        void micAudioCtx.close()
+        micAudioCtx = null
+        micAnalyser = null
+      }
+      inputDictationOwnsMic = false
+    }
+    if (userLineInput) {
+      userLineInput.disabled = false
+      userLineInput.value = inputDictationPreValue
+      try {
+        userLineInput.setSelectionRange(inputDictationPreSelStart, inputDictationPreSelEnd)
+      } catch {
+        /* setSelectionRange can throw on disabled/non-focused inputs in rare cases */
+      }
+      pushComposerDraft()
+      userLineInput.focus()
+    }
+    if (reason) showLiveNotice(reason)
+  }
+
+  const beginInputDictation = async (): Promise<void> => {
+    if (!userLineInput || !asrAvailable || voiceMicAuto || inputDictationActive) return
+    if (voiceMode) {
+      // 用户已经在常规 PTT 语音模式里，不重复抢占；让现有 PTT 路径处理空格。
+      return
+    }
+    // 已经在长按里，先把已被默认动作插入的空格回退到 pre 状态
+    userLineInput.value = inputDictationPreValue
+    try {
+      userLineInput.setSelectionRange(inputDictationPreSelStart, inputDictationPreSelEnd)
+    } catch {
+      /* ignore */
+    }
+
+    inputDictationActive = true
+    userLineInput.disabled = true
+    userLineInput.value = '🎤 听中～'
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000, channelCount: 1 } })
+      if (!inputDictationActive) {
+        // 用户已经释放，回退
+        stream.getTracks().forEach((t) => t.stop())
+        return
+      }
+      micStream = stream
+      inputDictationOwnsMic = true
+      if (!startSegmentRecording()) throw new Error('MediaRecorder 启动失败')
+    } catch (e) {
+      console.warn('[liveui] inline dictation 麦克风获取失败:', e)
+      cancelInputDictation(`听不到麦克风：${(e as Error).message}`)
+    }
+  }
+
+  const endInputDictation = (): void => {
+    if (!inputDictationActive) return
+    inputDictationActive = false
+    stopSegmentRecording()
+    if (!userLineInput) {
+      cancelInputDictation(null)
+      return
+    }
+    if (!inputDictationOwnsMic && !mediaRecorder) {
+      // 没真正录到，按取消处理
+      cancelInputDictation('没录到，再试一次')
+      return
+    }
+    inputDictationAwaitingAsr = true
+    userLineInput.value = '🎤 识别中…'
+    // 兜底：5 秒还没拿到结果就回退
+    inputDictationAsrTimer = setTimeout(() => {
+      if (inputDictationAwaitingAsr) cancelInputDictation('识别超时，再试一次')
+    }, 5000)
+  }
+
+  const acceptInputDictationTranscript = (text: string): void => {
+    if (!inputDictationAwaitingAsr) return
+    inputDictationAwaitingAsr = false
+    if (inputDictationAsrTimer) {
+      clearTimeout(inputDictationAsrTimer)
+      inputDictationAsrTimer = undefined
+    }
+    if (inputDictationOwnsMic) {
+      if (micStream) {
+        micStream.getTracks().forEach((t) => t.stop())
+        micStream = null
+      }
+      if (micAudioCtx) {
+        void micAudioCtx.close()
+        micAudioCtx = null
+        micAnalyser = null
+      }
+      inputDictationOwnsMic = false
+    }
+    if (!userLineInput) return
+    userLineInput.disabled = false
+    const trimmed = text.trim()
+    if (!trimmed) {
+      userLineInput.value = inputDictationPreValue
+      try {
+        userLineInput.setSelectionRange(inputDictationPreSelStart, inputDictationPreSelEnd)
+      } catch {
+        /* ignore */
+      }
+      showLiveNotice('没听清，再试一次')
+      pushComposerDraft()
+      userLineInput.focus()
+      return
+    }
+    const pre = inputDictationPreValue.slice(0, inputDictationPreSelStart)
+    const post = inputDictationPreValue.slice(inputDictationPreSelEnd)
+    const next = pre + trimmed + post
+    userLineInput.value = next
+    const cursor = pre.length + trimmed.length
+    try {
+      userLineInput.setSelectionRange(cursor, cursor)
+    } catch {
+      /* ignore */
+    }
+    pushComposerDraft()
+    userLineInput.focus()
   }
 
   const endPushToTalk = (): void => {
