@@ -94,6 +94,14 @@ export async function loadConfig(cwd?: string): Promise<InfinitiConfig> {
     typeof llm.subconsciousProfile === 'string' && llm.subconsciousProfile.trim()
       ? llm.subconsciousProfile.trim()
       : undefined
+  const callProfile =
+    typeof llm.callProfile === 'string' && llm.callProfile.trim()
+      ? llm.callProfile.trim()
+      : undefined
+  const callAugmenterProfile =
+    typeof llm.callAugmenterProfile === 'string' && llm.callAugmenterProfile.trim()
+      ? llm.callAugmenterProfile.trim()
+      : undefined
 
   let provider: string | undefined
   let baseUrl: string | undefined
@@ -165,6 +173,8 @@ export async function loadConfig(cwd?: string): Promise<InfinitiConfig> {
       ...(defaultProfile ? { default: defaultProfile } : {}),
       ...(metaAgentProfile ? { metaAgentProfile } : {}),
       ...(subconsciousProfile ? { subconsciousProfile } : {}),
+      ...(callProfile ? { callProfile } : {}),
+      ...(callAugmenterProfile ? { callAugmenterProfile } : {}),
       ...(profiles ? { profiles } : {}),
     },
     mcp:
@@ -582,6 +592,8 @@ export async function saveConfig(input: SaveConfigInput): Promise<void> {
       default: input.defaultProfile,
       ...(existing?.llm.metaAgentProfile ? { metaAgentProfile: existing.llm.metaAgentProfile } : {}),
       ...(existing?.llm.subconsciousProfile ? { subconsciousProfile: existing.llm.subconsciousProfile } : {}),
+      ...(existing?.llm.callProfile ? { callProfile: existing.llm.callProfile } : {}),
+      ...(existing?.llm.callAugmenterProfile ? { callAugmenterProfile: existing.llm.callAugmenterProfile } : {}),
       profiles: input.profiles,
     },
     mcp: existing?.mcp ?? {
