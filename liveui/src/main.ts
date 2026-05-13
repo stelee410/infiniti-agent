@@ -2557,10 +2557,8 @@ async function bootstrap(): Promise<void> {
         const trimmed = text.trim()
         if (trimmed && isSocketOpen(socket)) {
           sendSocketMessage(socket, 'CALL_USER_INPUT', { text: trimmed })
-          setCallStatus('正在思考…')
-        } else {
-          setCallStatus('没听清，再说一遍～')
         }
+        // 不在 UI 上显示"思考"/"没听清"等状态文字，只在 console 留痕。
       } else if (inputDictationAwaitingAsr) {
         acceptInputDictationTranscript(text)
         if (text.trim()) {
@@ -3392,12 +3390,8 @@ async function bootstrap(): Promise<void> {
       vadSpeechLikelyStreak = 0
       vadNoiseSpeechBandEma = 1e-10
       updateMicBtn()
-      if (userLineInput) {
-        userLineInput.disabled = true
-        userLineInput.placeholder = voiceMicAuto
-          ? '自动语音模式开启中…'
-          : '按住空格说话，松开发送识别…'
-      }
+      // 不再 disable 输入框 / 改 placeholder：通话模式由 body.liveui-call-mode
+      // CSS 整块隐藏底部 dock；非通话模式（inline dictation 等）需要 input 可用。
       if (voiceMicAuto) {
         vadRaf = requestAnimationFrame(vadLoop)
       }
@@ -3406,11 +3400,9 @@ async function bootstrap(): Promise<void> {
     }
   }
 
-  maybeAutoStartAsr = (): void => {
-    if (minimalMode || !voiceMic.asrAutoEnabled || !asrAvailable || voiceMode) return
-    void enterVoiceMode()
-  }
-  maybeAutoStartAsr()
+  // 电话按钮成为唯一的语音模式入口，启动时不再自动 enterVoiceMode，
+  // 否则会抢麦克风并把输入框 disable 掉，用户无法默认打字。
+  maybeAutoStartAsr = (): void => { /* no-op */ }
 
   const exitVoiceMode = (): void => {
     voiceMode = false
@@ -3430,10 +3422,7 @@ async function bootstrap(): Promise<void> {
     isSpeaking = false
     hasSpoken = false
     updateMicBtn()
-    if (userLineInput) {
-      userLineInput.disabled = false
-      userLineInput.placeholder = ''
-    }
+    // enterVoiceMode 不再修改 input 的 disabled/placeholder，所以退出时也不需要复原。
   }
   exitVoiceModeForMinimal = exitVoiceMode
 
@@ -3469,12 +3458,7 @@ async function bootstrap(): Promise<void> {
 
   // ── 通话模式 ──
   const callOverlay = document.getElementById('liveui-call-overlay') as HTMLElement | null
-  const callStatusEl = document.getElementById('liveui-call-status') as HTMLElement | null
   const hangupBtn = document.getElementById('liveui-btn-hangup') as HTMLButtonElement | null
-
-  const setCallStatus = (label: string): void => {
-    if (callStatusEl) callStatusEl.textContent = label
-  }
 
   const enterCallMode = async (): Promise<void> => {
     if (callModeActive) return
@@ -3510,7 +3494,6 @@ async function bootstrap(): Promise<void> {
       callOverlay.hidden = false
       callOverlay.setAttribute('aria-hidden', 'false')
     }
-    setCallStatus('正在拨号…')
     updateMicBtn()
     sendSocketMessage(socket, 'CALL_MODE_START')
 
@@ -3519,9 +3502,7 @@ async function bootstrap(): Promise<void> {
     voiceMicAuto = true
     voiceMic.mode = 'auto'
     await enterVoiceMode()
-    if (voiceMode) {
-      setCallStatus('在听你说…')
-    } else {
+    if (!voiceMode) {
       // 进入 voice mode 失败 → 回退
       callModeActive = false
       document.body.classList.remove('liveui-call-mode')
@@ -3544,7 +3525,6 @@ async function bootstrap(): Promise<void> {
       callOverlay.setAttribute('aria-hidden', 'true')
     }
     if (isSocketOpen(socket)) sendSocketMessage(socket, 'CALL_MODE_END')
-    setCallStatus('通话结束')
     exitVoiceMode()
     updateMicBtn()
   }
