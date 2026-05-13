@@ -39,6 +39,8 @@ export type CallAugmenterOptions = {
   config: InfinitiConfig
   subconscious?: SubconsciousAgent
   signal?: AbortSignal
+  /** LLM profile 名；不传则按 config.llm.callAugmenterProfile → subconsciousProfile → default 顺序 fallback。 */
+  profile?: string
 }
 
 export class CallAugmenter {
@@ -69,12 +71,16 @@ export class CallAugmenter {
       this.opts.signal.addEventListener('abort', onParentAbort, { once: true })
     }
     try {
+      const profile = this.opts.profile
+        ?? this.opts.config.llm.callAugmenterProfile
+        ?? this.opts.config.llm.subconsciousProfile
       const judgment = await Promise.race([
         oneShotTextCompletion({
           config: this.opts.config,
           system: AUGMENTER_SYSTEM,
           user: `用户：${userText}\n助手：${assistantText}\n请输出 JSON。`,
           maxOutTokens: 256,
+          ...(profile ? { profile } : {}),
         }),
         new Promise<string>((_resolve, reject) => {
           const t = setTimeout(() => reject(new Error('augmenter judgment timeout')), AUGMENTER_TIMEOUT_MS)

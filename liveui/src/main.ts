@@ -3935,7 +3935,8 @@ async function bootstrap(): Promise<void> {
           dom.closest('#liveui-photo-preview') ||
           dom.closest('#liveui-inbox') ||
           dom.closest('#liveui-h5-runtime') ||
-          dom.closest('.liveui-h5-launcher'))
+          dom.closest('.liveui-h5-launcher') ||
+          dom.closest('#liveui-call-overlay'))
       ) {
         return true
       }

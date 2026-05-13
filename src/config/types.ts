@@ -253,6 +253,16 @@ export type InfinitiConfig = {
     metaAgentProfile?: string
     /** subconscious-agent / 心理状态引擎使用的 profile 名；未配置时使用主 LLM */
     subconsciousProfile?: string
+    /**
+     * 通话模式主对话使用的 profile 名（通常是本地小模型，低延迟优先）；
+     * 未配置时使用主 LLM（与默认 chat 同源）。
+     */
+    callProfile?: string
+    /**
+     * 通话模式后台 augmenter 使用的 profile 名（判断要不要 recall + 检索）；
+     * 未配置时使用 subconsciousProfile，再 fallback 主 LLM。
+     */
+    callAugmenterProfile?: string
     /** 命名 LLM 配置集合 */
     profiles?: Record<string, LlmProfile>
   }

@@ -1212,6 +1212,7 @@ export function ChatApp({
         system,
         messages,
         signal: ac.signal,
+        profile: config.llm.callProfile,
         stream: {
           onTextDelta: (_delta, full) => {
             fullText = full
