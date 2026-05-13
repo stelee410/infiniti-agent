@@ -462,7 +462,7 @@ export class LiveUiSession {
         return
       case 'MIC_AUDIO':
         if (this.asrEngine) {
-          void this.handleMicAudio(message.audioBase64, message.format, ws)
+          void this.handleMicAudio(message.audioBase64, message.format, ws, message.transcribeOnly === true)
         }
         return
       case 'LIVEUI_INTERACTION':
@@ -870,15 +870,17 @@ export class LiveUiSession {
     }
   }
 
-  private async handleMicAudio(audioBase64: string, format: string, ws: WebSocket): Promise<void> {
+  private async handleMicAudio(audioBase64: string, format: string, ws: WebSocket, transcribeOnly: boolean): Promise<void> {
     if (!this.asrEngine) return
     try {
       const buf = Buffer.from(audioBase64, 'base64')
       const text = await this.asrEngine.transcribe(buf, format)
-      if (!text.trim()) return
+      // 即使空文本也回 ASR_RESULT，渲染端能据此关闭「识别中…」UI 并恢复输入框。
       const result = JSON.stringify({ type: 'ASR_RESULT', data: { text: text.trim() } })
       if (ws.readyState === WebSocket.OPEN) ws.send(result)
-      this.emitUserLine(text.trim())
+      if (!text.trim()) return
+      // transcribeOnly：仅把识别结果回给渲染端填入输入框，不自动走 user line → LLM。
+      if (!transcribeOnly) this.emitUserLine(text.trim())
     } catch (e) {
       console.warn(`[liveui] ASR 识别失败: ${(e as Error).message}`)
     }

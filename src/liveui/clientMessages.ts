@@ -15,7 +15,7 @@ export type LiveUiClientMessage =
   | { type: 'CONFIG_SAVE'; config: unknown }
   | { type: 'INBOX_MARK_READ'; ids: string[] }
   | { type: 'INBOX_SAVE_AS'; sourcePath: string; destinationPath: string; requestId?: string }
-  | { type: 'MIC_AUDIO'; audioBase64: string; format: string }
+  | { type: 'MIC_AUDIO'; audioBase64: string; format: string; transcribeOnly?: boolean }
   | { type: 'LIVEUI_INTERACTION'; kind: LiveUiInteractionKind }
   | { type: 'H5_APPLET_EVENT'; appId: string; event: string; payload: unknown }
   | { type: 'H5_APPLET_CLOSE_REQUEST'; appId: string }
@@ -102,6 +102,7 @@ export function parseLiveUiClientMessage(raw: string): LiveUiClientMessage | nul
         type: 'MIC_AUDIO',
         audioBase64: data.audioBase64,
         format: typeof data.format === 'string' ? data.format : 'webm',
+        ...(data.transcribeOnly === true ? { transcribeOnly: true } : {}),
       }
     }
     case 'LIVEUI_INTERACTION': {

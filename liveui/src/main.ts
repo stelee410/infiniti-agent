@@ -3061,12 +3061,19 @@ async function bootstrap(): Promise<void> {
     if (micChunks.length === 0) return
     const blob = new Blob(micChunks, { type: 'audio/webm' })
     micChunks = []
+    // inline dictation 时把 transcribeOnly=true 一起送过去，agent 仅回识别结果、
+    // 不再把它当 user line 自动喂给 LLM；用户改完手按 Enter 才发。
+    const transcribeOnly = inputDictationAwaitingAsr || inputDictationActive
     const reader = new FileReader()
     reader.onloadend = () => {
       const base64 = (reader.result as string).split(',')[1]
       if (base64 && isSocketOpen(socket)) {
-        console.debug(`[liveui] 发送录音: ${blob.size} bytes`)
-        sendSocketMessage(socket, 'MIC_AUDIO', { audioBase64: base64, format: 'webm' })
+        console.debug(`[liveui] 发送录音: ${blob.size} bytes (transcribeOnly=${transcribeOnly})`)
+        sendSocketMessage(socket, 'MIC_AUDIO', {
+          audioBase64: base64,
+          format: 'webm',
+          ...(transcribeOnly ? { transcribeOnly: true } : {}),
+        })
       }
     }
     reader.readAsDataURL(blob)
