@@ -3015,16 +3015,16 @@ async function bootstrap(): Promise<void> {
     micBtn.setAttribute('aria-pressed', String(voiceMode))
     const recordingNow = voiceMicAuto ? voiceMode : pttRecording
     micBtn.title = !asrAvailable
-      ? '语音输入：未配置 ASR（需在 config 中配置 whisper 或 sherpa_onnx）'
+      ? '电话：未配置 ASR（需在 config 中配置 whisper 或 sherpa_onnx）'
       : voiceMode
         ? voiceMicAuto
-          ? '自动语音模式开启中…点击关闭'
+          ? '通话中（自动语音）…点击挂断'
           : pttRecording
             ? '正在录音，松开发送识别'
-            : '按住空格说话，松开发送；点击关闭'
+            : '按住空格说话，松开发送；点击挂断'
         : voiceMicAuto
-          ? '点击进入自动语音对话模式'
-          : '点击开启语音输入（按住空格说话）'
+          ? '点击拨打：进入自动语音对话'
+          : '点击拨打：开启语音输入（按住空格说话）'
     if (micIconIdle) micIconIdle.style.display = recordingNow ? 'none' : ''
     if (micIconRecording) micIconRecording.style.display = recordingNow ? '' : 'none'
   }
