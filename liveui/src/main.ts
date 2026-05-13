@@ -2767,6 +2767,14 @@ async function bootstrap(): Promise<void> {
     endInputDictation()
   })
 
+  // 兜底：window keyup —— 即便 input 失去焦点或 readOnly 把事件吞了，
+  // 也能从 window 拿到空格松开事件，防止 dictation 卡住。
+  window.addEventListener('keyup', (ev) => {
+    if (ev.key !== ' ' && ev.code !== 'Space') return
+    if (!inputDictationActive) return
+    endInputDictation()
+  }, true)
+
   userLineInput?.addEventListener('blur', () => {
     if (inputDictationActive) {
       // 失去焦点视作取消，避免按住空格后切窗口卡住
@@ -3153,7 +3161,7 @@ async function bootstrap(): Promise<void> {
       inputDictationOwnsMic = false
     }
     if (userLineInput) {
-      userLineInput.disabled = false
+      userLineInput.readOnly = false
       userLineInput.value = inputDictationPreValue
       try {
         userLineInput.setSelectionRange(inputDictationPreSelStart, inputDictationPreSelEnd)
@@ -3181,7 +3189,7 @@ async function bootstrap(): Promise<void> {
     }
 
     inputDictationActive = true
-    userLineInput.disabled = true
+    userLineInput.readOnly = true
     userLineInput.value = '🎤 听中～'
 
     try {
@@ -3241,7 +3249,7 @@ async function bootstrap(): Promise<void> {
       inputDictationOwnsMic = false
     }
     if (!userLineInput) return
-    userLineInput.disabled = false
+    userLineInput.readOnly = false
     const trimmed = text.trim()
     if (!trimmed) {
       userLineInput.value = inputDictationPreValue
