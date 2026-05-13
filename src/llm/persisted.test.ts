@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { truncateToolResults, withMessageTimestamps } from './persisted.js'
+import { dropEmptyAssistantTurns, truncateToolResults, withMessageTimestamps } from './persisted.js'
 import type { PersistedMessage } from './persisted.js'
 
 describe('truncateToolResults', () => {
@@ -88,5 +88,44 @@ describe('withMessageTimestamps', () => {
     const result = withMessageTimestamps(msgs, '2026-02-01T00:00:00.000Z')
     expect(result[0]!.createdAt).toBe('2026-02-01T00:00:00.000Z')
     expect(result[1]!.createdAt).toBe('2026-01-01T00:00:00.000Z')
+  })
+})
+
+describe('dropEmptyAssistantTurns', () => {
+  it('removes assistant messages with empty content and no toolCalls', () => {
+    const msgs: PersistedMessage[] = [
+      { role: 'user', content: 'a' },
+      { role: 'assistant', content: '' },
+      { role: 'assistant', content: null },
+      { role: 'assistant', content: '   ' },
+      { role: 'user', content: 'b' },
+    ]
+    expect(dropEmptyAssistantTurns(msgs)).toEqual([
+      { role: 'user', content: 'a' },
+      { role: 'user', content: 'b' },
+    ])
+  })
+
+  it('keeps assistant messages that have content', () => {
+    const msgs: PersistedMessage[] = [
+      { role: 'assistant', content: '回复' },
+    ]
+    expect(dropEmptyAssistantTurns(msgs)).toEqual(msgs)
+  })
+
+  it('keeps assistant messages with toolCalls even when content is empty/null', () => {
+    const msgs: PersistedMessage[] = [
+      { role: 'assistant', content: null, toolCalls: [{ id: 'c1', name: 'bash', argumentsJson: '{}' }] },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'c2', name: 'bash', argumentsJson: '{}' }] },
+    ]
+    expect(dropEmptyAssistantTurns(msgs)).toEqual(msgs)
+  })
+
+  it('does not drop user or tool messages', () => {
+    const msgs: PersistedMessage[] = [
+      { role: 'user', content: '' },
+      { role: 'tool', toolCallId: 'c1', name: 'bash', content: '' },
+    ]
+    expect(dropEmptyAssistantTurns(msgs)).toEqual(msgs)
   })
 })
