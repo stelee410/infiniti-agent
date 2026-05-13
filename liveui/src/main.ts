@@ -129,6 +129,13 @@ declare global {
       selectAttachments?: () => Promise<string[]>
       /** Electron：打开系统另存为对话框 */
       savePath?: (opts: { defaultPath?: string }) => Promise<string | null>
+      showMessage?: (opts: {
+        type?: 'none' | 'info' | 'error' | 'question' | 'warning'
+        title?: string
+        message?: string
+        detail?: string
+        buttons?: string[]
+      }) => Promise<{ response: number }>
     }
     ImageCapture?: new (track: MediaStreamTrack) => {
       grabFrame: () => Promise<ImageBitmap>
@@ -184,6 +191,7 @@ type AudioResetMsg = { type: 'AUDIO_RESET' }
 type TtsStatusMsg = { type: 'TTS_STATUS'; data: { available: boolean; enabled?: unknown } }
 type AsrStatusMsg = { type: 'ASR_STATUS'; data: { available: boolean } }
 type AsrResultMsg = { type: 'ASR_RESULT'; data: { text: string } }
+type CallAvailabilityMsg = { type: 'CALL_AVAILABILITY'; data: { asr: boolean; tts: boolean; reasons?: string[] } }
 
 type SlashCompletionMsg = {
   type: 'SLASH_COMPLETION'
@@ -292,6 +300,7 @@ type Msg =
   | TtsStatusMsg
   | AsrStatusMsg
   | AsrResultMsg
+  | CallAvailabilityMsg
   | SlashCompletionMsg
   | ConfigOpenMsg
   | ConfigStatusMsg
@@ -2537,9 +2546,22 @@ async function bootstrap(): Promise<void> {
       asrAvailable = !!msg.data?.available
       updateMicBtn()
       maybeAutoStartAsr()
+    } else if (msg.type === 'CALL_AVAILABILITY') {
+      callAvailabilityReasons = Array.isArray(msg.data?.reasons)
+        ? (msg.data.reasons as unknown[]).filter((r): r is string => typeof r === 'string')
+        : []
+      updateMicBtn()
     } else if (msg.type === 'ASR_RESULT') {
       const text = typeof msg.data?.text === 'string' ? msg.data.text : ''
-      if (inputDictationAwaitingAsr) {
+      if (callModeActive) {
+        const trimmed = text.trim()
+        if (trimmed && isSocketOpen(socket)) {
+          sendSocketMessage(socket, 'CALL_USER_INPUT', { text: trimmed })
+          setCallStatus('正在思考…')
+        } else {
+          setCallStatus('没听清，再说一遍～')
+        }
+      } else if (inputDictationAwaitingAsr) {
         acceptInputDictationTranscript(text)
         if (text.trim()) {
           rememberInputHistory(text.trim())
@@ -2966,11 +2988,14 @@ async function bootstrap(): Promise<void> {
 
   // ── 麦克风按钮：默认按住空格说话；`infiniti-agent live --auto` 使用连续 VAD 模式 ──
   const voiceMic = resolveVoiceMicWire(window.infinitiLiveUi?.voiceMic)
-  const voiceMicAuto = voiceMic.mode === 'auto'
+  // voiceMicAuto 在通话模式下会被临时翻成 true，所以不能 const
+  let voiceMicAuto = voiceMic.mode === 'auto'
   /** 已进入说话段后略低于 speech 门限，避免字间弱音被当成静音 */
   const vadRmsRelease = Math.max(0.004, Math.min(voiceMic.speechRmsThreshold * 0.48, voiceMic.speechRmsThreshold - 1e-6))
 
   let asrAvailable = false
+  let callAvailabilityReasons: string[] = []
+  let callModeActive = false
   let voiceMode = false
   let micStream: MediaStream | null = null
   let mediaRecorder: MediaRecorder | null = null
@@ -3442,14 +3467,101 @@ async function bootstrap(): Promise<void> {
     if (document.hidden) finishPushToTalkIfNeeded()
   })
 
-  micBtn?.addEventListener('click', () => {
-    if (!asrAvailable) return
-    micBtn.blur()
-    if (voiceMode) {
-      exitVoiceMode()
-    } else {
-      void enterVoiceMode()
+  // ── 通话模式 ──
+  const callOverlay = document.getElementById('liveui-call-overlay') as HTMLElement | null
+  const callStatusEl = document.getElementById('liveui-call-status') as HTMLElement | null
+  const hangupBtn = document.getElementById('liveui-btn-hangup') as HTMLButtonElement | null
+
+  const setCallStatus = (label: string): void => {
+    if (callStatusEl) callStatusEl.textContent = label
+  }
+
+  const enterCallMode = async (): Promise<void> => {
+    if (callModeActive) return
+    if (!asrAvailable || !ttsAvailable) {
+      const reasons = callAvailabilityReasons.length
+        ? callAvailabilityReasons.join('\n')
+        : '当前 ASR 或 TTS 不可用，无法通话。'
+      try {
+        if (window.infinitiLiveUi?.showMessage) {
+          await window.infinitiLiveUi.showMessage({
+            type: 'warning',
+            title: '无法拨号',
+            message: '通话模式需要 ASR 和 TTS 同时可用。',
+            detail: reasons,
+            buttons: ['知道了'],
+          })
+        } else {
+          alert(`无法拨号：\n${reasons}`)
+        }
+      } catch {
+        /* ignore dialog failure */
+      }
+      return
     }
+    if (!isSocketOpen(socket)) {
+      try { await window.infinitiLiveUi?.showMessage?.({ type: 'warning', title: '无法拨号', message: '尚未连上 agent，请稍后再试。' }) } catch { /* */ }
+      return
+    }
+
+    callModeActive = true
+    document.body.classList.add('liveui-call-mode')
+    if (callOverlay) {
+      callOverlay.hidden = false
+      callOverlay.setAttribute('aria-hidden', 'false')
+    }
+    setCallStatus('正在拨号…')
+    updateMicBtn()
+    sendSocketMessage(socket, 'CALL_MODE_START')
+
+    // 强制 auto-VAD（即便 cli 没传 --auto）
+    // 临时把 voiceMicAuto 翻成 true，进入 voice mode 后 vadLoop 会自动跑
+    voiceMicAuto = true
+    voiceMic.mode = 'auto'
+    await enterVoiceMode()
+    if (voiceMode) {
+      setCallStatus('在听你说…')
+    } else {
+      // 进入 voice mode 失败 → 回退
+      callModeActive = false
+      document.body.classList.remove('liveui-call-mode')
+      if (callOverlay) {
+        callOverlay.hidden = true
+        callOverlay.setAttribute('aria-hidden', 'true')
+      }
+      updateMicBtn()
+      try { await window.infinitiLiveUi?.showMessage?.({ type: 'warning', title: '无法拨号', message: '麦克风启动失败，请检查权限。' }) } catch { /* */ }
+      sendSocketMessage(socket, 'CALL_MODE_END')
+    }
+  }
+
+  const exitCallMode = (): void => {
+    if (!callModeActive) return
+    callModeActive = false
+    document.body.classList.remove('liveui-call-mode')
+    if (callOverlay) {
+      callOverlay.hidden = true
+      callOverlay.setAttribute('aria-hidden', 'true')
+    }
+    if (isSocketOpen(socket)) sendSocketMessage(socket, 'CALL_MODE_END')
+    setCallStatus('通话结束')
+    exitVoiceMode()
+    updateMicBtn()
+  }
+
+  hangupBtn?.addEventListener('click', () => {
+    hangupBtn.blur()
+    exitCallMode()
+  })
+
+  micBtn?.addEventListener('click', () => {
+    micBtn.blur()
+    if (callModeActive) {
+      exitCallMode()
+      return
+    }
+    // 默认点击电话按钮 → 进入通话模式（需要 ASR + TTS 双就绪）
+    void enterCallMode()
   })
 
   updateMicBtn()

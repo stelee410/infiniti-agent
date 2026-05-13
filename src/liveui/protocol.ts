@@ -76,6 +76,17 @@ export type LiveUiAudioResetMessage = {
   type: 'AUDIO_RESET'
 }
 
+/** 启动 / engine 切换时上报「通话模式」前置条件可用性，渲染端据此决定能不能拨号。 */
+export type LiveUiCallAvailabilityMessage = {
+  type: 'CALL_AVAILABILITY'
+  data: {
+    asr: boolean
+    tts: boolean
+    /** 不可用原因（已本地化），让 UI 直接放进系统弹窗。 */
+    reasons?: string[]
+  }
+}
+
 /** Agent → bridge：发送一条媒体（图片/视频/文件）消息。bridge 拿到后通过自身 IM 通道转发。 */
 export type LiveUiAssistantMediaMessage = {
   type: 'ASSISTANT_MEDIA'
@@ -335,6 +346,7 @@ export type LiveUiMessage =
   | LiveUiAssistantVoiceMessage
   | LiveUiAssistantMediaMessage
   | LiveUiAssistantMediaResultMessage
+  | LiveUiCallAvailabilityMessage
   | LiveUiTtsStatusMessage
   | LiveUiAsrStatusMessage
   | LiveUiAsrResultMessage
@@ -437,6 +449,14 @@ export function isLiveUiMessage(x: unknown): x is LiveUiMessage {
     if (!hasBase64 && !hasPath) return false
     if (dd.audioBase64 !== undefined && !hasBase64) return false
     if (dd.filePath !== undefined && typeof dd.filePath !== 'string') return false
+    return true
+  }
+  if (o.type === 'CALL_AVAILABILITY') {
+    const d = (x as { data?: unknown }).data
+    if (!d || typeof d !== 'object') return false
+    const dd = d as { asr?: unknown; tts?: unknown; reasons?: unknown }
+    if (typeof dd.asr !== 'boolean' || typeof dd.tts !== 'boolean') return false
+    if (dd.reasons !== undefined && !Array.isArray(dd.reasons)) return false
     return true
   }
   if (o.type === 'ASSISTANT_MEDIA') {

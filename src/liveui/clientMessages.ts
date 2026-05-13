@@ -21,6 +21,9 @@ export type LiveUiClientMessage =
   | { type: 'H5_APPLET_CLOSE_REQUEST'; appId: string }
   | { type: 'H5_APPLET_LAUNCH_REQUEST'; key: string }
   | { type: 'ASSISTANT_MEDIA_RESULT'; requestId: string; ok: boolean; error?: string }
+  | { type: 'CALL_MODE_START' }
+  | { type: 'CALL_MODE_END' }
+  | { type: 'CALL_USER_INPUT'; text: string }
 
 export function parseLiveUiClientMessage(raw: string): LiveUiClientMessage | null {
   let parsed: { type?: unknown; data?: unknown }
@@ -137,6 +140,16 @@ export function parseLiveUiClientMessage(raw: string): LiveUiClientMessage | nul
         ok: data.ok,
         ...(typeof data.error === 'string' ? { error: data.error } : {}),
       }
+    }
+    case 'CALL_MODE_START':
+      return { type: 'CALL_MODE_START' }
+    case 'CALL_MODE_END':
+      return { type: 'CALL_MODE_END' }
+    case 'CALL_USER_INPUT': {
+      if (!data || typeof data.text !== 'string') return null
+      const text = data.text.trim()
+      if (!text) return null
+      return { type: 'CALL_USER_INPUT', text }
     }
     default:
       return null

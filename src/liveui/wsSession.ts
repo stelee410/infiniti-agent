@@ -36,6 +36,8 @@ import {
 
 export type LiveUiConnectionListener = (connected: boolean) => void
 export type LiveUiUserLineListener = (line: string) => void
+export type LiveUiCallModeListener = () => void
+export type LiveUiCallUserInputListener = (text: string) => void
 /** 渲染端输入框草稿（含未发送的 `/` 前缀），用于与 TUI 同步斜杠补全。 */
 export type LiveUiUserComposerListener = (text: string) => void
 export type LiveUiInterruptListener = () => void
@@ -95,6 +97,9 @@ export class LiveUiSession {
   private listeners = new Set<LiveUiConnectionListener>()
   private userLineListeners = new Set<LiveUiUserLineListener>()
   private userComposerListeners = new Set<LiveUiUserComposerListener>()
+  private callModeStartListeners = new Set<LiveUiCallModeListener>()
+  private callModeEndListeners = new Set<LiveUiCallModeListener>()
+  private callUserInputListeners = new Set<LiveUiCallUserInputListener>()
   private interruptListeners = new Set<LiveUiInterruptListener>()
   private configSaveListeners = new Set<LiveUiConfigSaveListener>()
   private inboxMarkReadListeners = new Set<LiveUiInboxMarkReadListener>()
@@ -145,11 +150,13 @@ export class LiveUiSession {
       this.sendMouth(0)
     }
     this.broadcastTtsStatus()
+    this.broadcastCallAvailability()
   }
 
   setTtsEngine(engine: TtsEngine | null): void {
     this.ttsEngine = engine
     this.broadcastTtsStatus()
+    this.broadcastCallAvailability()
   }
 
   private broadcastTtsStatus(): void {
@@ -159,10 +166,24 @@ export class LiveUiSession {
   setAsrEngine(engine: AsrEngine | null): void {
     this.asrEngine = engine
     this.broadcastAsrStatus()
+    this.broadcastCallAvailability()
   }
 
   private broadcastAsrStatus(): void {
     this.broadcast({ type: 'ASR_STATUS', data: { available: this.asrEngine != null } } as LiveUiMessage)
+  }
+
+  private callAvailabilityPayload(): { asr: boolean; tts: boolean; reasons?: string[] } {
+    const asr = this.asrEngine != null
+    const tts = this.ttsEngine != null && this.ttsEnabled
+    const reasons: string[] = []
+    if (!asr) reasons.push('ASR 引擎未就绪：请在 config.json 配置 sherpa_onnx 或 whisper 并重启。')
+    if (!tts) reasons.push('TTS 服务未就绪：请确认 VoxCPM / 其它 TTS 已启动且健康。')
+    return reasons.length ? { asr, tts, reasons } : { asr, tts }
+  }
+
+  private broadcastCallAvailability(): void {
+    this.broadcast({ type: 'CALL_AVAILABILITY', data: this.callAvailabilityPayload() } as LiveUiMessage)
   }
 
   setElectronChild(proc: ChildProcess | null): void {
@@ -196,6 +217,34 @@ export class LiveUiSession {
     for (const f of this.userLineListeners) {
       f(line)
     }
+  }
+
+  /** 通话模式：CALL_MODE_START / CALL_MODE_END / CALL_USER_INPUT 监听 */
+  onCallModeStart(fn: LiveUiCallModeListener): () => void {
+    this.callModeStartListeners.add(fn)
+    return () => { this.callModeStartListeners.delete(fn) }
+  }
+
+  onCallModeEnd(fn: LiveUiCallModeListener): () => void {
+    this.callModeEndListeners.add(fn)
+    return () => { this.callModeEndListeners.delete(fn) }
+  }
+
+  onCallUserInput(fn: LiveUiCallUserInputListener): () => void {
+    this.callUserInputListeners.add(fn)
+    return () => { this.callUserInputListeners.delete(fn) }
+  }
+
+  private emitCallModeStart(): void { for (const f of this.callModeStartListeners) f() }
+  private emitCallModeEnd(): void { for (const f of this.callModeEndListeners) f() }
+  private emitCallUserInput(text: string): void {
+    for (const f of this.callUserInputListeners) f(text)
+  }
+
+  /** 立即向当前已连接的客户端广播一次 CALL_AVAILABILITY；连接 onopen 调用。 */
+  sendCallAvailabilityTo(ws: WebSocket): void {
+    if (ws.readyState !== WebSocket.OPEN) return
+    ws.send(JSON.stringify({ type: 'CALL_AVAILABILITY', data: this.callAvailabilityPayload() }))
   }
 
   consumePendingVisionAttachment(): LiveUiVisionAttachment | undefined {
@@ -369,6 +418,7 @@ export class LiveUiSession {
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'TTS_STATUS', data: { available: this.ttsEngine != null, enabled: this.ttsEnabled } }))
         ws.send(JSON.stringify({ type: 'ASR_STATUS', data: { available: this.asrEngine != null } }))
+        this.sendCallAvailabilityTo(ws)
         ws.send(JSON.stringify({ type: 'STATUS_PILL', data: this.lastStatusPill }))
         ws.send(JSON.stringify({ type: 'H5_APPLET_LIBRARY', data: { items: this.lastAppletLibrary } }))
         for (const applet of this.applets.list()) {
@@ -490,6 +540,15 @@ export class LiveUiSession {
         return
       case 'ASSISTANT_MEDIA_RESULT':
         this.handleAssistantMediaResult(message.requestId, message.ok, message.error)
+        return
+      case 'CALL_MODE_START':
+        this.emitCallModeStart()
+        return
+      case 'CALL_MODE_END':
+        this.emitCallModeEnd()
+        return
+      case 'CALL_USER_INPUT':
+        this.emitCallUserInput(message.text)
         return
     }
   }

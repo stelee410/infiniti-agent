@@ -604,7 +604,7 @@ async function runAnthropic(
   return { messages: working }
 }
 
-function toOpenAIMessages(
+export function toOpenAIMessages(
   messages: PersistedMessage[],
 ): OpenAI.Chat.ChatCompletionMessageParam[] {
   const out: OpenAI.Chat.ChatCompletionMessageParam[] = []
