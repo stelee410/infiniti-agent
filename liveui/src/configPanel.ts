@@ -206,6 +206,41 @@ export function initConfigPanel(opts: ConfigPanelOptions): {
       rerender()
     })
     section.append(field('Subconscious-agent 使用的 provider profile', subconsciousSelect))
+
+    // 通话模式主对话 / 后台补档 profile
+    const callProfile = String(
+      cfg.llm.callProfile && names.includes(cfg.llm.callProfile)
+        ? cfg.llm.callProfile
+        : '',
+    )
+    if (!callProfile) delete cfg.llm.callProfile
+    const callOptions: Array<[string, string]> = [
+      ['', '默认主 LLM'],
+      ...names.map((n): [string, string] => [n, n]),
+    ]
+    const callSelect = select(callProfile, callOptions, (v) => {
+      if (v) cfg.llm.callProfile = v
+      else delete cfg.llm.callProfile
+      rerender()
+    })
+    section.append(field('通话模式主对话使用的 profile（建议本地小模型，低延迟）', callSelect))
+
+    const callAugmenterProfile = String(
+      cfg.llm.callAugmenterProfile && names.includes(cfg.llm.callAugmenterProfile)
+        ? cfg.llm.callAugmenterProfile
+        : '',
+    )
+    if (!callAugmenterProfile) delete cfg.llm.callAugmenterProfile
+    const callAugmenterOptions: Array<[string, string]> = [
+      ['', '默认 Subconscious / 主 LLM'],
+      ...names.map((n): [string, string] => [n, n]),
+    ]
+    const callAugmenterSelect = select(callAugmenterProfile, callAugmenterOptions, (v) => {
+      if (v) cfg.llm.callAugmenterProfile = v
+      else delete cfg.llm.callAugmenterProfile
+      rerender()
+    })
+    section.append(field('通话模式后台补档使用的 profile', callAugmenterSelect))
     const list = el('div', { class: 'config-list config-span-2' })
     for (const name of Object.keys(profiles)) {
       const p = profiles[name]
@@ -219,6 +254,8 @@ export function initConfigPanel(opts: ConfigPanelOptions): {
           if (cfg.llm.default === name) cfg.llm.default = next
           if (cfg.llm.metaAgentProfile === name) cfg.llm.metaAgentProfile = next
           if (cfg.llm.subconsciousProfile === name) cfg.llm.subconsciousProfile = next
+          if (cfg.llm.callProfile === name) cfg.llm.callProfile = next
+          if (cfg.llm.callAugmenterProfile === name) cfg.llm.callAugmenterProfile = next
           rerender()
         })),
         field('Provider', select(String(p.provider || 'openai'), llmProviders.map((x) => [x, x]), (v) => { p.provider = v; syncFlatLlm(cfg) })),
@@ -235,7 +272,9 @@ export function initConfigPanel(opts: ConfigPanelOptions): {
         delete profiles[name]
         if (cfg.llm.default === name) cfg.llm.default = Object.keys(profiles)[0]
         if (cfg.llm.metaAgentProfile === name) cfg.llm.metaAgentProfile = Object.keys(profiles)[0]
-        if (cfg.llm.subconsciousProfile === name) cfg.llm.subconsciousProfile = Object.keys(profiles)[0]
+        if (cfg.llm.subconsciousProfile === name) delete cfg.llm.subconsciousProfile
+        if (cfg.llm.callProfile === name) delete cfg.llm.callProfile
+        if (cfg.llm.callAugmenterProfile === name) delete cfg.llm.callAugmenterProfile
         syncFlatLlm(cfg)
         rerender()
       })

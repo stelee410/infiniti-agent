@@ -221,6 +221,12 @@ export function syncFlatLlm(cfg: JsonObj): void {
   if (cfg.llm.subconsciousProfile && !names.includes(cfg.llm.subconsciousProfile)) {
     delete cfg.llm.subconsciousProfile
   }
+  if (cfg.llm.callProfile && !names.includes(cfg.llm.callProfile)) {
+    delete cfg.llm.callProfile
+  }
+  if (cfg.llm.callAugmenterProfile && !names.includes(cfg.llm.callAugmenterProfile)) {
+    delete cfg.llm.callAugmenterProfile
+  }
   const p = profiles[cfg.llm.default]
   if (!p) return
   cfg.llm.provider = p.provider
