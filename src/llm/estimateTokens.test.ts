@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { estimateTextTokens, estimateMessagesTokens } from './estimateTokens.js'
+import { estimateTextTokens, estimateMessagesTokens, estimateRequestTokens } from './estimateTokens.js'
 import type { PersistedMessage } from './persisted.js'
 
 describe('estimateTextTokens', () => {
@@ -92,5 +92,28 @@ describe('estimateMessagesTokens', () => {
     expect(total).toBe(
       estimateTextTokens('bash') + estimateTextTokens('file1\nfile2'),
     )
+  })
+})
+
+describe('estimateRequestTokens', () => {
+  it('includes system prompt and tool schemas alongside messages', () => {
+    const messages: PersistedMessage[] = [{ role: 'user', content: 'hello' }]
+    const system = 'You are a helpful assistant.'
+    const tools = [
+      { name: 'bash', description: 'run shell', parameters: { type: 'object', properties: { cmd: { type: 'string' } } } },
+    ]
+    const total = estimateRequestTokens({ system, tools, messages })
+    const expected =
+      estimateMessagesTokens(messages) +
+      estimateTextTokens(system) +
+      estimateTextTokens('bash') +
+      estimateTextTokens('run shell') +
+      estimateTextTokens(JSON.stringify(tools[0]!.parameters))
+    expect(total).toBe(expected)
+  })
+
+  it('falls back to messages-only when system/tools are absent', () => {
+    const messages: PersistedMessage[] = [{ role: 'user', content: 'hello' }]
+    expect(estimateRequestTokens({ messages })).toBe(estimateMessagesTokens(messages))
   })
 })

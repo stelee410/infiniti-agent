@@ -1,7 +1,7 @@
 import type { InfinitiConfig } from '../config/types.js'
 import { compactSessionMessages } from '../llm/compactSession.js'
 import { resolvedCompactionSettings } from '../llm/compactionSettings.js'
-import { estimateMessagesTokens } from '../llm/estimateTokens.js'
+import { estimateMessagesTokens, estimateRequestTokens } from '../llm/estimateTokens.js'
 import type { PersistedMessage } from '../llm/persisted.js'
 import { archiveSession } from '../session/archive.js'
 import { saveSession } from '../session/file.js'
@@ -33,11 +33,16 @@ export function maybeStartAutoCompaction(args: {
   messages: PersistedMessage[]
   controller?: AutoCompactionController | null
   compacting?: boolean
+  /** 可选：传入即按 system + tools + messages 估算 token，更接近真实 input 大小。 */
+  system?: string
+  tools?: Array<{ name?: string; description?: string; parameters?: unknown }>
   onCompactedBase?: (compactedBase: PersistedMessage[], originalBase: PersistedMessage[]) => void
   ui: AutoCompactionUi
 }): boolean {
   const cs = resolvedCompactionSettings(args.config)
-  const beforeTokens = estimateMessagesTokens(args.messages)
+  const beforeTokens = args.system || args.tools
+    ? estimateRequestTokens({ system: args.system, tools: args.tools, messages: args.messages })
+    : estimateMessagesTokens(args.messages)
   if (args.compacting) {
     agentDebug('[auto-compact] skip: already running', { messages: args.messages.length, tokens: beforeTokens })
     return false

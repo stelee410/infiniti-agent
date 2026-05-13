@@ -18,6 +18,9 @@ import {
 import { runToolLoop } from '../llm/runLoop.js'
 import type { PersistedMessage } from '../llm/persisted.js'
 import { oneShotTextCompletion } from '../llm/oneShotCompletion.js'
+import { isRecoverableUpstreamError } from '../llm/recoverableError.js'
+import { resolvedCompactionSettings } from '../llm/compactionSettings.js'
+import { BUILTIN_TOOLS } from '../tools/definitions.js'
 import { saveSession, loadSession } from '../session/file.js'
 import { localInboxDir, localSkillsDir } from '../paths.js'
 import type { McpManager } from '../mcp/manager.js'
@@ -929,12 +932,15 @@ export function ChatApp({
       assistantVoiceTurnStartedRef.current = false
 
       let baseMessages = messages
+      const system = await buildSystem(userLine)
       maybeStartAutoCompaction({
         cwd,
         config,
         messages: baseMessages,
         controller: subconsciousRef.current,
         compacting: compactingRef.current,
+        system,
+        tools: BUILTIN_TOOLS,
         onCompactedBase: (compactedBase, originalBase) => {
           lastAutoCompactionRef.current = { compactedBase, originalBase }
         },
@@ -953,7 +959,7 @@ export function ChatApp({
       const turnAttachments = liveUi?.consumePendingFileAttachments() ?? []
       void subconsciousRef.current?.observeUserInput(userLine)
 
-      const nextMsgs: PersistedMessage[] = [
+      let nextMsgs: PersistedMessage[] = [
         ...baseMessages,
         {
           role: 'user',
@@ -967,11 +973,10 @@ export function ChatApp({
       setMessages(nextMsgs)
       setInput('')
       try {
-        const system = await buildSystem(userLine)
-        const { messages: outRaw } = await runToolLoop({
+        const callRunToolLoopOnce = (messagesArg: PersistedMessage[]) => runToolLoop({
           config,
           system,
-          messages: nextMsgs,
+          messages: messagesArg,
           cwd,
           mcp,
           skipPermissions: dangerouslySkipPermissions,
@@ -1035,6 +1040,37 @@ export function ChatApp({
             },
           },
         })
+
+        const cs = resolvedCompactionSettings(config)
+        const userTurn = nextMsgs[nextMsgs.length - 1]
+        let outRaw: PersistedMessage[]
+        try {
+          outRaw = (await callRunToolLoopOnce(nextMsgs)).messages
+        } catch (llmErr: unknown) {
+          if (ac.signal.aborted) throw llmErr
+          if (!isRecoverableUpstreamError(llmErr) || !subconsciousRef.current || cs.autoThresholdTokens <= 0) {
+            throw llmErr
+          }
+          console.error(`[chat] LLM 调用失败 (${formatChatError(llmErr)})，尝试 emergency compact 后重试…`)
+          setNotice('LLM 出错，正在紧急压缩历史后重试…')
+          let compactedBase: PersistedMessage[]
+          try {
+            compactedBase = await subconsciousRef.current.compactSessionAsync({
+              messages: baseMessages,
+              minTailMessages: cs.minTailMessages,
+              maxToolSnippetChars: cs.maxToolSnippetChars,
+              preCompactHook: cs.preCompactHook,
+            })
+          } catch (compactErr) {
+            console.error(`[chat] emergency compact 失败: ${formatChatError(compactErr)}`)
+            throw llmErr
+          }
+          lastAutoCompactionRef.current = { compactedBase, originalBase: baseMessages }
+          baseMessages = compactedBase
+          nextMsgs = userTurn ? [...compactedBase, userTurn] : compactedBase
+          setMessages(nextMsgs)
+          outRaw = (await callRunToolLoopOnce(nextMsgs)).messages
+        }
         sendLiveUiAssistantDone(liveUi, outRaw)
         const out = liveUi ? stripLiveUiTagsFromMessages(outRaw, expressionManifest) : outRaw
         if (liveUi?.hasTts) {
