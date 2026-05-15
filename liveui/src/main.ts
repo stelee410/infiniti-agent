@@ -2994,6 +2994,10 @@ async function bootstrap(): Promise<void> {
   let asrAvailable = false
   let callAvailabilityReasons: string[] = []
   let callModeActive = false
+  // 通话进入时记下 voiceMicAuto/voiceMic.mode 的原值，挂断时恢复；否则
+  // hold-space-to-dictate 的 !voiceMicAuto 判定会被卡住。
+  let callPrevVoiceMicAuto = false
+  let callPrevVoiceMicMode: 'auto' | 'push_to_talk' = 'push_to_talk'
   let voiceMode = false
   let micStream: MediaStream | null = null
   let mediaRecorder: MediaRecorder | null = null
@@ -3497,8 +3501,10 @@ async function bootstrap(): Promise<void> {
     updateMicBtn()
     sendSocketMessage(socket, 'CALL_MODE_START')
 
-    // 强制 auto-VAD（即便 cli 没传 --auto）
-    // 临时把 voiceMicAuto 翻成 true，进入 voice mode 后 vadLoop 会自动跑
+    // 强制 auto-VAD（即便 cli 没传 --auto）。保存原值，挂断时恢复——
+    // 否则 hold-space-to-dictate 的 !voiceMicAuto 判定会一直被卡住。
+    callPrevVoiceMicAuto = voiceMicAuto
+    callPrevVoiceMicMode = voiceMic.mode
     voiceMicAuto = true
     voiceMic.mode = 'auto'
     await enterVoiceMode()
@@ -3510,6 +3516,8 @@ async function bootstrap(): Promise<void> {
         callOverlay.hidden = true
         callOverlay.setAttribute('aria-hidden', 'true')
       }
+      voiceMicAuto = callPrevVoiceMicAuto
+      voiceMic.mode = callPrevVoiceMicMode
       updateMicBtn()
       try { await window.infinitiLiveUi?.showMessage?.({ type: 'warning', title: '无法拨号', message: '麦克风启动失败，请检查权限。' }) } catch { /* */ }
       sendSocketMessage(socket, 'CALL_MODE_END')
@@ -3526,6 +3534,9 @@ async function bootstrap(): Promise<void> {
     }
     if (isSocketOpen(socket)) sendSocketMessage(socket, 'CALL_MODE_END')
     exitVoiceMode()
+    // 恢复进入通话前的 voiceMic 模式，让 hold-space-to-dictate 能继续工作
+    voiceMicAuto = callPrevVoiceMicAuto
+    voiceMic.mode = callPrevVoiceMicMode
     updateMicBtn()
   }
 
