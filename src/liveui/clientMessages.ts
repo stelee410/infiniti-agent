@@ -15,12 +15,15 @@ export type LiveUiClientMessage =
   | { type: 'CONFIG_SAVE'; config: unknown }
   | { type: 'INBOX_MARK_READ'; ids: string[] }
   | { type: 'INBOX_SAVE_AS'; sourcePath: string; destinationPath: string; requestId?: string }
-  | { type: 'MIC_AUDIO'; audioBase64: string; format: string }
+  | { type: 'MIC_AUDIO'; audioBase64: string; format: string; transcribeOnly?: boolean }
   | { type: 'LIVEUI_INTERACTION'; kind: LiveUiInteractionKind }
   | { type: 'H5_APPLET_EVENT'; appId: string; event: string; payload: unknown }
   | { type: 'H5_APPLET_CLOSE_REQUEST'; appId: string }
   | { type: 'H5_APPLET_LAUNCH_REQUEST'; key: string }
   | { type: 'ASSISTANT_MEDIA_RESULT'; requestId: string; ok: boolean; error?: string }
+  | { type: 'CALL_MODE_START' }
+  | { type: 'CALL_MODE_END' }
+  | { type: 'CALL_USER_INPUT'; text: string }
 
 export function parseLiveUiClientMessage(raw: string): LiveUiClientMessage | null {
   let parsed: { type?: unknown; data?: unknown }
@@ -102,6 +105,7 @@ export function parseLiveUiClientMessage(raw: string): LiveUiClientMessage | nul
         type: 'MIC_AUDIO',
         audioBase64: data.audioBase64,
         format: typeof data.format === 'string' ? data.format : 'webm',
+        ...(data.transcribeOnly === true ? { transcribeOnly: true } : {}),
       }
     }
     case 'LIVEUI_INTERACTION': {
@@ -136,6 +140,16 @@ export function parseLiveUiClientMessage(raw: string): LiveUiClientMessage | nul
         ok: data.ok,
         ...(typeof data.error === 'string' ? { error: data.error } : {}),
       }
+    }
+    case 'CALL_MODE_START':
+      return { type: 'CALL_MODE_START' }
+    case 'CALL_MODE_END':
+      return { type: 'CALL_MODE_END' }
+    case 'CALL_USER_INPUT': {
+      if (!data || typeof data.text !== 'string') return null
+      const text = data.text.trim()
+      if (!text) return null
+      return { type: 'CALL_USER_INPUT', text }
     }
     default:
       return null

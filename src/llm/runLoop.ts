@@ -604,7 +604,7 @@ async function runAnthropic(
   return { messages: working }
 }
 
-function toOpenAIMessages(
+export function toOpenAIMessages(
   messages: PersistedMessage[],
 ): OpenAI.Chat.ChatCompletionMessageParam[] {
   const out: OpenAI.Chat.ChatCompletionMessageParam[] = []
@@ -675,6 +675,22 @@ function toOpenAIMessages(
   return out
 }
 
+async function dumpLlmRequestOnError(body: unknown, err: Error): Promise<void> {
+  try {
+    const { writeFile, mkdir } = await import('node:fs/promises')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const dir = join(tmpdir(), 'infiniti-agent-llm-dump')
+    await mkdir(dir, { recursive: true })
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+    const path = join(dir, `req-${stamp}.json`)
+    await writeFile(path, JSON.stringify({ error: err.message, body }, null, 2), 'utf8')
+    console.error(`[infiniti-agent] LLM 请求失败，已写入 ${path}`)
+  } catch (dumpErr) {
+    console.error(`[infiniti-agent] LLM 请求失败 dump 也失败了:`, (dumpErr as Error).message)
+  }
+}
+
 async function runOpenAI(
   opts: RunLoopOptions,
   llm: LlmProfile,
@@ -704,17 +720,24 @@ async function runOpenAI(
     if (opts.signal?.aborted) break
     agentDebug('openai step', step, 'request stream', useTools ? 'with tools' : 'no tools')
     opts.stream?.onStreamReset?.()
-    const streamResp = await client.chat.completions.create({
+    const requestBody = {
       model: llm.model,
       messages: [
-        { role: 'system', content: opts.system },
+        { role: 'system' as const, content: opts.system },
         ...toOpenAIMessages(working),
       ],
       ...(useTools
         ? { tools: openaiTools, parallel_tool_calls: true as const }
         : {}),
-      stream: true,
-    })
+      stream: true as const,
+    }
+    let streamResp: Awaited<ReturnType<typeof client.chat.completions.create>>
+    try {
+      streamResp = await client.chat.completions.create(requestBody)
+    } catch (e) {
+      await dumpLlmRequestOnError(requestBody, e as Error)
+      throw e
+    }
 
     let content = ''
     const toolAcc = new OpenAiToolAccumulator()
@@ -758,10 +781,15 @@ async function runOpenAI(
     )
 
     if (!fnCalls.length) {
-      working.push({
-        role: 'assistant',
-        content,
-      })
+      // 上游若返回空 content + 空 tool_calls（被 guardrail/审核挡掉、
+      // 网络中断、空流等），不要落库——把空 assistant 消息留在 session
+      // 里会让非 OpenAI 上游（如 mimo / litellm）下一轮直接 502
+      // "Param Incorrect"，整个会话从此卡死。
+      if (content.trim()) {
+        working.push({ role: 'assistant', content })
+      } else {
+        agentDebug('openai step', step, 'empty completion (no content, no tool_calls), skipping push')
+      }
       break
     }
 

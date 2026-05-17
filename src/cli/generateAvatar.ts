@@ -6,7 +6,7 @@ import { getInfinitiConfigPath, loadConfig } from '../config/io.js'
 import { localLinkyunRefDir } from '../paths.js'
 import { openRouterGenerateImageBuffer } from '../avatar/openRouterImageGen.js'
 import { geminiGenerateImageBuffer } from '../avatar/geminiImageGen.js'
-import { transparentizeStudioBackgroundPng } from '../avatar/transparentizePngBackground.js'
+import { resolveAvatarChromaKeyColorFromEnv, transparentizeStudioBackgroundPng } from '../avatar/transparentizePngBackground.js'
 import { resolveAvatarGenImageProfile, type ResolvedImageProfile } from '../image/resolveImageProfile.js'
 import {
   defaultLunaStyleManifest,
@@ -72,10 +72,13 @@ function dataUrlToBuffer(dataUrl: string): Buffer | null {
   return m ? Buffer.from(m[1]!, 'base64') : null
 }
 
-function avatarBackgroundPrompt(auth: ResolvedImageProfile): string {
-  return auth.transparentBackground
-    ? 'Transparent background, no backdrop, no white canvas, true alpha-transparent PNG.'
-    : 'Pure solid white background, clean white studio backdrop, no shadows touching the border, no scenery, no texture; the background will be removed in post-processing.'
+function avatarBackgroundPrompt(keyColor: string): string {
+  return [
+    `The entire rectangular background must be one flat solid color: ${keyColor}.`,
+    `Every pixel behind the character, including all four edges and corners, should be the same ${keyColor} color.`,
+    `The character, hair, eyes, skin, accessories, and all clothing must use colors that are clearly different from ${keyColor}.`,
+    'Use a single centered character only, with clean separation from the flat background and no extra objects.',
+  ].join(' ')
 }
 
 async function generateAvatarImageBuffer(
@@ -94,7 +97,7 @@ async function generateAvatarImageBuffer(
       aspectRatio: auth.aspectRatio ?? '2:3',
       ...(auth.imageSize ? { imageSize: auth.imageSize } : {}),
       ...(auth.quality ? { quality: auth.quality } : {}),
-      transparentBackground: auth.transparentBackground,
+      transparentBackground: false,
       timeoutMs: auth.timeoutMs,
     })
   }
@@ -118,7 +121,6 @@ async function generateAvatarImageBuffer(
     n: 1,
     size: auth.imageSize ?? '1024x1536',
     quality: auth.quality ?? 'high',
-    ...(auth.transparentBackground ? { background: 'transparent' } : {}),
     output_format: 'png',
   }
   const resp = referenceImages.length
@@ -192,8 +194,10 @@ export async function runGenerateAvatar(cwd: string, opts: GenerateAvatarOptions
   const cfgPath = getInfinitiConfigPath(cwd)
   const cfg = await loadConfig(cwd)
   const auth = resolveAvatarGenImageProfile(cfg)
+  const keyColor = resolveAvatarChromaKeyColorFromEnv()
   console.error(`[generate_avatar] 配置: ${cfgPath}`)
   console.error(`[generate_avatar] 图像模型: ${auth.provider} / ${auth.model}`)
+  console.error(`[generate_avatar] 抠图参考色: ${keyColor}`)
   if (process.env.INFINITI_AVATAR_GEN_MODEL?.trim() && !cfg.avatarGen?.model?.trim()) {
     console.error('[generate_avatar] 提示: 模型由环境变量 INFINITI_AVATAR_GEN_MODEL 覆盖；若需改用 config 请 unset 该变量')
   }
@@ -233,7 +237,7 @@ export async function runGenerateAvatar(cwd: string, opts: GenerateAvatarOptions
       : ''
     const halfPrompt =
       'Generate ONE anime-style half-body portrait (waist-up), same character identity as the reference face and outfit. ' +
-      `${avatarBackgroundPrompt(auth)} High detail, single character centered. ` +
+      `${avatarBackgroundPrompt(keyColor)} High detail, single character centered. ` +
       'Preserve hairstyle, eye color, clothing from references.' +
       specBlock
 
@@ -266,7 +270,7 @@ export async function runGenerateAvatar(cwd: string, opts: GenerateAvatarOptions
     const prompt =
       `Generate ONE anime-style half-body portrait (waist-up), SAME character as reference image. ` +
       `Change ONLY facial expression: ${vis}. ` +
-      `Keep same hairstyle, outfit, body pose and lighting. ${avatarBackgroundPrompt(auth)} ` +
+      `Keep same hairstyle, outfit, body pose and lighting. ${avatarBackgroundPrompt(keyColor)} ` +
       `Single character, high detail, no text, no watermark.`
 
     const buf = await withElapsedProgress(
@@ -283,13 +287,16 @@ export async function runGenerateAvatar(cwd: string, opts: GenerateAvatarOptions
     const tol = parseBgToleranceFromEnv()
     const pngPaths = [join(outRoot, 'half_body.png'), ...manifest.entries.map((e) => join(outRoot, `${e.id}.png`))]
     console.error(
-      `[generate_avatar] 去除背景（边缘 flood，与边框色容差 ${tol ?? '默认 ~38'}；可用 INFINITI_AVATAR_BG_TOLERANCE 或 --no-transparentize 调整）…`,
+      `[generate_avatar] 去除背景（HSV 色相 flood，参考色 ${keyColor}，容差 ${tol ?? '默认 ~34'}；可用 INFINITI_AVATAR_BG_TOLERANCE 或 --no-transparentize 调整）…`,
     )
     for (const p of pngPaths) {
       if (!existsSync(p)) continue
       try {
         const raw = await readFile(p)
-        const out = await transparentizeStudioBackgroundPng(raw, tol)
+        const out = await transparentizeStudioBackgroundPng(raw, {
+          tolerance: tol,
+          backgroundColor: keyColor,
+        })
         await writeFile(p, out)
         console.error(`[generate_avatar] 已透明背景 ${p}`)
       } catch (e) {

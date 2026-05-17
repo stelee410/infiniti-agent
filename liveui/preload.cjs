@@ -84,4 +84,6 @@ contextBridge.exposeInMainWorld('infinitiLiveUi', {
     const defaultPath = opts && typeof opts.defaultPath === 'string' ? opts.defaultPath : undefined
     return ipcRenderer.invoke('liveui-save-path', { defaultPath })
   },
+  /** 系统级 message dialog；通话模式下用于 ASR/TTS 不可用提示。 */
+  showMessage: (opts) => ipcRenderer.invoke('liveui-show-message', opts || {}),
 })

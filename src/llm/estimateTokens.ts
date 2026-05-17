@@ -34,3 +34,28 @@ export function estimateMessagesTokens(messages: PersistedMessage[]): number {
   }
   return n
 }
+
+/**
+ * 估算一次 LLM 请求的实际 input tokens：包括 system prompt、tool schema、消息体。
+ * compaction 阈值判断应使用此函数，因为 system + tools 也吃上下文。
+ */
+export function estimateRequestTokens(args: {
+  system?: string
+  tools?: Array<{ name?: string; description?: string; parameters?: unknown }>
+  messages: PersistedMessage[]
+}): number {
+  let n = estimateMessagesTokens(args.messages)
+  if (args.system) n += estimateTextTokens(args.system)
+  if (args.tools?.length) {
+    for (const t of args.tools) {
+      n += estimateTextTokens(t.name ?? '')
+      n += estimateTextTokens(t.description ?? '')
+      try {
+        n += estimateTextTokens(JSON.stringify(t.parameters ?? {}))
+      } catch {
+        /* ignore non-serializable params */
+      }
+    }
+  }
+  return n
+}

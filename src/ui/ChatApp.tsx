@@ -18,6 +18,12 @@ import {
 import { runToolLoop } from '../llm/runLoop.js'
 import type { PersistedMessage } from '../llm/persisted.js'
 import { oneShotTextCompletion } from '../llm/oneShotCompletion.js'
+import { isRecoverableUpstreamError } from '../llm/recoverableError.js'
+import { resolvedCompactionSettings } from '../llm/compactionSettings.js'
+import { BUILTIN_TOOLS } from '../tools/definitions.js'
+import { runCallTurn } from '../llm/callTurn.js'
+import { buildCallSystem } from '../prompt/callSystem.js'
+import { CallAugmenter } from '../subconscious/callAugmenter.js'
 import { saveSession, loadSession } from '../session/file.js'
 import { localInboxDir, localSkillsDir } from '../paths.js'
 import type { McpManager } from '../mcp/manager.js'
@@ -285,6 +291,23 @@ export function ChatApp({
   const [slashIndex, setSlashIndex] = useState(0)
   const busyRef = useRef(false)
   busyRef.current = busy
+  /**
+   * 同步 turn 锁：handleSubmit 进入 turn 时立即置 true，finally 块置 false。
+   * 不依赖 React 的 setBusy/busyRef（那条路径要等下一次 render 才生效，
+   * 两条 user 消息在同一 microtask 内到达会双双 race 通过 busyRef 检查）。
+   */
+  const turnLockRef = useRef(false)
+  /** 锁住时收到的普通文本输入：turn 结束后顺序 drain 处理。 */
+  const pendingInputsRef = useRef<string[]>([])
+  // ===== Call mode 状态 =====
+  // 通话模式下 messages 不写 session.json，而是 in-memory 累积；挂断后由
+  // subconscious.consolidateFromMessages(working) 把总结写进 memory。
+  const callModeActiveRef = useRef(false)
+  const callWorkingMessagesRef = useRef<PersistedMessage[]>([])
+  const callAugmentationBufferRef = useRef<string[]>([])
+  const callAugmenterRef = useRef<CallAugmenter | null>(null)
+  const callTurnAbortRef = useRef<AbortController | null>(null)
+  const callAugmenterTasksRef = useRef<Set<Promise<unknown>>>(new Set())
   const abortRef = useRef<AbortController | null>(null)
   const liveUiInteractionCooldownRef = useRef(0)
   const [notice, setNotice] = useState<string | null>(null)
@@ -681,7 +704,16 @@ export function ChatApp({
         return
       }
 
-      if (busyRef.current) return
+      if (turnLockRef.current) {
+        // 斜杠命令是 UI 控制，仍然简单忽略（不入队列）；普通文本入队，turn 结束后顺序处理。
+        if (!raw.trim().startsWith('/')) {
+          pendingInputsRef.current.push(raw)
+          setNotice(`上一条还在回复中，已记下「${raw.slice(0, 16)}${raw.length > 16 ? '…' : ''}」，等一下答完了一起回。`)
+          setTimeout(() => setNotice(null), 4000)
+          setInput('')
+        }
+        return
+      }
 
       const slashCommand = parseChatSlashCommand(raw)
       if (slashCommand) {
@@ -917,6 +949,7 @@ export function ChatApp({
         return
       }
 
+      turnLockRef.current = true
       setBusy(true)
       setError(null)
       busySubtextRef.current = '等待模型响应（首包/跨境 API 可能较慢）…'
@@ -929,12 +962,15 @@ export function ChatApp({
       assistantVoiceTurnStartedRef.current = false
 
       let baseMessages = messages
+      const system = await buildSystem(userLine)
       maybeStartAutoCompaction({
         cwd,
         config,
         messages: baseMessages,
         controller: subconsciousRef.current,
         compacting: compactingRef.current,
+        system,
+        tools: BUILTIN_TOOLS,
         onCompactedBase: (compactedBase, originalBase) => {
           lastAutoCompactionRef.current = { compactedBase, originalBase }
         },
@@ -953,7 +989,7 @@ export function ChatApp({
       const turnAttachments = liveUi?.consumePendingFileAttachments() ?? []
       void subconsciousRef.current?.observeUserInput(userLine)
 
-      const nextMsgs: PersistedMessage[] = [
+      let nextMsgs: PersistedMessage[] = [
         ...baseMessages,
         {
           role: 'user',
@@ -967,11 +1003,10 @@ export function ChatApp({
       setMessages(nextMsgs)
       setInput('')
       try {
-        const system = await buildSystem(userLine)
-        const { messages: outRaw } = await runToolLoop({
+        const callRunToolLoopOnce = (messagesArg: PersistedMessage[]) => runToolLoop({
           config,
           system,
-          messages: nextMsgs,
+          messages: messagesArg,
           cwd,
           mcp,
           skipPermissions: dangerouslySkipPermissions,
@@ -1035,6 +1070,37 @@ export function ChatApp({
             },
           },
         })
+
+        const cs = resolvedCompactionSettings(config)
+        const userTurn = nextMsgs[nextMsgs.length - 1]
+        let outRaw: PersistedMessage[]
+        try {
+          outRaw = (await callRunToolLoopOnce(nextMsgs)).messages
+        } catch (llmErr: unknown) {
+          if (ac.signal.aborted) throw llmErr
+          if (!isRecoverableUpstreamError(llmErr) || !subconsciousRef.current || cs.autoThresholdTokens <= 0) {
+            throw llmErr
+          }
+          console.error(`[chat] LLM 调用失败 (${formatChatError(llmErr)})，尝试 emergency compact 后重试…`)
+          setNotice('LLM 出错，正在紧急压缩历史后重试…')
+          let compactedBase: PersistedMessage[]
+          try {
+            compactedBase = await subconsciousRef.current.compactSessionAsync({
+              messages: baseMessages,
+              minTailMessages: cs.minTailMessages,
+              maxToolSnippetChars: cs.maxToolSnippetChars,
+              preCompactHook: cs.preCompactHook,
+            })
+          } catch (compactErr) {
+            console.error(`[chat] emergency compact 失败: ${formatChatError(compactErr)}`)
+            throw llmErr
+          }
+          lastAutoCompactionRef.current = { compactedBase, originalBase: baseMessages }
+          baseMessages = compactedBase
+          nextMsgs = userTurn ? [...compactedBase, userTurn] : compactedBase
+          setMessages(nextMsgs)
+          outRaw = (await callRunToolLoopOnce(nextMsgs)).messages
+        }
         sendLiveUiAssistantDone(liveUi, outRaw)
         const out = liveUi ? stripLiveUiTagsFromMessages(outRaw, expressionManifest) : outRaw
         if (liveUi?.hasTts) {
@@ -1080,6 +1146,13 @@ export function ChatApp({
         busySubtextRef.current = null
         resetStream()
         setBusy(false)
+        turnLockRef.current = false
+        // Drain queued inputs that arrived while this turn was running.
+        // Use setTimeout(0) so we yield to React render/state flush first.
+        const nextQueued = pendingInputsRef.current.shift()
+        if (nextQueued !== undefined) {
+          setTimeout(() => void handleSubmit(nextQueued), 0)
+        }
       }
     },
     [
@@ -1105,6 +1178,157 @@ export function ChatApp({
       void handleSubmit(line)
     })
   }, [liveUi, handleSubmit])
+
+  // 通话模式：3 个监听
+  const handleCallTurn = useCallback(async (userText: string) => {
+    if (!callModeActiveRef.current || !liveUi) return
+    // 用户开口 → 中断当前 TTS 播放和上一轮还没结束的 turn / augmentation
+    if (callTurnAbortRef.current) callTurnAbortRef.current.abort()
+    liveUi.resetAudio()
+    liveUi.sendStatusPill('正在思考…', 'busy')
+
+    const userMessage: PersistedMessage = { role: 'user', content: userText }
+    const baseMessages = await loadSession(cwd).then((s) => s?.messages ?? []).catch(() => [] as PersistedMessage[])
+    const messages: PersistedMessage[] = [
+      ...baseMessages,
+      ...callWorkingMessagesRef.current,
+      userMessage,
+    ]
+    const augBuffer = [...callAugmentationBufferRef.current]
+    const system = await buildCallSystem(config, cwd, subconsciousRef.current ?? undefined, augBuffer)
+
+    const ac = new AbortController()
+    callTurnAbortRef.current = ac
+
+    // 流式 TTS：边收 delta 边切句送 TTS
+    let ttsCursor = 0
+    if (liveUi.shouldStreamTtsPlayback) liveUi.beginAssistantTurn()
+    liveUi.sendAssistantStream('', true)
+
+    let fullText = ''
+    try {
+      await runCallTurn({
+        config,
+        system,
+        messages,
+        signal: ac.signal,
+        profile: config.llm.callProfile,
+        stream: {
+          onTextDelta: (_delta, full) => {
+            fullText = full
+            liveUi.sendAssistantStream(full, false)
+            if (liveUi.shouldStreamTtsPlayback) {
+              const clean = ttsDisplayCleanForLiveUi(full, expressionManifest)
+              liveUi.mouth.onDisplayText(clean)
+              const next = collectNewTtsSegments(clean, ttsCursor)
+              for (const seg of next.segments) liveUi.enqueueTts(seg)
+              ttsCursor = next.cursor
+            }
+          },
+          onDone: (full) => {
+            fullText = full
+          },
+        },
+      })
+    } catch (err) {
+      if (ac.signal.aborted) return
+      console.warn('[call] runCallTurn 失败:', formatChatError(err))
+      // 兜底：让数字人说一句不好意思
+      const fallback = '不好意思，我刚才有点没听清，你能再说一遍吗？'
+      liveUi.sendAssistantStream(fallback, false, true)
+      if (liveUi.hasTts) void liveUi.finalizeAssistantVoice(fallback)
+      liveUi.sendStatusPill('就绪', 'ready')
+      return
+    }
+
+    if (ac.signal.aborted) return
+
+    // 流末：补一个 final TTS segment
+    if (liveUi.shouldStreamTtsPlayback) {
+      const clean = ttsDisplayCleanForLiveUi(fullText, expressionManifest)
+      const next = collectNewTtsSegments(clean, ttsCursor, { final: true })
+      for (const seg of next.segments) liveUi.enqueueTts(seg)
+      ttsCursor = next.cursor
+    }
+    liveUi.sendAssistantStream(fullText, false, true)
+    if (liveUi.hasTts) void liveUi.finalizeAssistantVoice(ttsDisplayCleanForLiveUi(fullText, expressionManifest))
+    liveUi.sendStatusPill('就绪', 'ready')
+
+    // 写入 in-memory working messages（不进 session.json）
+    callWorkingMessagesRef.current = [
+      ...callWorkingMessagesRef.current,
+      userMessage,
+      { role: 'assistant', content: fullText },
+    ]
+
+    // 异步 augment：不 await，不阻塞下一轮。augmenter 不再产出"新回答"，
+    // 只做 intent 判断 + 写 memory + 准备下一轮 recall 片段 + 记录 tool plan。
+    if (callAugmenterRef.current && fullText.trim()) {
+      const task = callAugmenterRef.current
+        .augment(userText, fullText)
+        .then((result) => {
+          if (!result || !callModeActiveRef.current) return
+          if (result.recallSnippet) {
+            callAugmentationBufferRef.current.push(result.recallSnippet)
+            // 缓冲过大时只留最近 3 条，避免 system 越塞越长
+            if (callAugmentationBufferRef.current.length > 3) {
+              callAugmentationBufferRef.current = callAugmentationBufferRef.current.slice(-3)
+            }
+          }
+          // memorized / toolPlanned 是侧效果（写 memory / 日志），不进 prompt。
+        })
+        .catch((e: unknown) => {
+          console.warn('[call] augmenter 失败:', (e as Error).message)
+        })
+        .finally(() => {
+          callAugmenterTasksRef.current.delete(task)
+        })
+      callAugmenterTasksRef.current.add(task)
+    }
+  }, [config, cwd, expressionManifest, liveUi])
+
+  useEffect(() => {
+    if (!liveUi) return
+    const offStart = liveUi.onCallModeStart(() => {
+      callModeActiveRef.current = true
+      callWorkingMessagesRef.current = []
+      callAugmentationBufferRef.current = []
+      callAugmenterRef.current = new CallAugmenter({
+        config,
+        subconscious: subconsciousRef.current ?? undefined,
+      })
+      liveUi.sendStatusPill('通话中…', 'ready')
+    })
+    const offEnd = liveUi.onCallModeEnd(() => {
+      callModeActiveRef.current = false
+      if (callTurnAbortRef.current) {
+        callTurnAbortRef.current.abort()
+        callTurnAbortRef.current = null
+      }
+      callAugmenterRef.current?.cancel()
+      callAugmenterRef.current = null
+      const working = callWorkingMessagesRef.current
+      callWorkingMessagesRef.current = []
+      callAugmentationBufferRef.current = []
+      callAugmenterTasksRef.current.clear()
+      liveUi.resetAudio()
+      liveUi.sendStatusPill('就绪', 'ready')
+      // 通话结束 → 把对话转成 memory 总结；不进 session.json
+      if (working.length > 0 && subconsciousRef.current) {
+        void subconsciousRef.current
+          .consolidateFromMessages(working)
+          .catch((e: unknown) => console.warn('[call] memory consolidate 失败:', (e as Error).message))
+      }
+    })
+    const offInput = liveUi.onCallUserInput((text) => {
+      void handleCallTurn(text)
+    })
+    return () => {
+      offStart()
+      offEnd()
+      offInput()
+    }
+  }, [liveUi, handleCallTurn, config])
 
   useEffect(() => {
     if (!liveUi) return

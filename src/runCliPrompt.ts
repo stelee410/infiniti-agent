@@ -12,10 +12,12 @@ import { EditHistory } from './session/editHistory.js'
 import { loadSkillsForCwd, skillsToSystemBlock } from './skills/loader.js'
 import { localErrorLogPath } from './paths.js'
 import { formatChatError } from './utils/formatError.js'
-import { estimateMessagesTokens } from './llm/estimateTokens.js'
+import { estimateRequestTokens } from './llm/estimateTokens.js'
 import { resolvedCompactionSettings } from './llm/compactionSettings.js'
 import { buildSystemWithMemory } from './prompt/systemBuilder.js'
 import { SubconsciousAgent } from './subconscious/agent.js'
+import { BUILTIN_TOOLS } from './tools/definitions.js'
+import { isRecoverableUpstreamError } from './llm/recoverableError.js'
 
 async function buildCliSystem(
   config: InfinitiConfig,
@@ -65,33 +67,41 @@ export async function runCliPrompt(
     }
 
     const compSettings = resolvedCompactionSettings(config)
-    if (
-      compSettings.autoThresholdTokens > 0 &&
-      estimateMessagesTokens(messages) >= compSettings.autoThresholdTokens
-    ) {
+    const system = await buildCliSystem(config, cwd, subconscious, prompt)
+    const compactIfOver = async (
+      msgs: PersistedMessage[],
+      threshold: number,
+      reason: string,
+    ): Promise<PersistedMessage[]> => {
+      if (threshold <= 0) return msgs
+      const tokens = estimateRequestTokens({ system, tools: BUILTIN_TOOLS, messages: msgs })
+      if (tokens < threshold) return msgs
+      console.error(`[cli] ${reason}: ${tokens} tokens >= ${threshold}，正在压缩…`)
       try {
-        messages = await subconscious.compactSessionAsync({
-          messages,
+        return await subconscious.compactSessionAsync({
+          messages: msgs,
           minTailMessages: compSettings.minTailMessages,
           maxToolSnippetChars: compSettings.maxToolSnippetChars,
           preCompactHook: compSettings.preCompactHook,
         })
       } catch (e: unknown) {
         console.error(`[cli] 自动压缩失败，使用原会话继续: ${formatChatError(e)}`)
+        return msgs
       }
     }
 
+    messages = await compactIfOver(messages, compSettings.autoThresholdTokens, '自动压缩触发')
+
     await subconscious.observeUserInput(prompt)
-    const nextMsgs: PersistedMessage[] = [
+    let nextMsgs: PersistedMessage[] = [
       ...messages,
       { role: 'user', content: prompt },
     ]
 
-    const system = await buildCliSystem(config, cwd, subconscious, prompt)
-    const { messages: out } = await runToolLoop({
+    const callRunToolLoop = (msgs: PersistedMessage[]) => runToolLoop({
       config,
       system,
-      messages: nextMsgs,
+      messages: msgs,
       cwd,
       mcp,
       editHistory,
@@ -106,6 +116,29 @@ export async function runCliPrompt(
         onThinkingDelta: () => {},
       },
     })
+
+    let out: PersistedMessage[]
+    try {
+      out = (await callRunToolLoop(nextMsgs)).messages
+    } catch (e: unknown) {
+      if (!isRecoverableUpstreamError(e) || compSettings.autoThresholdTokens <= 0) {
+        throw e
+      }
+      console.error(`[cli] LLM 调用失败 (${formatChatError(e)})，尝试 emergency compact 后重试…`)
+      // Force compact regardless of threshold — upstream said no, shrink and try once more.
+      const compacted = await subconscious.compactSessionAsync({
+        messages,
+        minTailMessages: compSettings.minTailMessages,
+        maxToolSnippetChars: compSettings.maxToolSnippetChars,
+        preCompactHook: compSettings.preCompactHook,
+      }).catch((compactErr) => {
+        console.error(`[cli] emergency compact 失败: ${formatChatError(compactErr)}`)
+        return messages
+      })
+      messages = compacted
+      nextMsgs = [...compacted, { role: 'user', content: prompt }]
+      out = (await callRunToolLoop(nextMsgs)).messages
+    }
     await saveSession(cwd, out)
     const last = out[out.length - 1]
     if (last?.role === 'assistant' && last.content) {

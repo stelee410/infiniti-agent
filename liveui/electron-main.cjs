@@ -314,6 +314,29 @@ function createWindow() {
     return result.filePath
   })
 
+  ipcMain.handle('liveui-show-message', async (_e, payload) => {
+    const opts = payload && typeof payload === 'object' ? payload : {}
+    const type = typeof opts.type === 'string' && ['none', 'info', 'error', 'question', 'warning'].includes(opts.type)
+      ? opts.type
+      : 'warning'
+    const title = typeof opts.title === 'string' ? opts.title : '提示'
+    const message = typeof opts.message === 'string' ? opts.message : ''
+    const detail = typeof opts.detail === 'string' ? opts.detail : undefined
+    const buttons = Array.isArray(opts.buttons) && opts.buttons.every((b) => typeof b === 'string')
+      ? opts.buttons
+      : ['好的']
+    const result = await dialog.showMessageBox(win, {
+      type,
+      title,
+      message,
+      ...(detail ? { detail } : {}),
+      buttons,
+      defaultId: 0,
+      noLink: true,
+    })
+    return { response: result.response }
+  })
+
   win.webContents.on('console-message', (_event, level, message, line, sourceId) => {
     const levelName = ['verbose', 'info', 'warning', 'error'][level] ?? String(level)
     const where = sourceId ? ` (${sourceId}:${line})` : ''

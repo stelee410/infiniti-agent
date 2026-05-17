@@ -79,3 +79,17 @@ export function truncateToolResults(
 export function withMessageTimestamps(messages: PersistedMessage[], now = new Date().toISOString()): PersistedMessage[] {
   return messages.map((m) => m.createdAt ? m : { ...m, createdAt: now })
 }
+
+/**
+ * 删除「空 assistant」消息：既没有 content（或空串/null）也没有 toolCalls。
+ * 这种消息常见于上游被审核挡掉或流被中断，但保留它会让非 OpenAI 的 chat 上游
+ * （如 mimo / litellm）下一轮直接 502 "Param Incorrect"。
+ */
+export function dropEmptyAssistantTurns(messages: PersistedMessage[]): PersistedMessage[] {
+  return messages.filter((m) => {
+    if (m.role !== 'assistant') return true
+    const hasContent = typeof m.content === 'string' && m.content.trim().length > 0
+    const hasToolCalls = (m.toolCalls?.length ?? 0) > 0
+    return hasContent || hasToolCalls
+  })
+}

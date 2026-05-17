@@ -129,6 +129,13 @@ declare global {
       selectAttachments?: () => Promise<string[]>
       /** Electron：打开系统另存为对话框 */
       savePath?: (opts: { defaultPath?: string }) => Promise<string | null>
+      showMessage?: (opts: {
+        type?: 'none' | 'info' | 'error' | 'question' | 'warning'
+        title?: string
+        message?: string
+        detail?: string
+        buttons?: string[]
+      }) => Promise<{ response: number }>
     }
     ImageCapture?: new (track: MediaStreamTrack) => {
       grabFrame: () => Promise<ImageBitmap>
@@ -184,6 +191,7 @@ type AudioResetMsg = { type: 'AUDIO_RESET' }
 type TtsStatusMsg = { type: 'TTS_STATUS'; data: { available: boolean; enabled?: unknown } }
 type AsrStatusMsg = { type: 'ASR_STATUS'; data: { available: boolean } }
 type AsrResultMsg = { type: 'ASR_RESULT'; data: { text: string } }
+type CallAvailabilityMsg = { type: 'CALL_AVAILABILITY'; data: { asr: boolean; tts: boolean; reasons?: string[] } }
 
 type SlashCompletionMsg = {
   type: 'SLASH_COMPLETION'
@@ -292,6 +300,7 @@ type Msg =
   | TtsStatusMsg
   | AsrStatusMsg
   | AsrResultMsg
+  | CallAvailabilityMsg
   | SlashCompletionMsg
   | ConfigOpenMsg
   | ConfigStatusMsg
@@ -2537,9 +2546,26 @@ async function bootstrap(): Promise<void> {
       asrAvailable = !!msg.data?.available
       updateMicBtn()
       maybeAutoStartAsr()
+    } else if (msg.type === 'CALL_AVAILABILITY') {
+      callAvailabilityReasons = Array.isArray(msg.data?.reasons)
+        ? (msg.data.reasons as unknown[]).filter((r): r is string => typeof r === 'string')
+        : []
+      updateMicBtn()
     } else if (msg.type === 'ASR_RESULT') {
-      const text = msg.data?.text
-      if (typeof text === 'string' && text.trim()) {
+      const text = typeof msg.data?.text === 'string' ? msg.data.text : ''
+      if (callModeActive) {
+        const trimmed = text.trim()
+        if (trimmed && isSocketOpen(socket)) {
+          sendSocketMessage(socket, 'CALL_USER_INPUT', { text: trimmed })
+        }
+        // 不在 UI 上显示"思考"/"没听清"等状态文字，只在 console 留痕。
+      } else if (inputDictationAwaitingAsr) {
+        acceptInputDictationTranscript(text)
+        if (text.trim()) {
+          rememberInputHistory(text.trim())
+          touchConvActivity()
+        }
+      } else if (text.trim()) {
         rememberInputHistory(text.trim())
         if (userLineInput && !voiceMode) {
           userLineInput.value = text.trim()
@@ -2681,6 +2707,27 @@ async function bootstrap(): Promise<void> {
   })
 
   userLineInput?.addEventListener('keydown', (ev) => {
+    // Hold-space-to-dictate: 单按空格仍然是空格；按住 OS 触发 repeat
+    // 后进入 inline 语音听写。
+    if ((ev.key === ' ' || ev.code === 'Space') && !ev.shiftKey && !ev.metaKey && !ev.ctrlKey && !ev.altKey && !ev.isComposing) {
+      if (inputDictationActive) {
+        ev.preventDefault()
+        return
+      }
+      if (!ev.repeat) {
+        // 第一次按下：在 default action 插入空格前 snapshot value+selection
+        if (userLineInput) {
+          inputDictationPreValue = userLineInput.value
+          inputDictationPreSelStart = userLineInput.selectionStart ?? userLineInput.value.length
+          inputDictationPreSelEnd = userLineInput.selectionEnd ?? userLineInput.value.length
+        }
+      } else if (asrAvailable && !voiceMicAuto && !voiceMode) {
+        // 长按 → 进入 inline 听写
+        ev.preventDefault()
+        void beginInputDictation()
+        return
+      }
+    }
     if (slashMenuOpenLive && slashRows.length > 0) {
       if (ev.key === 'Tab') {
         ev.preventDefault()
@@ -2711,6 +2758,11 @@ async function bootstrap(): Promise<void> {
       }
     }
     if (ev.key !== 'Enter' || ev.shiftKey || ev.isComposing) return
+    // dictation 进行中（录音 / 等 ASR）禁止 Enter 提交，避免把 placeholder 当 prompt 发出去
+    if (inputDictationActive || inputDictationAwaitingAsr) {
+      ev.preventDefault()
+      return
+    }
     ev.preventDefault()
     const v = userLineInput.value.trimEnd()
     if (!v.trim()) return
@@ -2726,6 +2778,28 @@ async function bootstrap(): Promise<void> {
     // 输入与提交都不会改变 dock 高度，因此不需要重排 avatar/figure/stage。
     // 这是从源头消除"提交触发 layout chain"竞争的关键——/showmemagic 链路上
     // 不再有任何机会去把 real2dStableStageHeight 推升到工作区高度。
+  })
+
+  userLineInput?.addEventListener('keyup', (ev) => {
+    if (ev.key !== ' ' && ev.code !== 'Space') return
+    if (!inputDictationActive) return
+    ev.preventDefault()
+    endInputDictation()
+  })
+
+  // 兜底：window keyup —— 即便 input 失去焦点或 readOnly 把事件吞了，
+  // 也能从 window 拿到空格松开事件，防止 dictation 卡住。
+  window.addEventListener('keyup', (ev) => {
+    if (ev.key !== ' ' && ev.code !== 'Space') return
+    if (!inputDictationActive) return
+    endInputDictation()
+  }, true)
+
+  userLineInput?.addEventListener('blur', () => {
+    if (inputDictationActive) {
+      // 失去焦点视作取消，避免按住空格后切窗口卡住
+      cancelInputDictation(null)
+    }
   })
 
   wirePointerInteractions()
@@ -2912,11 +2986,18 @@ async function bootstrap(): Promise<void> {
 
   // ── 麦克风按钮：默认按住空格说话；`infiniti-agent live --auto` 使用连续 VAD 模式 ──
   const voiceMic = resolveVoiceMicWire(window.infinitiLiveUi?.voiceMic)
-  const voiceMicAuto = voiceMic.mode === 'auto'
+  // voiceMicAuto 在通话模式下会被临时翻成 true，所以不能 const
+  let voiceMicAuto = voiceMic.mode === 'auto'
   /** 已进入说话段后略低于 speech 门限，避免字间弱音被当成静音 */
   const vadRmsRelease = Math.max(0.004, Math.min(voiceMic.speechRmsThreshold * 0.48, voiceMic.speechRmsThreshold - 1e-6))
 
   let asrAvailable = false
+  let callAvailabilityReasons: string[] = []
+  let callModeActive = false
+  // 通话进入时记下 voiceMicAuto/voiceMic.mode 的原值，挂断时恢复；否则
+  // hold-space-to-dictate 的 !voiceMicAuto 判定会被卡住。
+  let callPrevVoiceMicAuto = false
+  let callPrevVoiceMicMode: 'auto' | 'push_to_talk' = 'push_to_talk'
   let voiceMode = false
   let micStream: MediaStream | null = null
   let mediaRecorder: MediaRecorder | null = null
@@ -2931,6 +3012,21 @@ async function bootstrap(): Promise<void> {
   let interruptSent = false
   let pttSpaceDown = false
   let pttRecording = false
+  /**
+   * Inline-in-input dictation: user holds Space inside #liveui-user-line.
+   * - The single Space tap still inserts a normal space.
+   * - When OS key-repeat fires, we roll the typed space(s) back, snapshot input
+   *   state, open mic (if we don't own it yet), and stream MIC_AUDIO to agent.
+   * - On release we wait for ASR_RESULT and splice the transcript at the
+   *   original cursor position (no auto-send — user presses Enter).
+   */
+  let inputDictationActive = false
+  let inputDictationAwaitingAsr = false
+  let inputDictationOwnsMic = false
+  let inputDictationPreValue = ''
+  let inputDictationPreSelStart = 0
+  let inputDictationPreSelEnd = 0
+  let inputDictationAsrTimer: ReturnType<typeof setTimeout> | undefined
 
   /** 进入「在说话」前需连续满足频谱门控的帧数，抑制突发噪声误触 */
   let vadSpeechLikelyStreak = 0
@@ -2946,16 +3042,16 @@ async function bootstrap(): Promise<void> {
     micBtn.setAttribute('aria-pressed', String(voiceMode))
     const recordingNow = voiceMicAuto ? voiceMode : pttRecording
     micBtn.title = !asrAvailable
-      ? '语音输入：未配置 ASR（需在 config 中配置 whisper 或 sherpa_onnx）'
+      ? '电话：未配置 ASR（需在 config 中配置 whisper 或 sherpa_onnx）'
       : voiceMode
         ? voiceMicAuto
-          ? '自动语音模式开启中…点击关闭'
+          ? '通话中（自动语音）…点击挂断'
           : pttRecording
             ? '正在录音，松开发送识别'
-            : '按住空格说话，松开发送；点击关闭'
+            : '按住空格说话，松开发送；点击挂断'
         : voiceMicAuto
-          ? '点击进入自动语音对话模式'
-          : '点击开启语音输入（按住空格说话）'
+          ? '点击拨打：进入自动语音对话'
+          : '点击拨打：开启语音输入（按住空格说话）'
     if (micIconIdle) micIconIdle.style.display = recordingNow ? 'none' : ''
     if (micIconRecording) micIconRecording.style.display = recordingNow ? '' : 'none'
   }
@@ -2992,12 +3088,19 @@ async function bootstrap(): Promise<void> {
     if (micChunks.length === 0) return
     const blob = new Blob(micChunks, { type: 'audio/webm' })
     micChunks = []
+    // inline dictation 时把 transcribeOnly=true 一起送过去，agent 仅回识别结果、
+    // 不再把它当 user line 自动喂给 LLM；用户改完手按 Enter 才发。
+    const transcribeOnly = inputDictationAwaitingAsr || inputDictationActive
     const reader = new FileReader()
     reader.onloadend = () => {
       const base64 = (reader.result as string).split(',')[1]
       if (base64 && isSocketOpen(socket)) {
-        console.debug(`[liveui] 发送录音: ${blob.size} bytes`)
-        sendSocketMessage(socket, 'MIC_AUDIO', { audioBase64: base64, format: 'webm' })
+        console.debug(`[liveui] 发送录音: ${blob.size} bytes (transcribeOnly=${transcribeOnly})`)
+        sendSocketMessage(socket, 'MIC_AUDIO', {
+          audioBase64: base64,
+          format: 'webm',
+          ...(transcribeOnly ? { transcribeOnly: true } : {}),
+        })
       }
     }
     reader.readAsDataURL(blob)
@@ -3054,6 +3157,158 @@ async function bootstrap(): Promise<void> {
     if (!startSegmentRecording()) return
     pttRecording = true
     updateMicBtn()
+  }
+
+  /** 浮窗式 notice：value 为空时显示在 placeholder 上 ~3 秒后清掉。 */
+  let inputNoticeToken = 0
+  const showLiveNotice = (msg: string): void => {
+    console.warn(`[liveui] ${msg}`)
+    if (!userLineInput) return
+    const myToken = ++inputNoticeToken
+    userLineInput.placeholder = msg
+    setTimeout(() => {
+      if (inputNoticeToken === myToken && userLineInput) {
+        userLineInput.placeholder = ''
+      }
+    }, 3000)
+  }
+
+  const cancelInputDictation = (reason: string | null): void => {
+    if (!inputDictationActive && !inputDictationAwaitingAsr) return
+    inputDictationActive = false
+    inputDictationAwaitingAsr = false
+    if (inputDictationAsrTimer) {
+      clearTimeout(inputDictationAsrTimer)
+      inputDictationAsrTimer = undefined
+    }
+    stopSegmentRecording()
+    if (inputDictationOwnsMic) {
+      if (micStream) {
+        micStream.getTracks().forEach((t) => t.stop())
+        micStream = null
+      }
+      if (micAudioCtx) {
+        void micAudioCtx.close()
+        micAudioCtx = null
+        micAnalyser = null
+      }
+      inputDictationOwnsMic = false
+    }
+    if (userLineInput) {
+      userLineInput.readOnly = false
+      userLineInput.value = inputDictationPreValue
+      try {
+        userLineInput.setSelectionRange(inputDictationPreSelStart, inputDictationPreSelEnd)
+      } catch {
+        /* setSelectionRange can throw on disabled/non-focused inputs in rare cases */
+      }
+      pushComposerDraft()
+      userLineInput.focus()
+    }
+    if (reason) showLiveNotice(reason)
+  }
+
+  const beginInputDictation = async (): Promise<void> => {
+    if (!userLineInput || !asrAvailable || voiceMicAuto || inputDictationActive) return
+    if (voiceMode) {
+      // 用户已经在常规 PTT 语音模式里，不重复抢占；让现有 PTT 路径处理空格。
+      return
+    }
+    // 已经在长按里，先把已被默认动作插入的空格回退到 pre 状态
+    userLineInput.value = inputDictationPreValue
+    try {
+      userLineInput.setSelectionRange(inputDictationPreSelStart, inputDictationPreSelEnd)
+    } catch {
+      /* ignore */
+    }
+
+    inputDictationActive = true
+    userLineInput.readOnly = true
+    userLineInput.value = '🎤 听中～'
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000, channelCount: 1 } })
+      if (!inputDictationActive) {
+        // 用户已经释放，回退
+        stream.getTracks().forEach((t) => t.stop())
+        return
+      }
+      micStream = stream
+      inputDictationOwnsMic = true
+      if (!startSegmentRecording()) throw new Error('MediaRecorder 启动失败')
+    } catch (e) {
+      console.warn('[liveui] inline dictation 麦克风获取失败:', e)
+      cancelInputDictation(`听不到麦克风：${(e as Error).message}`)
+    }
+  }
+
+  const endInputDictation = (): void => {
+    if (!inputDictationActive) return
+    inputDictationActive = false
+    stopSegmentRecording()
+    if (!userLineInput) {
+      cancelInputDictation(null)
+      return
+    }
+    if (!inputDictationOwnsMic && !mediaRecorder) {
+      // 没真正录到，按取消处理
+      cancelInputDictation('没录到，再试一次')
+      return
+    }
+    inputDictationAwaitingAsr = true
+    userLineInput.value = '🎤 识别中…'
+    // 兜底：5 秒还没拿到结果就回退
+    inputDictationAsrTimer = setTimeout(() => {
+      if (inputDictationAwaitingAsr) cancelInputDictation('识别超时，再试一次')
+    }, 5000)
+  }
+
+  const acceptInputDictationTranscript = (text: string): void => {
+    if (!inputDictationAwaitingAsr) return
+    inputDictationAwaitingAsr = false
+    if (inputDictationAsrTimer) {
+      clearTimeout(inputDictationAsrTimer)
+      inputDictationAsrTimer = undefined
+    }
+    if (inputDictationOwnsMic) {
+      if (micStream) {
+        micStream.getTracks().forEach((t) => t.stop())
+        micStream = null
+      }
+      if (micAudioCtx) {
+        void micAudioCtx.close()
+        micAudioCtx = null
+        micAnalyser = null
+      }
+      inputDictationOwnsMic = false
+    }
+    if (!userLineInput) return
+    userLineInput.readOnly = false
+    const trimmed = text.trim()
+    if (!trimmed) {
+      userLineInput.value = inputDictationPreValue
+      try {
+        userLineInput.setSelectionRange(inputDictationPreSelStart, inputDictationPreSelEnd)
+      } catch {
+        /* ignore */
+      }
+      showLiveNotice('没听清，再试一次')
+      pushComposerDraft()
+      userLineInput.focus()
+      return
+    }
+    const pre = inputDictationPreValue.slice(0, inputDictationPreSelStart)
+    const post = inputDictationPreValue.slice(inputDictationPreSelEnd)
+    const next = pre + trimmed + post
+    userLineInput.value = next
+    const cursor = pre.length + trimmed.length
+    try {
+      userLineInput.setSelectionRange(cursor, cursor)
+    } catch {
+      /* ignore */
+    }
+    pushComposerDraft()
+    userLineInput.focus()
   }
 
   const endPushToTalk = (): void => {
@@ -3139,12 +3394,8 @@ async function bootstrap(): Promise<void> {
       vadSpeechLikelyStreak = 0
       vadNoiseSpeechBandEma = 1e-10
       updateMicBtn()
-      if (userLineInput) {
-        userLineInput.disabled = true
-        userLineInput.placeholder = voiceMicAuto
-          ? '自动语音模式开启中…'
-          : '按住空格说话，松开发送识别…'
-      }
+      // 不再 disable 输入框 / 改 placeholder：通话模式由 body.liveui-call-mode
+      // CSS 整块隐藏底部 dock；非通话模式（inline dictation 等）需要 input 可用。
       if (voiceMicAuto) {
         vadRaf = requestAnimationFrame(vadLoop)
       }
@@ -3153,11 +3404,9 @@ async function bootstrap(): Promise<void> {
     }
   }
 
-  maybeAutoStartAsr = (): void => {
-    if (minimalMode || !voiceMic.asrAutoEnabled || !asrAvailable || voiceMode) return
-    void enterVoiceMode()
-  }
-  maybeAutoStartAsr()
+  // 电话按钮成为唯一的语音模式入口，启动时不再自动 enterVoiceMode，
+  // 否则会抢麦克风并把输入框 disable 掉，用户无法默认打字。
+  maybeAutoStartAsr = (): void => { /* no-op */ }
 
   const exitVoiceMode = (): void => {
     voiceMode = false
@@ -3177,10 +3426,7 @@ async function bootstrap(): Promise<void> {
     isSpeaking = false
     hasSpoken = false
     updateMicBtn()
-    if (userLineInput) {
-      userLineInput.disabled = false
-      userLineInput.placeholder = ''
-    }
+    // enterVoiceMode 不再修改 input 的 disabled/placeholder，所以退出时也不需要复原。
   }
   exitVoiceModeForMinimal = exitVoiceMode
 
@@ -3214,14 +3460,99 @@ async function bootstrap(): Promise<void> {
     if (document.hidden) finishPushToTalkIfNeeded()
   })
 
-  micBtn?.addEventListener('click', () => {
-    if (!asrAvailable) return
-    micBtn.blur()
-    if (voiceMode) {
-      exitVoiceMode()
-    } else {
-      void enterVoiceMode()
+  // ── 通话模式 ──
+  const callOverlay = document.getElementById('liveui-call-overlay') as HTMLElement | null
+  const hangupBtn = document.getElementById('liveui-btn-hangup') as HTMLButtonElement | null
+
+  const enterCallMode = async (): Promise<void> => {
+    if (callModeActive) return
+    if (!asrAvailable || !ttsAvailable) {
+      const reasons = callAvailabilityReasons.length
+        ? callAvailabilityReasons.join('\n')
+        : '当前 ASR 或 TTS 不可用，无法通话。'
+      try {
+        if (window.infinitiLiveUi?.showMessage) {
+          await window.infinitiLiveUi.showMessage({
+            type: 'warning',
+            title: '无法拨号',
+            message: '通话模式需要 ASR 和 TTS 同时可用。',
+            detail: reasons,
+            buttons: ['知道了'],
+          })
+        } else {
+          alert(`无法拨号：\n${reasons}`)
+        }
+      } catch {
+        /* ignore dialog failure */
+      }
+      return
     }
+    if (!isSocketOpen(socket)) {
+      try { await window.infinitiLiveUi?.showMessage?.({ type: 'warning', title: '无法拨号', message: '尚未连上 agent，请稍后再试。' }) } catch { /* */ }
+      return
+    }
+
+    callModeActive = true
+    document.body.classList.add('liveui-call-mode')
+    if (callOverlay) {
+      callOverlay.hidden = false
+      callOverlay.setAttribute('aria-hidden', 'false')
+    }
+    updateMicBtn()
+    sendSocketMessage(socket, 'CALL_MODE_START')
+
+    // 强制 auto-VAD（即便 cli 没传 --auto）。保存原值，挂断时恢复——
+    // 否则 hold-space-to-dictate 的 !voiceMicAuto 判定会一直被卡住。
+    callPrevVoiceMicAuto = voiceMicAuto
+    callPrevVoiceMicMode = voiceMic.mode
+    voiceMicAuto = true
+    voiceMic.mode = 'auto'
+    await enterVoiceMode()
+    if (!voiceMode) {
+      // 进入 voice mode 失败 → 回退
+      callModeActive = false
+      document.body.classList.remove('liveui-call-mode')
+      if (callOverlay) {
+        callOverlay.hidden = true
+        callOverlay.setAttribute('aria-hidden', 'true')
+      }
+      voiceMicAuto = callPrevVoiceMicAuto
+      voiceMic.mode = callPrevVoiceMicMode
+      updateMicBtn()
+      try { await window.infinitiLiveUi?.showMessage?.({ type: 'warning', title: '无法拨号', message: '麦克风启动失败，请检查权限。' }) } catch { /* */ }
+      sendSocketMessage(socket, 'CALL_MODE_END')
+    }
+  }
+
+  const exitCallMode = (): void => {
+    if (!callModeActive) return
+    callModeActive = false
+    document.body.classList.remove('liveui-call-mode')
+    if (callOverlay) {
+      callOverlay.hidden = true
+      callOverlay.setAttribute('aria-hidden', 'true')
+    }
+    if (isSocketOpen(socket)) sendSocketMessage(socket, 'CALL_MODE_END')
+    exitVoiceMode()
+    // 恢复进入通话前的 voiceMic 模式，让 hold-space-to-dictate 能继续工作
+    voiceMicAuto = callPrevVoiceMicAuto
+    voiceMic.mode = callPrevVoiceMicMode
+    updateMicBtn()
+  }
+
+  hangupBtn?.addEventListener('click', () => {
+    hangupBtn.blur()
+    exitCallMode()
+  })
+
+  micBtn?.addEventListener('click', () => {
+    micBtn.blur()
+    if (callModeActive) {
+      exitCallMode()
+      return
+    }
+    // 默认点击电话按钮 → 进入通话模式（需要 ASR + TTS 双就绪）
+    void enterCallMode()
   })
 
   updateMicBtn()
@@ -3595,7 +3926,8 @@ async function bootstrap(): Promise<void> {
           dom.closest('#liveui-photo-preview') ||
           dom.closest('#liveui-inbox') ||
           dom.closest('#liveui-h5-runtime') ||
-          dom.closest('.liveui-h5-launcher'))
+          dom.closest('.liveui-h5-launcher') ||
+          dom.closest('#liveui-call-overlay'))
       ) {
         return true
       }

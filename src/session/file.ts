@@ -3,7 +3,7 @@ import { dirname, join } from 'path'
 import { localSessionPath } from '../paths.js'
 import type { PersistedMessage } from '../llm/persisted.js'
 import type { SessionFileV1 } from '../llm/persisted.js'
-import { truncateToolResults, withMessageTimestamps } from '../llm/persisted.js'
+import { dropEmptyAssistantTurns, truncateToolResults, withMessageTimestamps } from '../llm/persisted.js'
 
 export async function loadSession(cwd: string): Promise<SessionFileV1 | null> {
   const sessionPath = localSessionPath(cwd)
@@ -13,6 +13,8 @@ export async function loadSession(cwd: string): Promise<SessionFileV1 | null> {
     if (parsed?.version !== 1 || !Array.isArray(parsed.messages)) {
       return null
     }
+    // Self-heal: strip empty assistant turns that pre-fix sessions may contain.
+    parsed.messages = dropEmptyAssistantTurns(parsed.messages)
     return parsed
   } catch (e: unknown) {
     const err = e as NodeJS.ErrnoException
@@ -32,7 +34,7 @@ export async function saveSession(
   const data: SessionFileV1 = {
     version: 1,
     cwd,
-    messages: withMessageTimestamps(truncateToolResults(messages)),
+    messages: withMessageTimestamps(truncateToolResults(dropEmptyAssistantTurns(messages))),
   }
   await writeFile(sessionPath, `${JSON.stringify(data, null, 2)}\n`, 'utf8')
 }
