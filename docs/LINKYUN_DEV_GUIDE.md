@@ -168,6 +168,98 @@ Invoke-RestMethod -Uri "http://localhost:8080/api/v1/system/motherland-status"
 
 **与 client-web-ui 的耦合点**：dashboard layout 启动时调 `getMotherlandStatus()`（`@D:\linkyun-agent-ui\client-web-ui\src\app\dashboard\layout.tsx:49`）。**未配置时 3 个 motherland 技能按钮在 UI 上隐藏**；配置后浏览器刷新即解锁，不需重启后端。
 
+#### 2.1.2 实时事件推送（BE-004 / global-user-events）
+
+**概念**：用户级 SSE 通道。每个登录用户对一个 endpoint 建立一条 SSE 连接，多事件类型在同一连接上多路复用，规避浏览器 HTTP/1.1 6-EventSource-per-origin 限制（多 chat tab 场景）。
+
+**Endpoints**：
+
+| Endpoint | 用途 | 备注 |
+|---|---|---|
+| `GET /api/v1/user/events/stream` | BE-004 用户级 SSE（多路复用 4 events） | 替换 30s 轮询 |
+| `GET /api/v1/user/events?session_id=` | Legacy 会话级 SSE | 4 周 dual-publish 兼容期；前端 Phase B 切换后由 follow-up change 移除 |
+| `POST /api/v1/user/chats/{id}/typing` | 打字指示器（BE-001c 整合） | 1v1 仅设 TTL 不 publish；group session 才 publish |
+
+**4 个 typed event**（`event: <type>\ndata: <json>\n\n`）：
+
+| `event:` | `data` 字段 | 触发源 |
+|---|---|---|
+| `moment_like` | `actor` / `moment_id` / `created_at` | 跨 creator 点赞（self-like 不触发） |
+| `moment_comment` | `actor` / `moment_id` / `comment_id` / `created_at` | 跨 creator 评论 |
+| `chat_message` | `session_id` / `sender` / `message_id` / `preview` / `created_at` | `PushService.PushMessage` / `InternalPushToSession` |
+| `typing` | `session_id` / `user_id` / `expires_at` | group session typing POST |
+
+**未实施**：`friend_request` event（仓内无 user-to-user friend 概念，待用户级好友功能引入时单独 change 加）。
+
+**心跳**：每 20 秒（`SSE_HEARTBEAT_INTERVAL` env override）emit `: heartbeat\n\n` SSE comment——W3C 标准注释格式，前端 EventSource 自动忽略，仅用于绕过 nginx default `proxy_read_timeout 60s` 的 idle teardown。
+
+**dual-publish 策略**（`chat_message` 专属，design.md D8）：4 周内每条 chat message 同时 publish 到 `linkyun:push:session:<sid>`（老 channel）和 `linkyun:push:user:<uid>`（新 channel），让前端 Phase B 切换期间老订阅不丢消息；cut-over 在 follow-up `remove-session-sse` change 做。
+
+**Spec / 实现真源**：`@d:\linkyun-agent\openspec\specs\global-user-events\spec.md`（archive 后路径）；handler 实现 `@d:\linkyun-agent\internal\api\handler\user_events.go`；publisher `@d:\linkyun-agent\internal\eventbus\publisher.go`；service hooks `@d:\linkyun-agent\internal\service\moment_notification.go`（NotifyLike / NotifyComment）+ `@d:\linkyun-agent\internal\service\push.go`（chat dual-publish）+ `@d:\linkyun-agent\internal\service\chat_typing.go`（typing）。
+
+#### 2.1.3 Agent 关注 / 主形象 / Follow 通知三件套
+
+**能力背景**（spec 真源 `@d:\linkyun-agent\openspec\specs\agent-follow\spec.md`）：2026-05 由 `social-graph` capability 升级而来。关注对象从「Creator」变为「Agent」——一个 Creator 可能为多个 Agent 各自别被关注。「主形象」（`creators.primary_agent_id`）是 Creator 可以选定某个 Agent 作为「代表他」的 anchor，用于 `is_mutual` 计算。
+
+**6 个关键 endpoint 及调试命令**（需 X-API-Key + agent id）：
+
+```powershell
+# 假设 $key = "<你的 X-API-Key>"
+$base = "http://localhost:8080/api/v1"
+$hdr = @{ "X-API-Key" = $key }
+
+# 1. 关注 agent 12
+Invoke-RestMethod -Uri "$base/agents/12/follow" -Method POST -Headers $hdr
+
+# 2. 查看关注状态（返 is_following / is_followed_by_owner / is_mutual / followed_at）
+Invoke-RestMethod -Uri "$base/agents/12/follow-status" -Headers $hdr
+
+# 3. 查看 agent 12 的粉丝列表
+Invoke-RestMethod -Uri "$base/agents/12/followers?limit=20" -Headers $hdr
+
+# 4. 查看我关注的 agents
+Invoke-RestMethod -Uri "$base/me/agent-following?limit=20" -Headers $hdr
+
+# 5. 取消关注（幂等 — 对已删除 agent 仍返 200，供清理遗留关系使用）
+Invoke-RestMethod -Uri "$base/agents/12/follow" -Method DELETE -Headers $hdr
+
+# 6. 设置主形象（agent_id 必须是自己创建的 non-archived agent）
+$body = @{ agent_id = 12 } | ConvertTo-Json
+Invoke-RestMethod -Uri "$base/me/primary-agent" -Method PUT -Headers $hdr -Body $body -ContentType "application/json"
+```
+
+**软删状态哥兵限定**（今日修定）：只有 `agents.status = 'archived'` 才是软删哥兵。对以上 4 个需要过滤 archived target 的 endpoint（POST / GET follow-status / GET followers / PUT primary-agent）会返 404。`DELETE /follow` 是唯一不检查状态的端点（幂等清理）。验证方法：
+
+```powershell
+# 手工软删一个你的 agent
+mysql -e "UPDATE agents SET status='archived' WHERE id=12;" linkyun_agent
+
+# 期望 404
+Invoke-RestMethod -Uri "$base/agents/12/follow" -Method POST -Headers $hdr
+# 期望 200 + 列表不含该 agent
+Invoke-RestMethod -Uri "$base/me/agent-following" -Headers $hdr
+
+# 恢复
+mysql -e "UPDATE agents SET status='active' WHERE id=12;" linkyun_agent
+```
+
+**与 moment-notifications 的联动**：`POST /agents/{id}/follow` 同事务后会 fire-and-forget 调 `MomentNotificationService.NotifyFollow`，为 target agent owner 插入一条 follow 通知。`NotifyFollow` 本身会二次检查 archived 状态作为防御（`@d:\linkyun-agent\internal\service\moment_notification.go:226`）。检查通知列表：
+
+```powershell
+Invoke-RestMethod -Uri "$base/me/notifications?type=follow&limit=20" -Headers $hdr
+```
+
+**与 legacy `social-graph` 的共存**：老 5 路由（`POST /follow` / `GET /follow/status` / etc）仍服务但添 deprecation header，2026-07-01 sunset。前端 SDK 依赖 `Link: <successor>; rel="successor-version"` 响应头自动重写。定义 `@D:\linkyun-agent\cmd\server\main.go:572-590`。决定背景：`@D:\linkyun-agent\openspec\changes\archive\2026-05-22-add-agent-follow\design.md`。
+
+**5 实体 soft-delete sentinel 速查**（`ECOSYSTEM §3.5` 是真源）：
+
+| 实体 | sentinel | 过滤 |
+|---|---|---|
+| Creator / User / Session / Workspace | `status = 'deleted'` | `!= 'deleted'` |
+| **Agent** | **`status = 'archived'`** | **`!= 'archived'`** |
+
+代码中出现 `agent.Status == "deleted"` 或 `ag.status != 'deleted'` 都是 bug。设计源：`@D:\linkyun-agent\openspec\changes\archive\2026-05-24-normalize-agent-soft-delete-status\design.md`。
+
 ---
 
 ### 2.2 `linkyun-agent-ui` + `linkyun-app` — 浏览器端（3 个独立前端）
@@ -285,6 +377,124 @@ infiniti-agent generate_avatar    # OpenRouter 图像 API 生成头像
 
 ---
 
+### 2.6 OpenSpec 工作流（变更管理）
+
+LinkYun 后端所有非琐碎改动（≥30 min 工作量、影响 spec、改公共 API、新增 capability、改 DB schema）都走 OpenSpec 流程。**新人必读**：仓里 `openspec/` 目录是 spec / change / archive 的真源。`AGENTS.md §3` 是工作流权威。
+
+**4 个 artifact**：
+
+| 文件 | 作用 |
+|---|---|
+| `openspec/changes/<name>/proposal.md` | Why + 影响范围 + 用户可见行为变化 |
+| `openspec/changes/<name>/design.md` | 决策日志（D1, D2, ...）+ 风险（R1, ...）+ 备选方案 |
+| `openspec/changes/<name>/specs/<capability>/spec.md` | spec delta（`## ADDED/MODIFIED/REMOVED Requirements`），归档时折叠进主 spec |
+| `openspec/changes/<name>/tasks.md` | 实施步骤 + 验证 grep + DoD 检查清单 |
+
+**核心 CLI**（仓里通过 `npm install -g @stelee410/openspec-cli` 或 `npx` 调用）：
+
+```powershell
+openspec list                                           # 列当前 active changes
+openspec list --json                                    # JSON 输出，给脚本用
+openspec validate <change-name> --strict                # 验证 4 artifact 完整性 + delta 语法
+openspec validate <capability>                          # 验证主 spec
+openspec show <capability>                              # 查看主 spec
+openspec archive <change-name> --yes                    # 归档：折叠 delta 进主 spec + 移到 archive/<YYYY-MM-DD>-<name>/
+openspec sync <change-name>                             # 仅同步 delta 到主 spec，不归档
+```
+
+**Windsurf workflows**（`/`-命令）：
+
+| 命令 | 用途 |
+|---|---|
+| `/dev <想法>` | 启动新 change（OpenSpec + Superpowers 强点融合：探索 → 提议 → TDD → 审查 → 验证 → 归档） |
+| `/dev continue` | 推进现有 change |
+| `/opsx-explore` | 进入探索模式（思考分区，不实施） |
+| `/opsx-new` | 启动新 change（实验性轻量工作流） |
+| `/opsx-propose` | 一步生成完整 proposal + design + spec + tasks |
+| `/opsx-apply` | 实施 tasks |
+| `/opsx-verify` | 实施完成后验证 |
+| `/opsx-archive` | 归档单个 change |
+| `/opsx-bulk-archive` | 一次归档多个并行 change |
+| `/opsx-sync` | 仅同步 delta，不归档 |
+
+详见 `@D:\linkyun-agent\.windsurf\workflows\dev.md`。
+
+**典型 lifecycle**（小修走快道，大改走 dev）：
+
+```text
+小修（<30 min）        → 直接 commit，不走 OpenSpec
+新增 capability         → /dev → propose → apply → verify → archive
+修复语义 bug             → /opsx-new → 4 artifact → apply → archive（今日 normalize-agent-soft-delete-status 走的就是此路）
+跨能力 spec 重构        → /dev 全套 + cross-repo brief
+```
+
+**实践示例**：今日 ship 的 `normalize-agent-soft-delete-status` 经过 8 个 commits（proposal → design → specs → tasks → 实施 → cross-repo brief → archive → 跨仓 docs sync）。归档后 spec delta 折叠进 `agent-follow` + `moment-notifications` 两个主 spec。归档目录在 `@D:\linkyun-agent\openspec\changes\archive\2026-05-24-normalize-agent-soft-delete-status\`。
+
+---
+
+### 2.7 Cross-repo brief 约定（跨仓沟通）
+
+LinkYun 五仓生态的跨仓协作通过 `docs/cross-repo-*` 文件进行——异步、可审计、可回溯。
+
+**两种文件**：
+
+| 路径 | 用途 | 触发方 |
+|---|---|---|
+| `docs/cross-repo-requests/<topic>-<YYYY-MM-DD>.md` | 仓 A 向仓 B 提需求或问询 | 通常前端 → 后端 |
+| `docs/cross-repo-responses/<topic>-<YYYY-MM-DD>.md` | 仓 B 给仓 A 的实施回执或答复 | 通常后端 → 前端 |
+
+**何时写 brief**（必须）：
+
+- 新加 / 修改 / 删除公共 API endpoint
+- 修改鉴权头 / 鉴权逻辑
+- 修改 DB schema（影响多仓 model 复制时）
+- 修改 wire-shape 即响应/请求 JSON 结构
+- 修改 SSE / WebSocket / 长轮询协议
+- HTTP 状态码 contract 变化（如 200 → 404）
+
+**Brief 内容范式**（参考 `@D:\linkyun-agent\docs\cross-repo-responses\agent-soft-delete-semantics-shipped-2026-05-24.md`）：
+
+```text
+1. TL;DR / 一句话
+2. 三个面影响（before / after 表）
+3. 没变的部分（重点 callout，避免误改）
+4. Spec lock / 实现指针 / commit 链
+5. 前端建议跟进步骤
+6. DoD 检查清单
+7. Out of scope 跟进项
+```
+
+**如何回应 brief**：
+
+```powershell
+# 1. 读 request brief
+code D:\linkyun-agent\docs\cross-repo-requests\<topic>-<YYYY-MM-DD>.md
+
+# 2. 评估、走 OpenSpec change（如需）、实施
+
+# 3. 在 docs/cross-repo-responses/ 写回执
+new-item "D:\linkyun-agent\docs\cross-repo-responses\<topic>-shipped-<YYYY-MM-DD>.md"
+
+# 4. commit + push 时让前端仓的 reviewer 在 PR review 时看到
+```
+
+**与 OpenSpec 的关系**：cross-repo brief 不替代 OpenSpec change。Brief 是给**其他仓**看的精炼版本（影响 + 行动）；OpenSpec 是给本仓的设计决策记录。两者并存。
+
+**当前 active brief**（截至 2026-05-24）：
+
+| 文件 | 状态 |
+|---|---|
+| `docs/cross-repo-responses/agent-soft-delete-semantics-shipped-2026-05-24.md` | 今日 ship |
+| `docs/cross-repo-responses/primary-agent-auto-clear-shipped-2026-05-24.md` | 已 ship |
+| `docs/cross-repo-responses/primary-agent-endpoint-shipped-2026-05-22.md` | 已 ship |
+| `docs/cross-repo-responses/frontend-primary-agent-consumed-2026-05-23.md` | 前端确认 |
+| `docs/cross-repo-requests/backend-archived-vs-deleted-status-2026-05-24.md` | 内部 backlog（已 ship） |
+| `docs/cross-repo-requests/backend-follow-notification-2026-05-19.md` | 待评估 |
+
+新增 brief 时同步更新本表。
+
+---
+
 ## 3. 每个项目"本地开发调试"
 
 ### 3.1 `linkyun-agent`（Go + gorilla/mux）
@@ -296,7 +506,7 @@ infiniti-agent generate_avatar    # OpenRouter 图像 API 生成头像
 | 日志 | `LOG_LEVEL=debug` `LOG_FORMAT=json` |
 | 单测 | `go test ./...` |
 | 路由总览 | 直接看 `@D:\linkyun-agent\cmd\server\main.go:313-642`，全部 ~80 个路由集中在一个函数 |
-| DB schema 同步 | `//go:embed migrations/*.sql` 嵌入二进制（`@D:\linkyun-agent\internal\db\migrate.go:14-15`）；启动自动 `migrate up`；手动 `go run ./cmd/migrate up`。表结构与系统种子数据（内置 skill / TTS 音色 / 母体配置等）均随迁移携带，**不需手工导入 schema.sql**。详见 `@D:\linkyun-agent\docs\项目功能介绍.md` 6.5.3 节 |
+| DB schema 同步 | `//go:embed migrations/*.sql` 嵌入二进制（`@D:\linkyun-agent\internal\db\migrate.go:14-15`）；当前 64 对；启动自动 `migrate up`；手动 `go run ./cmd/migrate up`。表结构与系统种子数据（内置 skill / TTS 音色 / 母体配置等）均随迁移携带，**不需手工导入 schema.sql**。详见 `@D:\linkyun-agent\docs\项目功能介绍.md` 6.5.3 节 |
 | DB 直查 | MySQL `linkyun_agent` 库，账号见 `.env` |
 | Redis 直查 | `redis-cli`，按 `cfg.Redis.KeyPrefix`（默认 `linkyun:`）过滤 |
 | Edge 队列查看 | `redis-cli LRANGE linkyun:edge:queue:<agent_uuid> 0 -1` |
@@ -480,7 +690,7 @@ pnpm dev
 
 10. **服务端 Connect 动态告知客户端 endpoint**（`@D:\linkyun-agent\internal\api\handler\edge.go:80-94`）— 写自定义 edge 客户端时，应该读 `queue_config` 字段拿到 poll/respond/heartbeat URL，而不是硬编码路径。这样未来后端切到 WebSocket 时客户端不用改。
 
-11. **不需手工导入 schema.sql**— 项目用 `//go:embed migrations/*.sql` 把 54 对迁移文件嵌入二进制（`@D:\linkyun-agent\internal\db\migrate.go:14-15`），应用启动自动 `migrate up`，会一并应用表结构与系统种子数据（12 个迁移含 `INSERT INTO`：内置 skill 定义 / MiniMax TTS 音色列表 / 母体 Agent 配置 等）。新人常误以为要从生产 dump 导入，不需要也不应该—手工导入会破坏 `schema_migrations` 状态表。详细链路见 `@D:\linkyun-agent\docs\项目功能介绍.md` 6.5.3 节。
+11. **不需手工导入 schema.sql**— 项目用 `//go:embed migrations/*.sql` 把 64 对迁移文件嵌入二进制（`@D:\linkyun-agent\internal\db\migrate.go:14-15`），应用启动自动 `migrate up`，会一并应用表结构与系统种子数据（12 个迁移含 `INSERT INTO`：内置 skill 定义 / MiniMax TTS 音色列表 / 母体 Agent 配置 等）。新人常误以为要从生产 dump 导入，不需要也不应该—手工导入会破坏 `schema_migrations` 状态表。详细链路见 `@D:\linkyun-agent\docs\项目功能介绍.md` 6.5.3 节。
 
 12. **`client-web-ui` 默认 `NEXT_PUBLIC_API_URL=http://localhost:8081` 与后端默认 `:8080` 不符**（`@D:\linkyun-agent-ui\client-web-ui\src\lib\api.ts:13`）— 项目本身不携带 `.env.local`，不覆盖会连不上后端。三种覆盖顺序：`localStorage['linkyun-api-url-override']`（运行时）＞ `NEXT_PUBLIC_API_URL`（启动时）＞ 默认 `:8081`。调试时推荐在启动脚本里设 `$env:NEXT_PUBLIC_API_URL="http://localhost:8080"`。参见 §2.2。
 

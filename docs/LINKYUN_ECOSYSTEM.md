@@ -36,7 +36,7 @@ GitHub stelee410/
         │ (Creator)   │  │ (End User)   │  │ (Node)    │  │ (Go TUI)    │
         │ Next.js 15  │  │ Vite SPA     │  │ CLI/TUI/  │  │ 长轮询      │
         │             │  │              │  │ Live2D    │  │ +本地 LLM   │
-        │ 在 :8081 跑 │  │ 在 :8080 跑   │  │ +TTS/ASR  │  │ +Skills     │
+        │ 在 :8081 跑 │  │ 在 :5173 跑   │  │ +TTS/ASR  │  │ +Skills     │
         │             │  │              │  │           │  │ +Rules.mdc  │
         └─────────────┘  └──────────────┘  │  - sync   │  │ +MCP/Sandbox│
                          ┌──────────────┐  │  - link   │  │ +SQLite     │
@@ -76,9 +76,66 @@ GitHub stelee410/
 
 ---
 
+## 3.5 软删除哨兵矩阵（5 个实体的 status 枚举约定）
+
+**背景**：平台中有 5 个实体采用 status 枚举的软删除。背后的严重历史问题是：Agent 是唯一的 outlier。`normalize-agent-soft-delete-status` change （2026-05-24 ship）明确了 sentinel 划分：
+
+| 实体表 | 软删 sentinel | 读路径过滤 | 备注 |
+|---|---|---|---|
+| `creators` | `status = 'deleted'` | `c.status != 'deleted'` | 作为 follower / owner join 上 |
+| `users` | `status = 'deleted'` | `users.status != 'deleted'` | End User 账号，鉴权阶段检查 |
+| `sessions` | `status = 'deleted'` | `sessions.status != 'deleted'` | 对话会话隐藏 |
+| `workspaces` | `status = 'deleted'` | `workspaces.status != 'deleted'` | Creator workspace |
+| **`agents`** | **`status = 'archived'`** | **`agents.status != 'archived'`** | 产品可见软删，可未来恢复；`'deleted'` 枚举值保留未用（预留给未来 hard-delete cron） |
+
+**实体软删接口一览**：
+
+| 实体 | 软删入口 | 下游联动 |
+|---|---|---|
+| Creator | `DELETE /api/v1/profile` (待实现) | TBD |
+| User | 同上 | TBD |
+| Session | `POST /api/v1/sessions/{id}/end` | Redis cache invalidate |
+| Workspace | `DELETE /api/v1/workspaces/{id}` | 独立结束事务 |
+| **Agent** | **`DELETE /api/v1/agents/{id}`** | **同事务清 `creators.primary_agent_id` FK（见 `@D:\linkyun-agent\internal\repository\repository.go` `AgentRepository.SoftDelete`）** |
+
+**如何验证一致性**：
+
+```bash
+# 代码中查找 Agent 软删过滤点，必须都使用 'archived'
+grep -rn "agent\.Status\s*==\s*\"archived\"" internal/api/handler/ internal/service/
+grep -rn "ag\.status\s*!=\s*'archived'" internal/repository/
+# 使用 'deleted' 作为 Agent 软删状态的代码都是 bug（闭眼查）
+```
+
+**设计源**：`@D:\linkyun-agent\openspec\changes\archive\2026-05-24-normalize-agent-soft-delete-status\design.md`。
+
+---
+
+## 3.6 OpenSpec 能力总表（轻量索引）
+
+11 个已 ship 的 capability 的 spec 真源。详细场景在各自 spec.md。
+
+| Capability | 主要 endpoint / 机制 | Spec 路径 |
+|---|---|---|
+| `agent-follow` | 6 路由：`POST/DELETE /agents/{id}/follow` / `GET /agents/{id}/follow-status` / `GET /agents/{id}/followers` / `GET /me/agent-following` / `PUT /me/primary-agent`；Agent 软删 sentinel = `'archived'`；primary_agent_id auto-clear-on-soft-delete | `@D:\linkyun-agent\openspec\specs\agent-follow\spec.md` |
+| `social-graph` (**deprecated**, sunset 2026-07-01) | 5 路由，全部带 RFC 9745 `Deprecation`+`Sunset` 响应头，successor 指向 agent-follow 对应路径 | `@D:\linkyun-agent\openspec\specs\social-graph\spec.md` |
+| `moment-notifications` | `/me/notifications/*`；like / comment / **follow** 三类通知；NotifyFollow 静默跳过 archived agent | `@D:\linkyun-agent\openspec\specs\moment-notifications\spec.md` |
+| `global-user-events` | BE-004 用户级 SSE `/user/events/stream`；4 typed events: `moment_like` / `moment_comment` / `chat_message` / `typing` | `@D:\linkyun-agent\openspec\specs\global-user-events\spec.md` |
+| `agent-tagline` | `agents` 资源的 `tagline` 字段及 PublicAgent shape | `@D:\linkyun-agent\openspec\specs\agent-tagline\spec.md` |
+| `agent-mood` | `PATCH/DELETE /agents/{id}/mood` + cron 12h 自动生成 | `@D:\linkyun-agent\openspec\specs\agent-mood\spec.md` |
+| `group-chat-participants` | 群聊会话 participant CRUD | `@D:\linkyun-agent\openspec\specs\group-chat-participants\spec.md` |
+| `mine-agents-list` | `GET /me/agents`（带 followers stat） | `@D:\linkyun-agent\openspec\specs\mine-agents-list\spec.md` |
+| `profile-stats` | `GET /profile/stats` + Redis 30s cache + singleflight | `@D:\linkyun-agent\openspec\specs\profile-stats\spec.md` |
+| `user-chats-pinning` | 1v1 chat 置顶机制 | `@D:\linkyun-agent\openspec\specs\user-chats-pinning\spec.md` |
+| `workspace-online-stats` | workspace 在线 agent 统计 | `@D:\linkyun-agent\openspec\specs\workspace-online-stats\spec.md` |
+
+使用 `openspec list --json` 查看当前 active changes，`openspec show <capability>` 查看具体 spec。
+
+---
+
 ## 4. API 路由全景（按鉴权分组）
 
-源代码：`@D:\linkyun-agent\cmd\server\main.go:313-642`，全 ~80 个 endpoint 集中在一个 `setupHTTPServer()` 中注册。下面只列**涉及客户端交互**的核心子集。
+源代码：`@D:\linkyun-agent\cmd\server\main.go:379-805`（函数 `setupHTTPServer()`），全 >110 个 endpoint 集中在一个函数中注册。下面只列**涉及客户端交互**的核心子集。
 
 ### 4.1 公开 `api`（无鉴权）
 
@@ -97,7 +154,10 @@ GitHub stelee410/
 |---|---|---|
 | 资料 | `GET/PUT /profile`、`POST/DELETE /profile/avatar`、`PUT /profile/password` | `@D:\linkyun-agent\internal\api\handler\profile.go` |
 | Agent CRUD | `GET/POST /agents`、`GET/PUT/DELETE /agents/{id}`、`/by-code/{code}`、`/discover`、`/{id}/publish` | `@D:\linkyun-agent\internal\api\handler\agent.go` |
+| **Agent 关注（`agent-follow`）** | **`POST/DELETE /agents/{id}/follow`、`GET /agents/{id}/followers`、`GET /agents/{id}/follow-status`、`GET /me/agent-following`。请注意：DELETE 不检查 target 状态（幂等清理）；其他 4 路由对 `status='archived'` 返 404。** | `@D:\linkyun-agent\internal\api\handler\agent_follow.go` |
+| **主形象（`agent-follow`/primary）** | **`PUT /me/primary-agent` body `{"agent_id": N}`。Agent 创建时 auto-set first agent；DELETE agent 同事务 NULL-out 此 FK。** | `@D:\linkyun-agent\internal\api\handler\profile_primary_agent.go` |
 | Agent 头像 | `POST/DELETE /agents/{id}/avatar`、`POST /agents/{id}/avatar/generate-preview` | 同上 |
+| Agent mood | `PATCH/DELETE /agents/{id}/mood`（capability `agent-mood`：creator 覆盖 / 重置；cron 默认 12h 自动生成） | `creator_agent_mood.go` |
 | 角色设定 | `POST /agents/{id}/optimize-narrative`、`POST /agents/{id}/character-design/generate-spec\|generate-sheet\|save` | 同上（**调 Motherland Agent**） |
 | Edge 管理 | `POST /agents/{id}/edge-token/reset`、`POST /agents/{id}/simulate` | 同上 |
 | Workspace | `/workspaces` 全套 + `/user/workspace/*` | `workspace.go` |
@@ -108,8 +168,22 @@ GitHub stelee410/
 | 消息 | `POST /sessions/{session_id}/messages`、`/messages/{id}` | `message.go` |
 | 1v1 / 群聊 | `/user/chats/*`、`/user/group-chats/*` | `user_chat.go` / `group_chat.go` |
 | 文件 | `POST /files/upload\|upload-document\|upload-moment-image` | `file.go` |
-| 推送 | `/user/notifications/*`、`/user/events`（SSE） | `notification.go` / `sse.go` |
+| 推送 | `/user/notifications/*`、`/user/events`（SSE legacy，4 周 dual-publish 兼容期）、`/user/events/stream`（SSE BE-004 用户级聚合）、`POST /user/chats/{id}/typing`（BE-001c 整合） | `notification.go` / `sse.go` / `user_events.go` / `chat_typing.go` |
 | Motherland | `POST /system/talk-to-motherland\|auto-talk-round\|generate-topic\|motherland-chat-history\|motherland-chat-reset` | `system.go` |
+
+### 4.2.1 已 Deprecated：social-graph 老关注路由（sunset 2026-07-01）
+
+`social-graph` capability 被 `agent-follow` 取代。以下 5 条老路由仍在服务，但响应头带 RFC 9745 `Deprecation: @<unix-seconds>` + `Sunset: Wed, 01 Jul 2026 00:00:00 GMT`。`Link: <successor>; rel="successor-version"` 指向新路径。前端 SDK 可据此自动重写。
+
+| 老 endpoint | 后继者 | 说明 |
+|---|---|---|
+| `POST /follow` | `POST /api/v1/agents/{id}/follow` | follow target 从 creator id 变为 agent id |
+| `GET /follow/status` | `GET /api/v1/agents/{id}/follow-status` | 响应 shape 保持同型阳子多 1 字段 |
+| `DELETE /follow/{target_creator_id}` | `DELETE /api/v1/agents/{id}/follow` | unfollow幂等 |
+| `GET /followers` | `GET /api/v1/agents/{id}/followers` | per-agent followers 列表 |
+| `GET /following` | `GET /api/v1/me/agent-following` | 我关注的 agents |
+
+定义位置：`@D:\linkyun-agent\cmd\server\main.go:572-590`，`followDeprecationAt = 2026-05-22`，`followSunsetDate = Wed, 01 Jul 2026 00:00:00 GMT`。到期后由后续 change `remove-social-graph-legacy-routes` 删除。
 
 ### 4.3 Edge `api`（X-Edge-Token，无 protected wrapper）
 
@@ -313,7 +387,7 @@ linkyun-agent 部署需要：MySQL 8.0 + Redis 6.0 + ChromaDB（向量库，`KNO
 
 ### 7.4 数据库与基础设施同步链路
 
-**Schema 来源**：`@D:\linkyun-agent\internal\db\migrations\` 共 54 对 `.up.sql/.down.sql`，通过 `//go:embed migrations/*.sql` 嵌入二进制（`@D:\linkyun-agent\internal\db\migrate.go:14-15`）。运行时不依赖磁盘上的 SQL 文件。
+**Schema 来源**：`@D:\linkyun-agent\internal\db\migrations\` 共 64 对 `.up.sql/.down.sql`，通过 `//go:embed migrations/*.sql` 嵌入二进制（`@D:\linkyun-agent\internal\db\migrate.go:14-15`）。运行时不依赖磁盘上的 SQL 文件。近期重要增量：000056 `moment_notifications`、000061-000064 `agents_follow` + `creators.primary_agent_id` 迁移（social-graph → agent-follow、migration_orphan_follows 审计表）。
 
 **应用方式**：
 - 启动时自动：`@D:\linkyun-agent\cmd\server\main.go:120` 在 `initializeApp` 首步调用 `db.Up(dsn)`。
@@ -326,6 +400,19 @@ linkyun-agent 部署需要：MySQL 8.0 + Redis 6.0 + ChromaDB（向量库，`KNO
 
 **Redis / Valkey 兼容**：项目客户端 `go-redis/v8` 走 RESP 协议；Valkey 8 是 Redis 7.2.4 的 BSD fork，协议与命令集完全兼容，可直接复用同一容器。所有 key 走 `linkyun:` 前缀，与他项目共享同 db 不会撞。
 
+**Redis key / Pub/Sub channel 命名约定**：
+
+| 用途 | 模式 | 引入版本 |
+|---|---|---|
+| Session cache | `linkyun:session:*` / `linkyun:msg:*` / `linkyun:agent_prompt:*` | 既有 |
+| Edge worker queue | `linkyun:edge:queue:<agent_uuid>` 等 | 既有 |
+| Skill registry updates | `<key_prefix>:skills:updates` | 既有 |
+| **Per-session Pub/Sub（legacy SSE）** | `linkyun:push:session:<session_id>` | 既有；BE-004 后**仍使用** 4 周用于 chat_message dual-publish |
+| **Per-user Pub/Sub（BE-004 SSE）** | `linkyun:push:user:<user_id>` | BE-004 新增；承载 4 typed events: `moment_like` / `moment_comment` / `chat_message` / `typing` |
+| **Typing indicator TTL（BE-001c）** | `typing:<session_id>:<user_id>` (TTL 5s, no `linkyun:` prefix per design D7) | BE-004 整合 |
+
+**SSE event protocol (BE-004)**：每帧 `event: <type>\ndata: <json>\n\n`，类型 ∈ {`moment_like`, `moment_comment`, `chat_message`, `typing`}。Heartbeat 用 SSE comment `: heartbeat\n\n`，间隔由 `SSE_HEARTBEAT_INTERVAL` env 控制（默认 20s = nginx default proxy_read_timeout / 3）。详见 `@d:\linkyun-agent\openspec\specs\global-user-events\spec.md`（archive 后路径）。
+
 **Chroma 版本**：项目代码走 v2 API（`@D:\linkyun-agent\internal\knowledge\chroma.go:36-39`），镜像必须 `chromadb/chroma:latest` ≥ 0.5。
 
 具体部署步骤（虚拟机 + 本机服务的远程模式）见 `@D:\linkyun-agent\docs\项目功能介绍.md` 6.5 节。
@@ -336,7 +423,7 @@ linkyun-agent 部署需要：MySQL 8.0 + Redis 6.0 + ChromaDB（向量库，`KNO
 
 | 想找什么 | 文件 |
 |---|---|
-| 后端所有路由 | `@D:\linkyun-agent\cmd\server\main.go:313-642` |
+| 后端所有路由 | `@D:\linkyun-agent\cmd\server\main.go:379-805` (`setupHTTPServer()`) |
 | Edge 协议服务端 | `@D:\linkyun-agent\internal\api\handler\edge.go` |
 | Edge 协议客户端 | `@D:\edge-proxy\internal\proxy\proxy.go` |
 | Cloud LLM 路由 | `@D:\linkyun-agent\internal\llm\` (Multi-Provider) |
