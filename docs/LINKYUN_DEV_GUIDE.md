@@ -88,8 +88,8 @@ API_KEY_ENCRYPTION_KEY=<openssl rand -hex 32>
 # CORS 白名单——覆盖 4 个浏览器端全部可能端口 × (localhost 与 127.0.0.1)：
 #   :3000  client-web-ui (Next.js Creator)
 #   :3001  备用 / next dev 冲突时自切
-#   :5173  lumina-ai-chat-hub 与 linkyun-app (Vite 共用)
-#   :5180  linkyun-app 另一个同时跑实例
+#   :5173  lumina-ai-chat-hub (Vite)
+#   :5180  linkyun-concept (Vite, mobile H5)
 CORS_ALLOWED_ORIGINS=http://localhost:3000,http://localhost:3001,http://localhost:5173,http://localhost:5180,http://127.0.0.1:3000,http://127.0.0.1:3001,http://127.0.0.1:5173,http://127.0.0.1:5180
 
 # 知识库 RAG——使用本地部署的 BGE（8080 上的 linkyun-agent + 远端 Chroma + 远端 BGE）
@@ -262,13 +262,13 @@ Invoke-RestMethod -Uri "$base/me/notifications?type=follow&limit=20" -Headers $h
 
 ---
 
-### 2.2 `linkyun-agent-ui` + `linkyun-app` — 浏览器端（3 个独立前端）
+### 2.2 `linkyun-agent-ui` + `linkyun-concept` — 浏览器端（3 个独立前端）
 
 | 子项目 | 角色 | 路径 | 启动 | 前端默认端口 | 源码内嵌后端默认值 |
 |---|---|---|---|---|---|
 | `client-web-ui` | Creator（创建/管理 Agent） | `D:\linkyun-agent-ui\client-web-ui` | `npm run dev` | 3000 | **`:8081`** ⚠️与后端默认端口不符，必须覆盖 |
 | `lumina-ai-chat-hub` | End User（与 Agent 对话，老版 SPA） | `D:\linkyun-agent-ui\client-user-hub\lumina-ai-chat-hub` | `npm run dev` | 5173 | `:8080` ✅零配置 |
-| `linkyun-app` | End User PWA（新 H5 客户端，第 5 仓库） | `D:\linkyun-app` | `pnpm dev` | 5173 / 5180 | `:8080` ✅零配置 |
+| `linkyun-concept` | End User Mobile H5（OYIIOYII Figma 设计，第 5 仓库，代替 `linkyun-app`） | `D:\linkyun-concept` | `pnpm dev` | 5180 | `:8080` ✅零配置 |
 
 **最小 `.env.local`**（服件于本机后端 `:8080`）：
 
@@ -279,8 +279,8 @@ NEXT_PUBLIC_API_URL=http://localhost:8080
 # lumina-ai-chat-hub——默认已对，可选覆盖
 VITE_API_URL=http://localhost:8080
 
-# linkyun-app——默认已对，可选覆盖
-VITE_API_BASE_URL=http://localhost:8080
+# linkyun-concept——默认已对，可选覆盖；mode 驱动 .env.development / .env.production / .env.local
+VITE_API_BASE_URL=http://localhost:8080/api/v1
 ```
 
 **PowerShell 临时覆盖**（不创建 `.env.local` 时）：
@@ -296,7 +296,7 @@ UI 运行后也可以在浏览器 console 热切：
 ```js
 localStorage.setItem('linkyun-api-url-override', 'http://localhost:8080') // client-web-ui
 localStorage.setItem('lumina-api-url-override',  'http://localhost:8080') // lumina
-localStorage.setItem('linkyun-app-api-base',     'http://localhost:8080') // linkyun-app
+localStorage.setItem('linkyun-app-api-base',     'http://localhost:8080') // linkyun-concept (key 历史名保留兼容)
 ```
 
 **生产部署**：在 `D:\linkyun-agent-ui` 根目录跑 `./setup.sh`，交互式问 4 个问题（部署哪些 UI、域名、是否同域代理），自动生成 `docker-compose.yml` + `nginx.conf` + 两个 `Dockerfile`，然后 `docker compose up -d --build`。
@@ -360,20 +360,28 @@ infiniti-agent link               # 从 SOUL.md 抽邮件配置，生成 mail-po
 infiniti-agent generate_avatar    # OpenRouter 图像 API 生成头像
 ```
 
-### 2.5 `linkyun-app` — 移动端 H5 专属命令
+### 2.5 `linkyun-concept` — 移动端 H5 专属命令
 
-5 仓库生态的最新成员，独立于 `linkyun-agent-ui` mono-repo 单独建仓。Vite 8 + React 19 + Tailwind v4 + TanStack Router + Zustand。设计源自 Stitch 9 屏 mobile UI（iPhone 14-pro viewport 390×844）。启动方式与 `.env.local` 配置见 §2.2 浏览器端总表，本节聚焦 `linkyun-app` 专属开发命令矩阵：
+生态第 5 仓库，独立仓 `D:\linkyun-concept`。**代替早期 `linkyun-app`**（后者 Stitch 9 屏 设计，现已废弃）。技术栈：Vite 8 + React + TypeScript + Wrangler（Cloudflare Workers Static Assets）。设计源自 Figma OYIIOYII AI 偶像 H5。启动方式与 `.env.local` 配置见 §2.2 浏览器端总表，本节聚焦 `linkyun-concept` 专属开发命令矩阵：
 
 | 角色 | 操作 |
 |---|---|
-| Mobile 前端开发 | `pnpm install && pnpm dev` |
-| 测试 | `pnpm test:run` |
-| 类型检查 | `pnpm typecheck` |
+| Mobile 前端开发 | `pnpm install && pnpm dev`（:5180） |
+| 单测 | `pnpm test:run`（Vitest，~60 unit，`TZ=Asia/Shanghai`） |
+| E2E 测试 | `pnpm test:e2e`（Playwright Chromium happy-path，3 specs，需后端 :8080 在跑） |
+| E2E UI 模式 | `pnpm test:e2e:ui`（Playwright 交互式 UI） |
+| 类型检查 | `pnpm typecheck`（`tsc --noEmit`） |
 | Lint / Format | `pnpm lint` / `pnpm format:check` |
-| 生产构建 | `pnpm build`（gzip ≤ 200KB 预算） |
-| Bundle 分析 | `pnpm analyze` |
+| 生产构建 | `pnpm build`（`tsc -b && vite build`，Rolldown） |
+| 本地预览 | `pnpm preview` |
 
-详细架构指针见 `linkyun-app` 仓 README + `linkyun-agent` 仓 OpenSpec change `linkyun-app-end-user-h5`。
+**生产部署**：Cloudflare Workers Static Assets（`wrangler.toml`）。CI 调 `pnpm install && pnpm build` + `npx wrangler deploy`，上传 `dist/` 到 CF Workers，`not_found_handling = "single-page-application"` 让任意路径返 `index.html` 供 TanStack Router client-side routing。**本地从不跱 wrangler——`pnpm dev/build` 独立于 CF 管道**。
+
+**Mode-driven .env**：Vite 根据 mode 自动选 `.env`：`pnpm dev` 默认 `development` mode 走 `.env.development`（绑 `localhost:8080`），`pnpm build` 走 `.env.production`（绑 `linkyun.co`）。`.env.local` / `.env.[mode].local` 个人 override且 git ignored。运行时优先级（高覆盖低）：`localStorage['linkyun-app-api-base']`（历史名保留）> `VITE_API_BASE_URL`（编译时注入）。
+
+**与 `linkyun-agent` 后端的协作**：`linkyun-concept` 是 `docs/cross-repo-requests/` brief 的主要发送方。近 1 周 12+ 份 backend-* request 几乎全来自 concept（参见 §2.7）。
+
+详细架构指针见：`linkyun-concept` 仓 `README.md` + `AGENTS.md` + 本仓 archived OpenSpec change `linkyun-app-end-user-h5`（初始设计，linkyun-app 时期）。linkyun-concept 自带 16 个前端 OpenSpec spec（`agent-follow-frontend` / `companions` / `app-shell` / `discovery` / `me` / `notifications` / `auth` / `design-system` / `dev-tools` 等） + 54 个 archived change。
 
 ---
 
@@ -488,10 +496,23 @@ new-item "D:\linkyun-agent\docs\cross-repo-responses\<topic>-shipped-<YYYY-MM-DD
 | `docs/cross-repo-responses/primary-agent-auto-clear-shipped-2026-05-24.md` | 已 ship |
 | `docs/cross-repo-responses/primary-agent-endpoint-shipped-2026-05-22.md` | 已 ship |
 | `docs/cross-repo-responses/frontend-primary-agent-consumed-2026-05-23.md` | 前端确认 |
-| `docs/cross-repo-requests/backend-archived-vs-deleted-status-2026-05-24.md` | 内部 backlog（已 ship） |
-| `docs/cross-repo-requests/backend-follow-notification-2026-05-19.md` | 待评估 |
 
-新增 brief 时同步更新本表。
+**来自 linkyun-concept 的 backend-* request brief**（1 周内，表明主要跨仓协作通道）：
+
+| 文件 | 状态 |
+|---|---|
+| `docs/cross-repo-requests/backend-archived-vs-deleted-status-2026-05-24.md` | 内部 backlog（已 ship via normalize-agent-soft-delete-status） |
+| `docs/cross-repo-requests/backend-primary-agent-auto-clear-on-delete-2026-05-24.md` | 已 ship（commit 702a2e4） |
+| `docs/cross-repo-requests/backend-primary-agent-endpoint-2026-05-22.md` | 已 ship |
+| `docs/cross-repo-requests/backend-agents-follow-migration-2026-05-21.md` | 已 ship |
+| `docs/cross-repo-requests/backend-companion-status-feed-2026-05-20.md` | 待评估 |
+| `docs/cross-repo-requests/backend-follow-notification-2026-05-19.md` | 待评估 |
+| `docs/cross-repo-requests/backend-likes-received-followup-2026-05-18.md` | 待评估 |
+| `docs/cross-repo-requests/backend-social-graph-and-likes-received-2026-05-17.md` | 待评估 |
+| `docs/cross-repo-requests/backend-me-agents-stats-aggregation-2026-05-23.md` | 待评估 |
+| `docs/cross-repo-requests/backend-notification-actor-primary-agent-2026-05-23.md` | 待评估 |
+
+新增 brief 时同步更新本表。待评估的多在等后端 bandwidth 或 OpenSpec change 拆解。
 
 ---
 
@@ -595,13 +616,13 @@ npm run dev
 # 浏览器开 http://localhost:5173，与 edge agent 对话
 
 ═══════════════════════════════════════════════════════
- 终端 6（linkyun-app，常驻；测 mobile end user 视角）
+ 终端 6（linkyun-concept，常驻；测 mobile end user 视角）
 ═══════════════════════════════════════════════════════
-cd D:\linkyun-app
-# 第一次：echo "VITE_API_BASE_URL=http://localhost:8080" > .env.local
+cd D:\linkyun-concept
+# 默认已携 .env.development 走 localhost:8080，需 override 才创 .env.local
 pnpm install
 pnpm dev
-# 浏览器开 http://localhost:5180，从 mobile viewport (390×844) 体验 9 屏 H5
+# 浏览器开 http://localhost:5180，从 mobile viewport 体验 OYIIOYII AI 偶像 H5
 ```
 
 **最快验证全链路通的方法**：
@@ -694,7 +715,7 @@ pnpm dev
 
 12. **`client-web-ui` 默认 `NEXT_PUBLIC_API_URL=http://localhost:8081` 与后端默认 `:8080` 不符**（`@D:\linkyun-agent-ui\client-web-ui\src\lib\api.ts:13`）— 项目本身不携带 `.env.local`，不覆盖会连不上后端。三种覆盖顺序：`localStorage['linkyun-api-url-override']`（运行时）＞ `NEXT_PUBLIC_API_URL`（启动时）＞ 默认 `:8081`。调试时推荐在启动脚本里设 `$env:NEXT_PUBLIC_API_URL="http://localhost:8080"`。参见 §2.2。
 
-13. **邀请码是账号级全局门槛**（`@D:\linkyun-agent\internal\api\handler\auth.go:48-110`）— 后端 `/api/v1/auth/register` 是唯一注册接口，**所有前端都走同一个**，都要带 `invitation_code`（不区分 Creator/End-User）。历史上 `client-web-ui` 的注册 UI 与 API 客户端函数都缺该字段，2026-05-01 修复：`api.ts` `register()` 加第 4 参 + `login/page.tsx` 加邀请码输入框，以 `api.test.ts` 的类型断言锁定契约。`lumina-ai-chat-hub` 与 `linkyun-app` 本来就是合规的。创建邀请码用 `go run .\cmd\linkyun-admin-cli inv-add WELCOME 100`。
+13. **邀请码是账号级全局门槛**（`@D:\linkyun-agent\internal\api\handler\auth.go:48-110`）— 后端 `/api/v1/auth/register` 是唯一注册接口，**所有前端都走同一个**，都要带 `invitation_code`（不区分 Creator/End-User）。历史上 `client-web-ui` 的注册 UI 与 API 客户端函数都缺该字段，2026-05-01 修复：`api.ts` `register()` 加第 4 参 + `login/page.tsx` 加邀请码输入框，以 `api.test.ts` 的类型断言锁定契约。`lumina-ai-chat-hub` 与 `linkyun-app` 本来就是合规的（**注**：2026-05-12 后 `linkyun-app` 被 `linkyun-concept` 替代，concept 也合规）。创建邀请码用 `go run .\cmd\linkyun-admin-cli inv-add WELCOME 100`。
 
 14. **`embedding` provider 路由逻辑不是广义的**（`@D:\linkyun-agent\internal\knowledge\embedding.go:24-50`）— `KNOWLEDGE_EMBEDDING_PROVIDER` 取值为 `"openai"` 或 `"tongyi"` 时 baseURL **写死**为官方地址，**会忽略 `EMBEDDING_BASE_URL`**；只有取其他值（如 `local` / `bge` / `siliconflow` 等任意字串）才走 `default` 分支读你自己填的 baseURL。另外 `EMBEDDING_API_KEY` 被设为非空字符串（如填 `"sk-"`）时会发 `Authorization: Bearer sk-`，本地 BGE 不校验 token 不出问题，但接严格验证的服务会 401。应留空让其 fallback 到 `OPENAI_API_KEY`（也可为空）。
 

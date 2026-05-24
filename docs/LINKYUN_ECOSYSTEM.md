@@ -13,7 +13,7 @@ GitHub stelee410/
 ├── linkyun-agent-ui    — Next.js + Vite 前端（D:\linkyun-agent-ui）  ← user-facing UI
 ├── edge-proxy          — Go TUI 长轮询客户端（D:\edge-proxy）        ← edge runtime
 ├── infiniti-agent      — Node CLI/Electron（D:\infiniti-agent）      ← 本地桌面 Agent
-└── linkyun-app         — Vite + React 19 SPA（D:\linkyun-app）       ← mobile H5 client
+└── linkyun-concept     — Vite 8 + Wrangler/CF Workers（D:\linkyun-concept）← mobile H5 client
 
                 ┌───────────────────────────────────────────────────┐
                 │  linkyun-agent  (Go, gorilla/mux, :8080)          │
@@ -40,14 +40,15 @@ GitHub stelee410/
         │             │  │              │  │           │  │ +Rules.mdc  │
         └─────────────┘  └──────────────┘  │  - sync   │  │ +MCP/Sandbox│
                          ┌──────────────┐  │  - link   │  │ +SQLite     │
-                         │ linkyun-app  │  │  - cli    │  └─────────────┘
-                         │ (End User    │  └─────┬─────┘
-                         │  Mobile)     │        │ ws (本机)
-                         │ Vite SPA     │        ▼
-                         │ 在 :5180 跑  │ ┌──────────────┐
-                         │ 9 屏 Stitch  │ │ Electron     │
-                         │ Tweaks . PWA │ │ LiveUI 渲染端│
-                         └──────────────┘ └──────────────┘
+                         │ linkyun-     │  │  - cli    │  └─────────────┘
+                         │ concept      │  └─────┬─────┘
+                         │ (End User    │        │ ws (本机)
+                         │  Mobile)     │        ▼
+                         │ Vite 8 + CF  │ ┌──────────────┐
+                         │ Workers      │ │ Electron     │
+                         │ 在 :5180 跑  │ │ LiveUI 渲染端│
+                         │ OYIIOYII H5  │ └──────────────┘
+                         └──────────────┘
 ```
 
 ---
@@ -60,7 +61,7 @@ GitHub stelee410/
 | **linkyun-agent-ui** | `stelee410/linkyun-agent-ui` | TS / Next.js + Vite | 浏览器界面，分 Creator UI（`client-web-ui`，:8081）和 User Hub（`lumina-ai-chat-hub`，:8080） |
 | **edge-proxy** | `stelee410/edge-proxy` | Go 1.24 / `linkyun-edge-proxy` | 把 Agent 执行下放到本地：长轮询拿请求 → 本地 LLM 跑 → 推回云端，支持 11 种 LLM、Skills、Rules、MCP、Sandbox、TTS |
 | **infiniti-agent** | `stelee410/infiniti-agent` | Node 20 / `linkyun-infiniti-agent` | 个人桌面 Agent CLI：自带 LiveUI（Live2D + TTS + ASR）+ 邮件守护 + 项目级独立空间，可独立运行也可同步云端 |
-| **linkyun-app** | `stelee410/linkyun-app` | TS / Vite + React 19 | 移动端 H5 End User 客户端：iPhone 14-pro viewport 390×844，9 屏 Stitch 设计；与 lumina-ai-chat-hub 共享后端，运行端口 :5180 |
+| **linkyun-concept** | `stelee410/linkyun-concept` (upstream) / `lizheng419/linkyun-concept` (fork) | TS / Vite 8 + Wrangler | 移动端 H5 End User 客户端。设计源：Figma OYIIOYII AI 偶像；代替早期 `linkyun-app` (Stitch 设计)。与 lumina-ai-chat-hub 共享后端，运行端口 :5180，生产部署到 Cloudflare Workers Static Assets。自带 16 个前端 OpenSpec spec + 54 archived change |
 
 ---
 
@@ -367,7 +368,7 @@ linkyun-agent 部署需要：MySQL 8.0 + Redis 6.0 + ChromaDB（向量库，`KNO
   :8080 ── linkyun-agent (Go)              （go run cmd/server/main.go）
   :8081 ── client-web-ui (Next.js dev)     （npm run dev）
   :5173 ── lumina-ai-chat-hub (Vite dev)   （npm run dev，但配置默认指向 :8080）
-  :5180 ── linkyun-app (Vite dev)         （pnpm dev）
+  :5180 ── linkyun-concept (Vite dev)     （pnpm dev）
   :3306 ── MySQL
   :6379 ── Redis
   :8000 ── Chroma（可选）
@@ -487,7 +488,7 @@ linkyun-agent 部署需要：MySQL 8.0 + Redis 6.0 + ChromaDB（向量库，`KNO
 端口
   :8080  linkyun-agent (HTTP)
   :8080  lumina-ai-chat-hub dev (UI)
-  :5180  linkyun-app dev (Mobile UI)
+  :5180  linkyun-concept dev (Mobile UI)
   :8081  client-web-ui dev (UI)
   :3306  MySQL
   :6379  Redis
