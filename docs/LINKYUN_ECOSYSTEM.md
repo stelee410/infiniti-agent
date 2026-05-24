@@ -9,11 +9,11 @@
 
 ```text
 GitHub stelee410/
-├── linkyun-agent       — Go HTTP 后端（D:\linkyun-agent）            ← cloud backend
-├── linkyun-agent-ui    — Next.js + Vite 前端（D:\linkyun-agent-ui）  ← user-facing UI
-├── edge-proxy          — Go TUI 长轮询客户端（D:\edge-proxy）        ← edge runtime
-├── infiniti-agent      — Node CLI/Electron（D:\infiniti-agent）      ← 本地桌面 Agent
-└── linkyun-concept     — Vite 8 + Wrangler/CF Workers（D:\linkyun-concept）← mobile H5 client
+├── linkyun-agent       — Go HTTP 后端（linkyun-agent）            ← cloud backend
+├── linkyun-agent-ui    — Next.js + Vite 前端（linkyun-agent-ui）  ← user-facing UI
+├── edge-proxy          — Go TUI 长轮询客户端（edge-proxy）        ← edge runtime
+├── infiniti-agent      — Node CLI/Electron（infiniti-agent）      ← 本地桌面 Agent
+└── linkyun-concept     — Vite 8 + Wrangler/CF Workers（linkyun-concept）← mobile H5 client
 
                 ┌───────────────────────────────────────────────────┐
                 │  linkyun-agent  (Go, gorilla/mux, :8080)          │
@@ -69,8 +69,8 @@ GitHub stelee410/
 
 | Header | 颁发方 | 持有者 | 解析位置 | 用于 |
 |---|---|---|---|---|
-| `X-API-Key` | `/api/v1/auth/login` 返回，存 `creators.api_key` | Creator 三端：client-web-ui / infiniti-agent / 部分 lumina-hub | `@D:\linkyun-agent\internal\api\middleware\auth.go` | 全部 `protected.*` 路由 |
-| `X-Edge-Token` | Creator 在 UI 创建 edge agent 时生成（前缀 `et_`） | edge-proxy（每实例绑一个 agent uuid） | `@D:\linkyun-agent\internal\api\handler\edge.go:46` | `/api/v1/edge/*` |
+| `X-API-Key` | `/api/v1/auth/login` 返回，存 `creators.api_key` | Creator 三端：client-web-ui / infiniti-agent / 部分 lumina-hub | `@linkyun-agent/internal/api/middleware/auth.go` | 全部 `protected.*` 路由 |
+| `X-Edge-Token` | Creator 在 UI 创建 edge agent 时生成（前缀 `et_`） | edge-proxy（每实例绑一个 agent uuid） | `@linkyun-agent/internal/api/handler/edge.go:46` | `/api/v1/edge/*` |
 | `X-Internal-API-Key` | `.env` 配置 | 服务端内部脚本 | `RequireCreatorOrInternalAuth` | `/api/v1/user/push-messages` |
 | `X-Share-User-Code` | 分享访客 cookie | 公开分享对话访客 | `RequireGuestAuth` | `/api/v1/public/share/{token}/...` |
 | `X-Workspace-Code` | Creator 选定 workspace 后 | infiniti-agent `linkyunSync.ts`（UI 暂未用） | `WorkspaceHandler` | 工作区作用域过滤 |
@@ -97,7 +97,7 @@ GitHub stelee410/
 | User | 同上 | TBD |
 | Session | `POST /api/v1/sessions/{id}/end` | Redis cache invalidate |
 | Workspace | `DELETE /api/v1/workspaces/{id}` | 独立结束事务 |
-| **Agent** | **`DELETE /api/v1/agents/{id}`** | **同事务清 `creators.primary_agent_id` FK（见 `@D:\linkyun-agent\internal\repository\repository.go` `AgentRepository.SoftDelete`）** |
+| **Agent** | **`DELETE /api/v1/agents/{id}`** | **同事务清 `creators.primary_agent_id` FK（见 `@linkyun-agent/internal/repository/repository.go` `AgentRepository.SoftDelete`）** |
 
 **如何验证一致性**：
 
@@ -108,7 +108,7 @@ grep -rn "ag\.status\s*!=\s*'archived'" internal/repository/
 # 使用 'deleted' 作为 Agent 软删状态的代码都是 bug（闭眼查）
 ```
 
-**设计源**：`@D:\linkyun-agent\openspec\changes\archive\2026-05-24-normalize-agent-soft-delete-status\design.md`。
+**设计源**：`@linkyun-agent/openspec/changes/archive/2026-05-24-normalize-agent-soft-delete-status/design.md`。
 
 ---
 
@@ -118,17 +118,17 @@ grep -rn "ag\.status\s*!=\s*'archived'" internal/repository/
 
 | Capability | 主要 endpoint / 机制 | Spec 路径 |
 |---|---|---|
-| `agent-follow` | 6 路由：`POST/DELETE /agents/{id}/follow` / `GET /agents/{id}/follow-status` / `GET /agents/{id}/followers` / `GET /me/agent-following` / `PUT /me/primary-agent`；Agent 软删 sentinel = `'archived'`；primary_agent_id auto-clear-on-soft-delete | `@D:\linkyun-agent\openspec\specs\agent-follow\spec.md` |
-| `social-graph` (**deprecated**, sunset 2026-07-01) | 5 路由，全部带 RFC 9745 `Deprecation`+`Sunset` 响应头，successor 指向 agent-follow 对应路径 | `@D:\linkyun-agent\openspec\specs\social-graph\spec.md` |
-| `moment-notifications` | `/me/notifications/*`；like / comment / **follow** 三类通知；NotifyFollow 静默跳过 archived agent | `@D:\linkyun-agent\openspec\specs\moment-notifications\spec.md` |
-| `global-user-events` | BE-004 用户级 SSE `/user/events/stream`；4 typed events: `moment_like` / `moment_comment` / `chat_message` / `typing` | `@D:\linkyun-agent\openspec\specs\global-user-events\spec.md` |
-| `agent-tagline` | `agents` 资源的 `tagline` 字段及 PublicAgent shape | `@D:\linkyun-agent\openspec\specs\agent-tagline\spec.md` |
-| `agent-mood` | `PATCH/DELETE /agents/{id}/mood` + cron 12h 自动生成 | `@D:\linkyun-agent\openspec\specs\agent-mood\spec.md` |
-| `group-chat-participants` | 群聊会话 participant CRUD | `@D:\linkyun-agent\openspec\specs\group-chat-participants\spec.md` |
-| `mine-agents-list` | `GET /me/agents`（带 followers stat） | `@D:\linkyun-agent\openspec\specs\mine-agents-list\spec.md` |
-| `profile-stats` | `GET /profile/stats` + Redis 30s cache + singleflight | `@D:\linkyun-agent\openspec\specs\profile-stats\spec.md` |
-| `user-chats-pinning` | 1v1 chat 置顶机制 | `@D:\linkyun-agent\openspec\specs\user-chats-pinning\spec.md` |
-| `workspace-online-stats` | workspace 在线 agent 统计 | `@D:\linkyun-agent\openspec\specs\workspace-online-stats\spec.md` |
+| `agent-follow` | 6 路由：`POST/DELETE /agents/{id}/follow` / `GET /agents/{id}/follow-status` / `GET /agents/{id}/followers` / `GET /me/agent-following` / `PUT /me/primary-agent`；Agent 软删 sentinel = `'archived'`；primary_agent_id auto-clear-on-soft-delete | `@linkyun-agent/openspec/specs/agent-follow/spec.md` |
+| `social-graph` (**deprecated**, sunset 2026-07-01) | 5 路由，全部带 RFC 9745 `Deprecation`+`Sunset` 响应头，successor 指向 agent-follow 对应路径 | `@linkyun-agent/openspec/specs/social-graph/spec.md` |
+| `moment-notifications` | `/me/notifications/*`；like / comment / **follow** 三类通知；NotifyFollow 静默跳过 archived agent | `@linkyun-agent/openspec/specs/moment-notifications/spec.md` |
+| `global-user-events` | BE-004 用户级 SSE `/user/events/stream`；4 typed events: `moment_like` / `moment_comment` / `chat_message` / `typing` | `@linkyun-agent/openspec/specs/global-user-events/spec.md` |
+| `agent-tagline` | `agents` 资源的 `tagline` 字段及 PublicAgent shape | `@linkyun-agent/openspec/specs/agent-tagline/spec.md` |
+| `agent-mood` | `PATCH/DELETE /agents/{id}/mood` + cron 12h 自动生成 | `@linkyun-agent/openspec/specs/agent-mood/spec.md` |
+| `group-chat-participants` | 群聊会话 participant CRUD | `@linkyun-agent/openspec/specs/group-chat-participants/spec.md` |
+| `mine-agents-list` | `GET /me/agents`（带 followers stat） | `@linkyun-agent/openspec/specs/mine-agents-list/spec.md` |
+| `profile-stats` | `GET /profile/stats` + Redis 30s cache + singleflight | `@linkyun-agent/openspec/specs/profile-stats/spec.md` |
+| `user-chats-pinning` | 1v1 chat 置顶机制 | `@linkyun-agent/openspec/specs/user-chats-pinning/spec.md` |
+| `workspace-online-stats` | workspace 在线 agent 统计 | `@linkyun-agent/openspec/specs/workspace-online-stats/spec.md` |
 
 使用 `openspec list --json` 查看当前 active changes，`openspec show <capability>` 查看具体 spec。
 
@@ -136,7 +136,7 @@ grep -rn "ag\.status\s*!=\s*'archived'" internal/repository/
 
 ## 4. API 路由全景（按鉴权分组）
 
-源代码：`@D:\linkyun-agent\cmd\server\main.go:379-805`（函数 `setupHTTPServer()`），全 >110 个 endpoint 集中在一个函数中注册。下面只列**涉及客户端交互**的核心子集。
+源代码：`@linkyun-agent/cmd/server/main.go:379-805`（函数 `setupHTTPServer()`），全 >110 个 endpoint 集中在一个函数中注册。下面只列**涉及客户端交互**的核心子集。
 
 ### 4.1 公开 `api`（无鉴权）
 
@@ -153,10 +153,10 @@ grep -rn "ag\.status\s*!=\s*'archived'" internal/repository/
 
 | 用途分类 | 主要 endpoint | Handler 文件 |
 |---|---|---|
-| 资料 | `GET/PUT /profile`、`POST/DELETE /profile/avatar`、`PUT /profile/password` | `@D:\linkyun-agent\internal\api\handler\profile.go` |
-| Agent CRUD | `GET/POST /agents`、`GET/PUT/DELETE /agents/{id}`、`/by-code/{code}`、`/discover`、`/{id}/publish` | `@D:\linkyun-agent\internal\api\handler\agent.go` |
-| **Agent 关注（`agent-follow`）** | **`POST/DELETE /agents/{id}/follow`、`GET /agents/{id}/followers`、`GET /agents/{id}/follow-status`、`GET /me/agent-following`。请注意：DELETE 不检查 target 状态（幂等清理）；其他 4 路由对 `status='archived'` 返 404。** | `@D:\linkyun-agent\internal\api\handler\agent_follow.go` |
-| **主形象（`agent-follow`/primary）** | **`PUT /me/primary-agent` body `{"agent_id": N}`。Agent 创建时 auto-set first agent；DELETE agent 同事务 NULL-out 此 FK。** | `@D:\linkyun-agent\internal\api\handler\profile_primary_agent.go` |
+| 资料 | `GET/PUT /profile`、`POST/DELETE /profile/avatar`、`PUT /profile/password` | `@linkyun-agent/internal/api/handler/profile.go` |
+| Agent CRUD | `GET/POST /agents`、`GET/PUT/DELETE /agents/{id}`、`/by-code/{code}`、`/discover`、`/{id}/publish` | `@linkyun-agent/internal/api/handler/agent.go` |
+| **Agent 关注（`agent-follow`）** | **`POST/DELETE /agents/{id}/follow`、`GET /agents/{id}/followers`、`GET /agents/{id}/follow-status`、`GET /me/agent-following`。请注意：DELETE 不检查 target 状态（幂等清理）；其他 4 路由对 `status='archived'` 返 404。** | `@linkyun-agent/internal/api/handler/agent_follow.go` |
+| **主形象（`agent-follow`/primary）** | **`PUT /me/primary-agent` body `{"agent_id": N}`。Agent 创建时 auto-set first agent；DELETE agent 同事务 NULL-out 此 FK。** | `@linkyun-agent/internal/api/handler/profile_primary_agent.go` |
 | Agent 头像 | `POST/DELETE /agents/{id}/avatar`、`POST /agents/{id}/avatar/generate-preview` | 同上 |
 | Agent mood | `PATCH/DELETE /agents/{id}/mood`（capability `agent-mood`：creator 覆盖 / 重置；cron 默认 12h 自动生成） | `creator_agent_mood.go` |
 | 角色设定 | `POST /agents/{id}/optimize-narrative`、`POST /agents/{id}/character-design/generate-spec\|generate-sheet\|save` | 同上（**调 Motherland Agent**） |
@@ -184,11 +184,11 @@ grep -rn "ag\.status\s*!=\s*'archived'" internal/repository/
 | `GET /followers` | `GET /api/v1/agents/{id}/followers` | per-agent followers 列表 |
 | `GET /following` | `GET /api/v1/me/agent-following` | 我关注的 agents |
 
-定义位置：`@D:\linkyun-agent\cmd\server\main.go:572-590`，`followDeprecationAt = 2026-05-22`，`followSunsetDate = Wed, 01 Jul 2026 00:00:00 GMT`。到期后由后续 change `remove-social-graph-legacy-routes` 删除。
+定义位置：`@linkyun-agent/cmd/server/main.go:572-590`，`followDeprecationAt = 2026-05-22`，`followSunsetDate = Wed, 01 Jul 2026 00:00:00 GMT`。到期后由后续 change `remove-social-graph-legacy-routes` 删除。
 
 ### 4.3 Edge `api`（X-Edge-Token，无 protected wrapper）
 
-注册段：`@D:\linkyun-agent\cmd\server\main.go:580-609`
+注册段：`@linkyun-agent/cmd/server/main.go:580-609`
 
 | Endpoint | Handler | 用途 |
 |---|---|---|
@@ -208,7 +208,7 @@ grep -rn "ag\.status\s*!=\s*'archived'" internal/repository/
 
 | Endpoint | 调用方 | 文件 |
 |---|---|---|
-| `GET /messages/inbox/{boxId}/unprocessed` | infiniti-agent `link.ts` | `@d:\infiniti-agent\src\link.ts:54-59` |
+| `GET /messages/inbox/{boxId}/unprocessed` | infiniti-agent `link.ts` | `@infiniti-agent/src/link.ts:54-59` |
 | `POST /messages/inbox/{boxId}/processed` | 同上 | 同文件 |
 
 amp 是独立子域，可能在同一个 `linkyun-agent` 进程上挂另一个虚拟主机，也可能是另一个微服务（仓库内未发现 amp 的 Go handler，可能由反向代理转发到第三方邮件服务）。
@@ -288,19 +288,19 @@ End User      lumina-hub      linkyun-agent             edge-proxy           本
 ```
 
 设计要点：
-- 服务端 BRPop 超时（28s）比客户端 HTTP timeout（30s）短 2s，避免 race（`@D:\linkyun-agent\internal\api\handler\edge.go:174-178`）
+- 服务端 BRPop 超时（28s）比客户端 HTTP timeout（30s）短 2s，避免 race（`@linkyun-agent/internal/api/handler/edge.go:174-178`）
 - `/edge/notify` 是离应答通道之外的旁路，能在不破坏会话顺序的前提下推"思考中…"或异步 TTS 音频
 
 ### 5.3 Motherland 流（创作者制作 Agent 时的辅助）
 
-`Motherland Service`（`@D:\linkyun-agent\cmd\server\main.go:206`）是一个**系统级 Agent**，`creators` 表中预置一个 motherland creator + agent，用平台默认 LLM。
+`Motherland Service`（`@linkyun-agent/cmd/server/main.go:206`）是一个**系统级 Agent**，`creators` 表中预置一个 motherland creator + agent，用平台默认 LLM。
 当 Creator 在 UI 中触发：
 - `optimize-narrative` → 拿当前提示词稿、近期对话喂给 motherland，输出优化后的 system prompt
 - `character-design/generate-spec` → 多模态输入（提示词+头像+对话），输出角色设定文本
 - `character-design/generate-sheet` → 设定文本 → 漫画式角色稿（Nano Banana / Gemini 多图模型）
 - `avatar/generate-preview` → 同管线，单张半身像
 
-infiniti-agent 的 `generate_avatar` 命令（`@d:\infiniti-agent\src\cli\generateAvatar.ts`）走的是另一条路 — 直接用 OpenRouter 图像 API，不经过 motherland。
+infiniti-agent 的 `generate_avatar` 命令（`@infiniti-agent/src/cli/generateAvatar.ts`）走的是另一条路 — 直接用 OpenRouter 图像 API，不经过 motherland。
 
 ### 5.4 邮件守护流（infiniti-agent 独有）
 
@@ -318,7 +318,7 @@ infiniti-agent 的 `generate_avatar` 命令（`@d:\infiniti-agent\src\cli\genera
                                                   POST processed → 邮件回执
 ```
 
-`@d:\infiniti-agent\src\cli\generateMailPollerScript.ts` 生成 watch shell 脚本。
+`@infiniti-agent/src/cli/generateMailPollerScript.ts` 生成 watch shell 脚本。
 
 ### 5.5 infiniti-agent 同步流
 
@@ -327,7 +327,7 @@ infiniti-agent 的 `generate_avatar` 命令（`@d:\infiniti-agent\src\cli\genera
 2. 用户选一个 → `GET /api/v1/agents/{id}` 拉详情
 3. 写到当前目录 `SOUL.md`、`INFINITI.md`、`.infiniti-agent/character_sheet.png`
 
-代码：`@d:\infiniti-agent\src\cli\linkyunSync.ts`。
+代码：`@infiniti-agent/src/cli/linkyunSync.ts`。
 
 ---
 
@@ -337,9 +337,9 @@ infiniti-agent 的 `generate_avatar` 命令（`@d:\infiniti-agent\src\cli\genera
 |---|---|---|
 | 三阶段 | `pre_conversation` / `mid_conversation` / `post_conversation` | 同名 |
 | 三类型 | `prompt-based` / `prompt-api` / `code` | 同名 |
-| 配置存储 | DB `creator_skills` 表 | `D:\edge-proxy\skills/<name>/SKILL.{json\|yaml\|md}` |
-| 内置 skill | `@D:\linkyun-agent\internal\skills\builtin.go`、`builtin_post.go`、`minimaxi_tts.go`、`create_docx.go` | `current-time` / `get_weather` / `voice-tts` / `web_search` / `trending` / `trending_hackernews` |
-| Pipeline | `@D:\linkyun-agent\internal\skills\pipeline.go` | `@D:\edge-proxy\internal\skills\pipeline.go` |
+| 配置存储 | DB `creator_skills` 表 | `edge-proxy/skills/<name>/SKILL.{json\|yaml\|md}` |
+| 内置 skill | `@linkyun-agent/internal/skills/builtin.go`、`builtin_post.go`、`minimaxi_tts.go`、`create_docx.go` | `current-time` / `get_weather` / `voice-tts` / `web_search` / `trending` / `trending_hackernews` |
+| Pipeline | `@linkyun-agent/internal/skills/pipeline.go` | `@edge-proxy/internal/skills/pipeline.go` |
 | 注入 SystemPrompt | pre 阶段 | pre 阶段 + Rules 引擎 (.mdc 热加载) |
 | TTS 实现 | MiniMax (`minimaxi_tts.go`) | OpenAI / MiniMax (`internal/tts/`) |
 
@@ -388,10 +388,10 @@ linkyun-agent 部署需要：MySQL 8.0 + Redis 6.0 + ChromaDB（向量库，`KNO
 
 ### 7.4 数据库与基础设施同步链路
 
-**Schema 来源**：`@D:\linkyun-agent\internal\db\migrations\` 共 64 对 `.up.sql/.down.sql`，通过 `//go:embed migrations/*.sql` 嵌入二进制（`@D:\linkyun-agent\internal\db\migrate.go:14-15`）。运行时不依赖磁盘上的 SQL 文件。近期重要增量：000056 `moment_notifications`、000061-000064 `agents_follow` + `creators.primary_agent_id` 迁移（social-graph → agent-follow、migration_orphan_follows 审计表）。
+**Schema 来源**：`@linkyun-agent/internal/db/migrations\` 共 64 对 `.up.sql/.down.sql`，通过 `//go:embed migrations/*.sql` 嵌入二进制（`@linkyun-agent/internal/db/migrate.go:14-15`）。运行时不依赖磁盘上的 SQL 文件。近期重要增量：000056 `moment_notifications`、000061-000064 `agents_follow` + `creators.primary_agent_id` 迁移（social-graph → agent-follow、migration_orphan_follows 审计表）。
 
 **应用方式**：
-- 启动时自动：`@D:\linkyun-agent\cmd\server\main.go:120` 在 `initializeApp` 首步调用 `db.Up(dsn)`。
+- 启动时自动：`@linkyun-agent/cmd/server/main.go:120` 在 `initializeApp` 首步调用 `db.Up(dsn)`。
 - 手动 CLI：`go run ./cmd/migrate {up|down|version|force <ver>}`。
 - Bash 包装：`./scripts/migrate.sh up`。
 
@@ -412,11 +412,11 @@ linkyun-agent 部署需要：MySQL 8.0 + Redis 6.0 + ChromaDB（向量库，`KNO
 | **Per-user Pub/Sub（BE-004 SSE）** | `linkyun:push:user:<user_id>` | BE-004 新增；承载 4 typed events: `moment_like` / `moment_comment` / `chat_message` / `typing` |
 | **Typing indicator TTL（BE-001c）** | `typing:<session_id>:<user_id>` (TTL 5s, no `linkyun:` prefix per design D7) | BE-004 整合 |
 
-**SSE event protocol (BE-004)**：每帧 `event: <type>\ndata: <json>\n\n`，类型 ∈ {`moment_like`, `moment_comment`, `chat_message`, `typing`}。Heartbeat 用 SSE comment `: heartbeat\n\n`，间隔由 `SSE_HEARTBEAT_INTERVAL` env 控制（默认 20s = nginx default proxy_read_timeout / 3）。详见 `@d:\linkyun-agent\openspec\specs\global-user-events\spec.md`（archive 后路径）。
+**SSE event protocol (BE-004)**：每帧 `event: <type>\ndata: <json>\n\n`，类型 ∈ {`moment_like`, `moment_comment`, `chat_message`, `typing`}。Heartbeat 用 SSE comment `: heartbeat\n\n`，间隔由 `SSE_HEARTBEAT_INTERVAL` env 控制（默认 20s = nginx default proxy_read_timeout / 3）。详见 `@linkyun-agent/openspec/specs/global-user-events/spec.md`（archive 后路径）。
 
-**Chroma 版本**：项目代码走 v2 API（`@D:\linkyun-agent\internal\knowledge\chroma.go:36-39`），镜像必须 `chromadb/chroma:latest` ≥ 0.5。
+**Chroma 版本**：项目代码走 v2 API（`@linkyun-agent/internal/knowledge/chroma.go:36-39`），镜像必须 `chromadb/chroma:latest` ≥ 0.5。
 
-具体部署步骤（虚拟机 + 本机服务的远程模式）见 `@D:\linkyun-agent\docs\项目功能介绍.md` 6.5 节。
+具体部署步骤（虚拟机 + 本机服务的远程模式）见 `@linkyun-agent/docs/项目功能介绍.md` 6.5 节。
 
 ---
 
@@ -424,19 +424,19 @@ linkyun-agent 部署需要：MySQL 8.0 + Redis 6.0 + ChromaDB（向量库，`KNO
 
 | 想找什么 | 文件 |
 |---|---|
-| 后端所有路由 | `@D:\linkyun-agent\cmd\server\main.go:379-805` (`setupHTTPServer()`) |
-| Edge 协议服务端 | `@D:\linkyun-agent\internal\api\handler\edge.go` |
-| Edge 协议客户端 | `@D:\edge-proxy\internal\proxy\proxy.go` |
-| Cloud LLM 路由 | `@D:\linkyun-agent\internal\llm\` (Multi-Provider) |
-| Cloud Skills 引擎 | `@D:\linkyun-agent\internal\skills\pipeline.go` |
-| Edge Skills 引擎 | `@D:\edge-proxy\internal\skills\pipeline.go` |
-| UI Creator 入口 | `@D:\linkyun-agent-ui\client-web-ui\src\lib\api.ts` |
-| UI End User 入口 | `@D:\linkyun-agent-ui\client-user-hub\lumina-ai-chat-hub\services\api.ts` |
-| infiniti-agent 同步 | `@d:\infiniti-agent\src\cli\linkyunSync.ts` |
-| infiniti-agent 邮件桥 | `@d:\infiniti-agent\src\link.ts` |
-| 共享 Edge model | `@D:\linkyun-agent\internal\models\edge.go` |
-| Agent DB schema | `@D:\linkyun-agent\internal\models\agent.go` |
-| 数据库迁移 | `@D:\linkyun-agent\internal\db\migrations\` |
+| 后端所有路由 | `@linkyun-agent/cmd/server/main.go:379-805` (`setupHTTPServer()`) |
+| Edge 协议服务端 | `@linkyun-agent/internal/api/handler/edge.go` |
+| Edge 协议客户端 | `@edge-proxy/internal/proxy/proxy.go` |
+| Cloud LLM 路由 | `@linkyun-agent/internal/llm\` (Multi-Provider) |
+| Cloud Skills 引擎 | `@linkyun-agent/internal/skills/pipeline.go` |
+| Edge Skills 引擎 | `@edge-proxy/internal/skills/pipeline.go` |
+| UI Creator 入口 | `@linkyun-agent-ui/client-web-ui/src/lib/api.ts` |
+| UI End User 入口 | `@linkyun-agent-ui/client-user-hub/lumina-ai-chat-hub/services/api.ts` |
+| infiniti-agent 同步 | `@infiniti-agent/src/cli/linkyunSync.ts` |
+| infiniti-agent 邮件桥 | `@infiniti-agent/src/link.ts` |
+| 共享 Edge model | `@linkyun-agent/internal/models/edge.go` |
+| Agent DB schema | `@linkyun-agent/internal/models/agent.go` |
+| 数据库迁移 | `@linkyun-agent/internal/db/migrations\` |
 | schema 状态表 | MySQL `schema_migrations`（golang-migrate 自动维护，记录 version + dirty） |
 
 ---
@@ -450,7 +450,7 @@ linkyun-agent 部署需要：MySQL 8.0 + Redis 6.0 + ChromaDB（向量库，`KNO
 **目标**：让 Creator 在云端 UI 上看到"我的桌面 Live Agent 在线"，把 Live2D + 个性化记忆作为 edge 能力暴露给云端用户。
 
 **落点**：
-- 新增 `@d:\infiniti-agent\src\edge/`：`client.ts`（HTTP 长轮询）、`protocol.ts`（mirror `models.EdgeResponse/EdgeStreamChunk` 字段）、`session.ts`（绑定到 `.infiniti-agent/` 项目）
+- 新增 `@infiniti-agent/src/edge/`：`client.ts`（HTTP 长轮询）、`protocol.ts`（mirror `models.EdgeResponse/EdgeStreamChunk` 字段）、`session.ts`（绑定到 `.infiniti-agent/` 项目）
 - CLI 新增子命令 `infiniti-agent edge --token=et_xxx`，复用 `runChatTui` 现有 LLM 循环
 - `config.json` 加 `edge: { token, agentUuid, serverUrl }` 节
 - `runToolLoop` 流式输出转换为 `/edge/stream-respond` 的 NDJSON
@@ -512,8 +512,8 @@ LLM Provider
        moonshot / zhipu / ernie + ollama-openai 兼容
 
 文档维护
-  本文件路径：d:\infiniti-agent\docs\LINKYUN_ECOSYSTEM.md
-  改动后请同步 d:\infiniti-agent\docs\PROJECT_OVERVIEW.md 中"LinkYun 平台集成"章节
+  本文件路径：infiniti-agent/docs/LINKYUN_ECOSYSTEM.md
+  改动后请同步 infiniti-agent/docs/PROJECT_OVERVIEW.md 中"LinkYun 平台集成"章节
 ```
 
 ---
@@ -522,18 +522,18 @@ LLM Provider
 
 每一处声明都可在以下文件验证：
 
-- `@D:\linkyun-agent\cmd\server\main.go`（路由全集）
-- `@D:\linkyun-agent\internal\api\handler\edge.go`（Edge 服务端）
-- `@D:\linkyun-agent\internal\api\middleware\auth.go`（鉴权）
-- `@D:\linkyun-agent\.env.example`（部署变量）
-- `@D:\linkyun-agent\README.md`（架构与示例）
-- `@D:\edge-proxy\cmd\main.go`（Edge 客户端入口）
-- `@D:\edge-proxy\internal\proxy\proxy.go`（Edge 长轮询）
-- `@D:\edge-proxy\edge-proxy-config.yaml.example`（Edge 配置）
-- `@D:\edge-proxy\summary.md`（Edge 项目总结）
-- `@D:\linkyun-agent-ui\client-web-ui\src\lib\api.ts`（Creator UI API）
-- `@D:\linkyun-agent-ui\client-user-hub\lumina-ai-chat-hub\services\api.ts`（User UI API）
-- `@d:\infiniti-agent\src\cli\linkyunSync.ts`（CLI 同步）
-- `@d:\infiniti-agent\src\link.ts`（CLI 邮件桥）
-- `@d:\infiniti-agent\package.json`（CLI 包定义）
-- `@d:\infiniti-agent\docs\PROJECT_OVERVIEW.md`（CLI 自身文档）
+- `@linkyun-agent/cmd/server/main.go`（路由全集）
+- `@linkyun-agent/internal/api/handler/edge.go`（Edge 服务端）
+- `@linkyun-agent/internal/api/middleware/auth.go`（鉴权）
+- `@linkyun-agent/.env.example`（部署变量）
+- `@linkyun-agent/README.md`（架构与示例）
+- `@edge-proxy/cmd/main.go`（Edge 客户端入口）
+- `@edge-proxy/internal/proxy/proxy.go`（Edge 长轮询）
+- `@edge-proxy/edge-proxy-config.yaml.example`（Edge 配置）
+- `@edge-proxy/summary.md`（Edge 项目总结）
+- `@linkyun-agent-ui/client-web-ui/src/lib/api.ts`（Creator UI API）
+- `@linkyun-agent-ui/client-user-hub/lumina-ai-chat-hub/services/api.ts`（User UI API）
+- `@infiniti-agent/src/cli/linkyunSync.ts`（CLI 同步）
+- `@infiniti-agent/src/link.ts`（CLI 邮件桥）
+- `@infiniti-agent/package.json`（CLI 包定义）
+- `@infiniti-agent/docs/PROJECT_OVERVIEW.md`（CLI 自身文档）

@@ -72,7 +72,7 @@ linkyun-agent-ui  edge-proxy  infiniti-agent   amp.linkyun.co
 | 修账号 | `go run ./cmd/fix-account` |
 | 手测 API | `go build -o client-cli ./client-cli && ./client-cli`（交互式） |
 
-**最小可用 `.env`**（基于 `@D:\linkyun-agent\.env.example`，实际调试后的全量列表）：
+**最小可用 `.env`**（基于 `@linkyun-agent/.env.example`，实际调试后的全量列表）：
 
 ```bash
 SERVER_PORT=8080
@@ -105,15 +105,15 @@ EMBEDDING_API_KEY=                                # 本地 BGE 不验证就留�
 
 **概念**：Motherland（母体 / 世界核心智能体）是被任命为「Creator 创作助手」的某个普通 Agent 引用，存储于 `system_config` 表（key=`motherland_agent_id`）。被任命的 Agent 会被 client-web-ui 调用以提供 3 项能力：优化提示词、生成头像、生成人设稿。**未任命时这些功能在 UI 上是隐藏的**。
 
-**3 个 admin CLI 命令**（`@D:\linkyun-agent\cmd\linkyun-admin-cli\main.go:185-188`）：
+**3 个 admin CLI 命令**（`@linkyun-agent/cmd/linkyun-admin-cli/main.go:185-188`）：
 
-```powershell
-go run .\cmd\linkyun-admin-cli motherland-set <agent-id 或 code>   # 任命
-go run .\cmd\linkyun-admin-cli motherland-unset                    # 取消
-go run .\cmd\linkyun-admin-cli motherland-show                     # 查看当前
+```bash
+go run ./cmd/linkyun-admin-cli motherland-set <agent-id 或 code>   # 任命
+go run ./cmd/linkyun-admin-cli motherland-unset                    # 取消
+go run ./cmd/linkyun-admin-cli motherland-show                     # 查看当前
 ```
 
-**5 个 HTTP API**（`@D:\linkyun-agent\internal\api\handler\system.go`）：
+**5 个 HTTP API**（`@linkyun-agent/internal/api/handler/system.go`）：
 
 | Endpoint | 鉴权 | 用途 |
 |---|---|---|
@@ -125,19 +125,19 @@ go run .\cmd\linkyun-admin-cli motherland-show                     # 查看当�
 
 **设置三步流程**：
 
-```powershell
+```bash
 # Step 1: 在 client-web-ui 创建专门的 Motherland Agent，记下它的 id 或 code
 #   建议名: "Linkyun Architect" / "母体智能体"
 #   建议 code: "motherland" / "linkyun-architect"
 #   prompt 用下方推荐模板，model 选你的最强模型
 
 # Step 2: 任命
-cd D:\linkyun-agent
-go run .\cmd\linkyun-admin-cli motherland-set linkyun-architect
+cd linkyun-agent
+go run ./cmd/linkyun-admin-cli motherland-set linkyun-architect
 
 # Step 3: 验证（CLI + HTTP 双重）
-go run .\cmd\linkyun-admin-cli motherland-show
-Invoke-RestMethod -Uri "http://localhost:8080/api/v1/system/motherland-status"
+go run ./cmd/linkyun-admin-cli motherland-show
+curl "http://localhost:8080/api/v1/system/motherland-status"
 # 期望: configured=True, agent_id=<刚才那个>
 ```
 
@@ -166,7 +166,7 @@ Invoke-RestMethod -Uri "http://localhost:8080/api/v1/system/motherland-status"
 专业、克制、像有 8 年经验的 senior product designer 在做 1-on-1 工作坊。中文为主，关键术语保留英文（如 "system prompt" / "few-shot"）。
 ```
 
-**与 client-web-ui 的耦合点**：dashboard layout 启动时调 `getMotherlandStatus()`（`@D:\linkyun-agent-ui\client-web-ui\src\app\dashboard\layout.tsx:49`）。**未配置时 3 个 motherland 技能按钮在 UI 上隐藏**；配置后浏览器刷新即解锁，不需重启后端。
+**与 client-web-ui 的耦合点**：dashboard layout 启动时调 `getMotherlandStatus()`（`@linkyun-agent-ui/client-web-ui/src/app/dashboard/layout.tsx:49`）。**未配置时 3 个 motherland 技能按钮在 UI 上隐藏**；配置后浏览器刷新即解锁，不需重启后端。
 
 #### 2.1.2 实时事件推送（BE-004 / global-user-events）
 
@@ -195,61 +195,60 @@ Invoke-RestMethod -Uri "http://localhost:8080/api/v1/system/motherland-status"
 
 **dual-publish 策略**（`chat_message` 专属，design.md D8）：4 周内每条 chat message 同时 publish 到 `linkyun:push:session:<sid>`（老 channel）和 `linkyun:push:user:<uid>`（新 channel），让前端 Phase B 切换期间老订阅不丢消息；cut-over 在 follow-up `remove-session-sse` change 做。
 
-**Spec / 实现真源**：`@d:\linkyun-agent\openspec\specs\global-user-events\spec.md`（archive 后路径）；handler 实现 `@d:\linkyun-agent\internal\api\handler\user_events.go`；publisher `@d:\linkyun-agent\internal\eventbus\publisher.go`；service hooks `@d:\linkyun-agent\internal\service\moment_notification.go`（NotifyLike / NotifyComment）+ `@d:\linkyun-agent\internal\service\push.go`（chat dual-publish）+ `@d:\linkyun-agent\internal\service\chat_typing.go`（typing）。
+**Spec / 实现真源**：`@linkyun-agent/openspec/specs/global-user-events/spec.md`（archive 后路径）；handler 实现 `@linkyun-agent/internal/api/handler/user_events.go`；publisher `@linkyun-agent/internal/eventbus/publisher.go`；service hooks `@linkyun-agent/internal/service/moment_notification.go`（NotifyLike / NotifyComment）+ `@linkyun-agent/internal/service/push.go`（chat dual-publish）+ `@linkyun-agent/internal/service/chat_typing.go`（typing）。
 
 #### 2.1.3 Agent 关注 / 主形象 / Follow 通知三件套
 
-**能力背景**（spec 真源 `@d:\linkyun-agent\openspec\specs\agent-follow\spec.md`）：2026-05 由 `social-graph` capability 升级而来。关注对象从「Creator」变为「Agent」——一个 Creator 可能为多个 Agent 各自别被关注。「主形象」（`creators.primary_agent_id`）是 Creator 可以选定某个 Agent 作为「代表他」的 anchor，用于 `is_mutual` 计算。
+**能力背景**（spec 真源 `@linkyun-agent/openspec/specs/agent-follow/spec.md`）：2026-05 由 `social-graph` capability 升级而来。关注对象从「Creator」变为「Agent」——一个 Creator 可能为多个 Agent 各自别被关注。「主形象」（`creators.primary_agent_id`）是 Creator 可以选定某个 Agent 作为「代表他」的 anchor，用于 `is_mutual` 计算。
 
 **6 个关键 endpoint 及调试命令**（需 X-API-Key + agent id）：
 
-```powershell
-# 假设 $key = "<你的 X-API-Key>"
-$base = "http://localhost:8080/api/v1"
-$hdr = @{ "X-API-Key" = $key }
-
+```bash
+# 假设 $KEY = "<你的 X-API-Key>"
+BASE="http://localhost:8080/api/v1"
+AUTH_HEADER="X-API-Key: $KEY"
 # 1. 关注 agent 12
-Invoke-RestMethod -Uri "$base/agents/12/follow" -Method POST -Headers $hdr
+curl -X POST -H "$AUTH_HEADER" "$BASE/agents/12/follow"
 
 # 2. 查看关注状态（返 is_following / is_followed_by_owner / is_mutual / followed_at）
-Invoke-RestMethod -Uri "$base/agents/12/follow-status" -Headers $hdr
+curl -H "$AUTH_HEADER" "$BASE/agents/12/follow-status"
 
 # 3. 查看 agent 12 的粉丝列表
-Invoke-RestMethod -Uri "$base/agents/12/followers?limit=20" -Headers $hdr
+curl -H "$AUTH_HEADER" "$BASE/agents/12/followers?limit=20"
 
 # 4. 查看我关注的 agents
-Invoke-RestMethod -Uri "$base/me/agent-following?limit=20" -Headers $hdr
+curl -H "$AUTH_HEADER" "$BASE/me/agent-following?limit=20"
 
 # 5. 取消关注（幂等 — 对已删除 agent 仍返 200，供清理遗留关系使用）
-Invoke-RestMethod -Uri "$base/agents/12/follow" -Method DELETE -Headers $hdr
+curl -X DELETE -H "$AUTH_HEADER" "$BASE/agents/12/follow"
 
 # 6. 设置主形象（agent_id 必须是自己创建的 non-archived agent）
-$body = @{ agent_id = 12 } | ConvertTo-Json
-Invoke-RestMethod -Uri "$base/me/primary-agent" -Method PUT -Headers $hdr -Body $body -ContentType "application/json"
+BODY='{"agent_id": 12}'
+curl -X PUT -H "$AUTH_HEADER" -H "Content-Type: application/json" -d "$BODY" "$BASE/me/primary-agent"
 ```
 
 **软删状态哥兵限定**（今日修定）：只有 `agents.status = 'archived'` 才是软删哥兵。对以上 4 个需要过滤 archived target 的 endpoint（POST / GET follow-status / GET followers / PUT primary-agent）会返 404。`DELETE /follow` 是唯一不检查状态的端点（幂等清理）。验证方法：
 
-```powershell
+```bash
 # 手工软删一个你的 agent
 mysql -e "UPDATE agents SET status='archived' WHERE id=12;" linkyun_agent
 
 # 期望 404
-Invoke-RestMethod -Uri "$base/agents/12/follow" -Method POST -Headers $hdr
+curl -X POST -H "$AUTH_HEADER" "$BASE/agents/12/follow"
 # 期望 200 + 列表不含该 agent
-Invoke-RestMethod -Uri "$base/me/agent-following" -Headers $hdr
+curl -H "$AUTH_HEADER" "$BASE/me/agent-following"
 
 # 恢复
 mysql -e "UPDATE agents SET status='active' WHERE id=12;" linkyun_agent
 ```
 
-**与 moment-notifications 的联动**：`POST /agents/{id}/follow` 同事务后会 fire-and-forget 调 `MomentNotificationService.NotifyFollow`，为 target agent owner 插入一条 follow 通知。`NotifyFollow` 本身会二次检查 archived 状态作为防御（`@d:\linkyun-agent\internal\service\moment_notification.go:226`）。检查通知列表：
+**与 moment-notifications 的联动**：`POST /agents/{id}/follow` 同事务后会 fire-and-forget 调 `MomentNotificationService.NotifyFollow`，为 target agent owner 插入一条 follow 通知。`NotifyFollow` 本身会二次检查 archived 状态作为防御（`@linkyun-agent/internal/service/moment_notification.go:226`）。检查通知列表：
 
-```powershell
-Invoke-RestMethod -Uri "$base/me/notifications?type=follow&limit=20" -Headers $hdr
+```bash
+curl -H "$AUTH_HEADER" "$BASE/me/notifications?type=follow&limit=20"
 ```
 
-**与 legacy `social-graph` 的共存**：老 5 路由（`POST /follow` / `GET /follow/status` / etc）仍服务但添 deprecation header，2026-07-01 sunset。前端 SDK 依赖 `Link: <successor>; rel="successor-version"` 响应头自动重写。定义 `@D:\linkyun-agent\cmd\server\main.go:572-590`。决定背景：`@D:\linkyun-agent\openspec\changes\archive\2026-05-22-add-agent-follow\design.md`。
+**与 legacy `social-graph` 的共存**：老 5 路由（`POST /follow` / `GET /follow/status` / etc）仍服务但添 deprecation header，2026-07-01 sunset。前端 SDK 依赖 `Link: <successor>; rel="successor-version"` 响应头自动重写。定义 `@linkyun-agent/cmd/server/main.go:572-590`。决定背景：`@linkyun-agent/openspec/changes/archive/2026-05-22-add-agent-follow/design.md`。
 
 **5 实体 soft-delete sentinel 速查**（`ECOSYSTEM §3.5` 是真源）：
 
@@ -258,7 +257,7 @@ Invoke-RestMethod -Uri "$base/me/notifications?type=follow&limit=20" -Headers $h
 | Creator / User / Session / Workspace | `status = 'deleted'` | `!= 'deleted'` |
 | **Agent** | **`status = 'archived'`** | **`!= 'archived'`** |
 
-代码中出现 `agent.Status == "deleted"` 或 `ag.status != 'deleted'` 都是 bug。设计源：`@D:\linkyun-agent\openspec\changes\archive\2026-05-24-normalize-agent-soft-delete-status\design.md`。
+代码中出现 `agent.Status == "deleted"` 或 `ag.status != 'deleted'` 都是 bug。设计源：`@linkyun-agent/openspec/changes/archive/2026-05-24-normalize-agent-soft-delete-status/design.md`。
 
 ---
 
@@ -266,9 +265,9 @@ Invoke-RestMethod -Uri "$base/me/notifications?type=follow&limit=20" -Headers $h
 
 | 子项目 | 角色 | 路径 | 启动 | 前端默认端口 | 源码内嵌后端默认值 |
 |---|---|---|---|---|---|
-| `client-web-ui` | Creator（创建/管理 Agent） | `D:\linkyun-agent-ui\client-web-ui` | `npm run dev` | 3000 | **`:8081`** ⚠️与后端默认端口不符，必须覆盖 |
-| `lumina-ai-chat-hub` | End User（与 Agent 对话，老版 SPA） | `D:\linkyun-agent-ui\client-user-hub\lumina-ai-chat-hub` | `npm run dev` | 5173 | `:8080` ✅零配置 |
-| `linkyun-concept` | End User Mobile H5（OYIIOYII Figma 设计，第 5 仓库，代替 `linkyun-app`） | `D:\linkyun-concept` | `pnpm dev` | 5180 | `:8080` ✅零配置 |
+| `client-web-ui` | Creator（创建/管理 Agent） | `linkyun-agent-ui/client-web-ui` | `npm run dev` | 3000 | **`:8081`** ⚠️与后端默认端口不符，必须覆盖 |
+| `lumina-ai-chat-hub` | End User（与 Agent 对话，老版 SPA） | `linkyun-agent-ui/client-user-hub/lumina-ai-chat-hub` | `npm run dev` | 5173 | `:8080` ✅零配置 |
+| `linkyun-concept` | End User Mobile H5（OYIIOYII Figma 设计，第 5 仓库，代替 `linkyun-app`） | `linkyun-concept` | `pnpm dev` | 5180 | `:8080` ✅零配置 |
 
 **最小 `.env.local`**（服件于本机后端 `:8080`）：
 
@@ -283,10 +282,18 @@ VITE_API_URL=http://localhost:8080
 VITE_API_BASE_URL=http://localhost:8080/api/v1
 ```
 
-**PowerShell 临时覆盖**（不创建 `.env.local` 时）：
+**命令行临时覆盖**（不创建 `.env.local` 时）：
+
+```bash
+# Linux / macOS / Git Bash 上走 bash
+cd linkyun-agent-ui/client-web-ui
+export NEXT_PUBLIC_API_URL="http://localhost:8080"
+npm run dev
+```
 
 ```powershell
-cd D:\linkyun-agent-ui\client-web-ui
+# Windows PowerShell 等价写法
+cd linkyun-agent-ui/client-web-ui
 $env:NEXT_PUBLIC_API_URL = "http://localhost:8080"
 npm run dev
 ```
@@ -299,7 +306,7 @@ localStorage.setItem('lumina-api-url-override',  'http://localhost:8080') // lum
 localStorage.setItem('linkyun-app-api-base',     'http://localhost:8080') // linkyun-concept (key 历史名保留兼容)
 ```
 
-**生产部署**：在 `D:\linkyun-agent-ui` 根目录跑 `./setup.sh`，交互式问 4 个问题（部署哪些 UI、域名、是否同域代理），自动生成 `docker-compose.yml` + `nginx.conf` + 两个 `Dockerfile`，然后 `docker compose up -d --build`。
+**生产部署**：在 `linkyun-agent-ui` 根目录跑 `./setup.sh`，交互式问 4 个问题（部署哪些 UI、域名、是否同域代理），自动生成 `docker-compose.yml` + `nginx.conf` + 两个 `Dockerfile`，然后 `docker compose up -d --build`。
 
 ### 2.3 `edge-proxy` — 本地 Agent 执行
 
@@ -335,10 +342,10 @@ log_level: "info"
 
 ### 2.4 `infiniti-agent` — 桌面 Agent
 
-```powershell
+```bash
 npm install -g linkyun-infiniti-agent
 infiniti-agent init                  # 全局配 LLM
-cd C:\my\project
+cd ~/projects/my-project
 infiniti-agent migrate               # 项目级隔离
 infiniti-agent                       # TUI 对话
 infiniti-agent live                  # + Live2D 透明窗
@@ -354,7 +361,7 @@ infiniti-agent live                  # + Live2D 透明窗
 
 **与 LinkYun 平台联动**（可选）：
 
-```powershell
+```bash
 infiniti-agent sync               # 拉某个云端 Agent 的 SOUL.md / 角色稿
 infiniti-agent link               # 从 SOUL.md 抽邮件配置，生成 mail-poller.sh
 infiniti-agent generate_avatar    # OpenRouter 图像 API 生成头像
@@ -362,7 +369,7 @@ infiniti-agent generate_avatar    # OpenRouter 图像 API 生成头像
 
 ### 2.5 `linkyun-concept` — 移动端 H5 专属命令
 
-生态第 5 仓库，独立仓 `D:\linkyun-concept`。**代替早期 `linkyun-app`**（后者 Stitch 9 屏 设计，现已废弃）。技术栈：Vite 8 + React + TypeScript + Wrangler（Cloudflare Workers Static Assets）。设计源自 Figma OYIIOYII AI 偶像 H5。启动方式与 `.env.local` 配置见 §2.2 浏览器端总表，本节聚焦 `linkyun-concept` 专属开发命令矩阵：
+生态第 5 仓库，独立仓 `linkyun-concept`。**代替早期 `linkyun-app`**（后者 Stitch 9 屏 设计，现已废弃）。技术栈：Vite 8 + React + TypeScript + Wrangler（Cloudflare Workers Static Assets）。设计源自 Figma OYIIOYII AI 偶像 H5。启动方式与 `.env.local` 配置见 §2.2 浏览器端总表，本节聚焦 `linkyun-concept` 专属开发命令矩阵：
 
 | 角色 | 操作 |
 |---|---|
@@ -400,7 +407,7 @@ LinkYun 后端所有非琐碎改动（≥30 min 工作量、影响 spec、改公
 
 **核心 CLI**（仓里通过 `npm install -g @stelee410/openspec-cli` 或 `npx` 调用）：
 
-```powershell
+```bash
 openspec list                                           # 列当前 active changes
 openspec list --json                                    # JSON 输出，给脚本用
 openspec validate <change-name> --strict                # 验证 4 artifact 完整性 + delta 语法
@@ -425,7 +432,7 @@ openspec sync <change-name>                             # 仅同步 delta 到主
 | `/opsx-bulk-archive` | 一次归档多个并行 change |
 | `/opsx-sync` | 仅同步 delta，不归档 |
 
-详见 `@D:\linkyun-agent\.windsurf\workflows\dev.md`。
+详见 `@linkyun-agent/.windsurf/workflows/dev.md`。
 
 **典型 lifecycle**（小修走快道，大改走 dev）：
 
@@ -436,7 +443,7 @@ openspec sync <change-name>                             # 仅同步 delta 到主
 跨能力 spec 重构        → /dev 全套 + cross-repo brief
 ```
 
-**实践示例**：今日 ship 的 `normalize-agent-soft-delete-status` 经过 8 个 commits（proposal → design → specs → tasks → 实施 → cross-repo brief → archive → 跨仓 docs sync）。归档后 spec delta 折叠进 `agent-follow` + `moment-notifications` 两个主 spec。归档目录在 `@D:\linkyun-agent\openspec\changes\archive\2026-05-24-normalize-agent-soft-delete-status\`。
+**实践示例**：今日 ship 的 `normalize-agent-soft-delete-status` 经过 8 个 commits（proposal → design → specs → tasks → 实施 → cross-repo brief → archive → 跨仓 docs sync）。归档后 spec delta 折叠进 `agent-follow` + `moment-notifications` 两个主 spec。归档目录在 `@linkyun-agent/openspec/changes/archive/2026-05-24-normalize-agent-soft-delete-status\`。
 
 ---
 
@@ -460,7 +467,7 @@ LinkYun 五仓生态的跨仓协作通过 `docs/cross-repo-*` 文件进行——
 - 修改 SSE / WebSocket / 长轮询协议
 - HTTP 状态码 contract 变化（如 200 → 404）
 
-**Brief 内容范式**（参考 `@D:\linkyun-agent\docs\cross-repo-responses\agent-soft-delete-semantics-shipped-2026-05-24.md`）：
+**Brief 内容范式**（参考 `@linkyun-agent/docs/cross-repo-responses/agent-soft-delete-semantics-shipped-2026-05-24.md`）：
 
 ```text
 1. TL;DR / 一句话
@@ -474,14 +481,14 @@ LinkYun 五仓生态的跨仓协作通过 `docs/cross-repo-*` 文件进行——
 
 **如何回应 brief**：
 
-```powershell
+```bash
 # 1. 读 request brief
-code D:\linkyun-agent\docs\cross-repo-requests\<topic>-<YYYY-MM-DD>.md
+code linkyun-agent/docs/cross-repo-requests/<topic>-<YYYY-MM-DD>.md
 
 # 2. 评估、走 OpenSpec change（如需）、实施
 
 # 3. 在 docs/cross-repo-responses/ 写回执
-new-item "D:\linkyun-agent\docs\cross-repo-responses\<topic>-shipped-<YYYY-MM-DD>.md"
+touch linkyun-agent/docs/cross-repo-responses\<topic>-shipped-<YYYY-MM-DD>.md
 
 # 4. commit + push 时让前端仓的 reviewer 在 PR review 时看到
 ```
@@ -526,12 +533,12 @@ new-item "D:\linkyun-agent\docs\cross-repo-responses\<topic>-shipped-<YYYY-MM-DD
 | 断点 | GoLand / VS Code Go，target = `cmd/server/main.go` |
 | 日志 | `LOG_LEVEL=debug` `LOG_FORMAT=json` |
 | 单测 | `go test ./...` |
-| 路由总览 | 直接看 `@D:\linkyun-agent\cmd\server\main.go:313-642`，全部 ~80 个路由集中在一个函数 |
-| DB schema 同步 | `//go:embed migrations/*.sql` 嵌入二进制（`@D:\linkyun-agent\internal\db\migrate.go:14-15`）；当前 64 对；启动自动 `migrate up`；手动 `go run ./cmd/migrate up`。表结构与系统种子数据（内置 skill / TTS 音色 / 母体配置等）均随迁移携带，**不需手工导入 schema.sql**。详见 `@D:\linkyun-agent\docs\项目功能介绍.md` 6.5.3 节 |
+| 路由总览 | 直接看 `@linkyun-agent/cmd/server/main.go:313-642`，全部 ~80 个路由集中在一个函数 |
+| DB schema 同步 | `//go:embed migrations/*.sql` 嵌入二进制（`@linkyun-agent/internal/db/migrate.go:14-15`）；当前 64 对；启动自动 `migrate up`；手动 `go run ./cmd/migrate up`。表结构与系统种子数据（内置 skill / TTS 音色 / 母体配置等）均随迁移携带，**不需手工导入 schema.sql**。详见 `@linkyun-agent/docs/项目功能介绍.md` 6.5.3 节 |
 | DB 直查 | MySQL `linkyun_agent` 库，账号见 `.env` |
 | Redis 直查 | `redis-cli`，按 `cfg.Redis.KeyPrefix`（默认 `linkyun:`）过滤 |
 | Edge 队列查看 | `redis-cli LRANGE linkyun:edge:queue:<agent_uuid> 0 -1` |
-| 共享 model 起点 | `@D:\linkyun-agent\internal\models\` 全部 23 个文件 |
+| 共享 model 起点 | `@linkyun-agent/internal/models\` 全部 23 个文件 |
 
 ### 3.2 `linkyun-agent-ui`（Next.js 15 + Vite + React）
 
@@ -541,7 +548,7 @@ new-item "D:\linkyun-agent\docs\cross-repo-responses\<topic>-shipped-<YYYY-MM-DD
 | User Hub 热重载 | Vite HMR 自带 |
 | 断点 | Chrome DevTools / VS Code Edge Tools |
 | 网络面板 | DevTools Network 看 `/api/v1/*` |
-| 类型源 | `@D:\linkyun-agent-ui\client-web-ui\src\lib\api.ts` 单文件 1859 行（API + 类型） |
+| 类型源 | `@linkyun-agent-ui/client-web-ui/src/lib/api.ts` 单文件 1859 行（API + 类型） |
 | **运行时切环境** | console 里 `localStorage.setItem('linkyun-api-url-override', 'http://your-server')` 即可热切，不必重启 dev |
 | Lint | 各子项目 `npm run lint` |
 
@@ -581,21 +588,21 @@ new-item "D:\linkyun-agent\docs\cross-repo-responses\<topic>-shipped-<YYYY-MM-DD
 ═══════════════════════════════════════════════════════
  终端 1（基础设施，常驻）
 ═══════════════════════════════════════════════════════
-cd D:\linkyun-agent\deployments\docker
+cd linkyun-agent/deployments/docker
 docker compose -f docker-compose.infrastructure.yml up
 
 ═══════════════════════════════════════════════════════
  终端 2（后端，常驻）
 ═══════════════════════════════════════════════════════
-cd D:\linkyun-agent
+cd linkyun-agent
 # 第一次：cp .env.example .env  并填几个关键值
-go run .\cmd\server\main.go
+go run ./cmd/server/main.go
 # 等到 "Starting linkyun-agent server on 0.0.0.0:8080"
 
 ═══════════════════════════════════════════════════════
  终端 3（Creator UI，常驻）
 ═══════════════════════════════════════════════════════
-cd D:\linkyun-agent-ui\client-web-ui
+cd linkyun-agent-ui/client-web-ui
 # 第一次：echo "NEXT_PUBLIC_API_URL=http://localhost:8080" > .env.local
 npm run dev
 # 浏览器开 http://localhost:3000，注册 Creator，复制 X-API-Key
@@ -603,14 +610,14 @@ npm run dev
 ═══════════════════════════════════════════════════════
  终端 4（Edge Proxy，常驻；仅当要测 edge agent）
 ═══════════════════════════════════════════════════════
-cd D:\edge-proxy
+cd edge-proxy
 # 第一次：./scripts/configure.sh，填上面拿到的 et_xxx
-go run .\cmd\main.go --config=edge-proxy-config.yaml
+go run ./cmd/main.go --config=edge-proxy-config.yaml
 
 ═══════════════════════════════════════════════════════
  终端 5（User Hub，常驻；测 end user 视角）
 ═══════════════════════════════════════════════════════
-cd D:\linkyun-agent-ui\client-user-hub\lumina-ai-chat-hub
+cd linkyun-agent-ui/client-user-hub/lumina-ai-chat-hub
 # 第一次：echo "VITE_API_URL=http://localhost:8080" > .env.local
 npm run dev
 # 浏览器开 http://localhost:5173，与 edge agent 对话
@@ -618,7 +625,7 @@ npm run dev
 ═══════════════════════════════════════════════════════
  终端 6（linkyun-concept，常驻；测 mobile end user 视角）
 ═══════════════════════════════════════════════════════
-cd D:\linkyun-concept
+cd linkyun-concept
 # 默认已携 .env.development 走 localhost:8080，需 override 才创 .env.local
 pnpm install
 pnpm dev
@@ -691,33 +698,33 @@ pnpm dev
 
 下面几条**不在任何 README**，但读源码时浮现，自己写客户端 / 起本地全栈时会撞上：
 
-1. **后端 BRPop 比客户端 timeout 短 2s**（`@D:\linkyun-agent\internal\api\handler\edge.go:174-178`）— 自己实现 edge poll 客户端，请把 client 端 timeout 设在 30s，不要更长，否则 race。
+1. **后端 BRPop 比客户端 timeout 短 2s**（`@linkyun-agent/internal/api/handler/edge.go:174-178`）— 自己实现 edge poll 客户端，请把 client 端 timeout 设在 30s，不要更长，否则 race。
 
 2. **localStorage 可热切环境**（Creator UI 用 `linkyun-api-url-override`，User Hub 用 `lumina-api-url-override`）— 调试切环境不用重启 dev server，console 改一行就行。
 
-3. **infiniti-agent LiveUI 默认占 :8080**（`@d:\infiniti-agent\README.md:108`）— 与后端撞，`infiniti-agent live -p 9000` 或环境变量 `INFINITI_LIVEUI_PORT=9000` 避开。
+3. **infiniti-agent LiveUI 默认占 :8080**（`@infiniti-agent/README.md:108`）— 与后端撞，`infiniti-agent live -p 9000` 或环境变量 `INFINITI_LIVEUI_PORT=9000` 避开。
 
-4. **edge-proxy `orders.db` 是工单缓存**（`@D:\edge-proxy\internal\proxy\order_cache.go`）— 断线重连依赖，被 git ignore，**别误删**。
+4. **edge-proxy `orders.db` 是工单缓存**（`@edge-proxy/internal/proxy/order_cache.go`）— 断线重连依赖，被 git ignore，**别误删**。
 
-5. **后端启动会自动 migrate up**（`@D:\linkyun-agent\cmd\server\main.go:120-122`）— 第一次跑空库，等几秒看 `Database connected` 就 OK；迁移失败则进程直接 fatal。
+5. **后端启动会自动 migrate up**（`@linkyun-agent/cmd/server/main.go:120-122`）— 第一次跑空库，等几秒看 `Database connected` 就 OK；迁移失败则进程直接 fatal。
 
-6. **CORS 默认 `*`**（`@D:\linkyun-agent\cmd\server\main.go:298-309`）— 开发期方便，但**生产环境**必须设 `CORS_ALLOWED_ORIGINS`。
+6. **CORS 默认 `*`**（`@linkyun-agent/cmd/server/main.go:298-309`）— 开发期方便，但**生产环境**必须设 `CORS_ALLOWED_ORIGINS`。
 
 7. **`X-Edge-Token` 与 `X-API-Key` 不是同一鉴权链**：edge endpoint 用 `EdgeHandler.authenticateEdgeToken`（直查 `agents.edge_token` 列），不走 `RequireCreatorAuth` 中间件。客户端**不要**两个 header 一起发。
 
 8. **infiniti-agent 的 LLM 配置里 `disableTools: true`**：本机 ollama 模型多数不支持工具调用，必须加这个，否则首轮就报错。
 
-9. **`linkyun-agent-ui/setup.sh` 末尾历史污染**：`@D:\linkyun-agent-ui\setup.sh:441-447` 混入了 `</think>` / `<｜tool▁calls▁begin｜>` 等 LLM 输出残留（不是 bash 代码）。bash 在 `echo ""` 后正常退出，污染段不会被执行；但用 lint / shellcheck 会告警。**本文档只做记录，不主动修复**。
+9. **`linkyun-agent-ui/setup.sh` 末尾历史污染**：`@linkyun-agent-ui/setup.sh:441-447` 混入了 `</think>` / `<｜tool▁calls▁begin｜>` 等 LLM 输出残留（不是 bash 代码）。bash 在 `echo ""` 后正常退出，污染段不会被执行；但用 lint / shellcheck 会告警。**本文档只做记录，不主动修复**。
 
-10. **服务端 Connect 动态告知客户端 endpoint**（`@D:\linkyun-agent\internal\api\handler\edge.go:80-94`）— 写自定义 edge 客户端时，应该读 `queue_config` 字段拿到 poll/respond/heartbeat URL，而不是硬编码路径。这样未来后端切到 WebSocket 时客户端不用改。
+10. **服务端 Connect 动态告知客户端 endpoint**（`@linkyun-agent/internal/api/handler/edge.go:80-94`）— 写自定义 edge 客户端时，应该读 `queue_config` 字段拿到 poll/respond/heartbeat URL，而不是硬编码路径。这样未来后端切到 WebSocket 时客户端不用改。
 
-11. **不需手工导入 schema.sql**— 项目用 `//go:embed migrations/*.sql` 把 64 对迁移文件嵌入二进制（`@D:\linkyun-agent\internal\db\migrate.go:14-15`），应用启动自动 `migrate up`，会一并应用表结构与系统种子数据（12 个迁移含 `INSERT INTO`：内置 skill 定义 / MiniMax TTS 音色列表 / 母体 Agent 配置 等）。新人常误以为要从生产 dump 导入，不需要也不应该—手工导入会破坏 `schema_migrations` 状态表。详细链路见 `@D:\linkyun-agent\docs\项目功能介绍.md` 6.5.3 节。
+11. **不需手工导入 schema.sql**— 项目用 `//go:embed migrations/*.sql` 把 64 对迁移文件嵌入二进制（`@linkyun-agent/internal/db/migrate.go:14-15`），应用启动自动 `migrate up`，会一并应用表结构与系统种子数据（12 个迁移含 `INSERT INTO`：内置 skill 定义 / MiniMax TTS 音色列表 / 母体 Agent 配置 等）。新人常误以为要从生产 dump 导入，不需要也不应该—手工导入会破坏 `schema_migrations` 状态表。详细链路见 `@linkyun-agent/docs/项目功能介绍.md` 6.5.3 节。
 
-12. **`client-web-ui` 默认 `NEXT_PUBLIC_API_URL=http://localhost:8081` 与后端默认 `:8080` 不符**（`@D:\linkyun-agent-ui\client-web-ui\src\lib\api.ts:13`）— 项目本身不携带 `.env.local`，不覆盖会连不上后端。三种覆盖顺序：`localStorage['linkyun-api-url-override']`（运行时）＞ `NEXT_PUBLIC_API_URL`（启动时）＞ 默认 `:8081`。调试时推荐在启动脚本里设 `$env:NEXT_PUBLIC_API_URL="http://localhost:8080"`。参见 §2.2。
+12. **`client-web-ui` 默认 `NEXT_PUBLIC_API_URL=http://localhost:8081` 与后端默认 `:8080` 不符**（`@linkyun-agent-ui/client-web-ui/src/lib/api.ts:13`）— 项目本身不携带 `.env.local`，不覆盖会连不上后端。三种覆盖顺序：`localStorage['linkyun-api-url-override']`（运行时）＞ `NEXT_PUBLIC_API_URL`（启动时）＞ 默认 `:8081`。调试时推荐在启动脚本里设 `export NEXT_PUBLIC_API_URL="http://localhost:8080"`（PowerShell 等价：`$env:NEXT_PUBLIC_API_URL="http://localhost:8080"`）。参见 §2.2。
 
-13. **邀请码是账号级全局门槛**（`@D:\linkyun-agent\internal\api\handler\auth.go:48-110`）— 后端 `/api/v1/auth/register` 是唯一注册接口，**所有前端都走同一个**，都要带 `invitation_code`（不区分 Creator/End-User）。历史上 `client-web-ui` 的注册 UI 与 API 客户端函数都缺该字段，2026-05-01 修复：`api.ts` `register()` 加第 4 参 + `login/page.tsx` 加邀请码输入框，以 `api.test.ts` 的类型断言锁定契约。`lumina-ai-chat-hub` 与 `linkyun-app` 本来就是合规的（**注**：2026-05-12 后 `linkyun-app` 被 `linkyun-concept` 替代，concept 也合规）。创建邀请码用 `go run .\cmd\linkyun-admin-cli inv-add WELCOME 100`。
+13. **邀请码是账号级全局门槛**（`@linkyun-agent/internal/api/handler/auth.go:48-110`）— 后端 `/api/v1/auth/register` 是唯一注册接口，**所有前端都走同一个**，都要带 `invitation_code`（不区分 Creator/End-User）。历史上 `client-web-ui` 的注册 UI 与 API 客户端函数都缺该字段，2026-05-01 修复：`api.ts` `register()` 加第 4 参 + `login/page.tsx` 加邀请码输入框，以 `api.test.ts` 的类型断言锁定契约。`lumina-ai-chat-hub` 与 `linkyun-app` 本来就是合规的（**注**：2026-05-12 后 `linkyun-app` 被 `linkyun-concept` 替代，concept 也合规）。创建邀请码用 `go run ./cmd/linkyun-admin-cli inv-add WELCOME 100`。
 
-14. **`embedding` provider 路由逻辑不是广义的**（`@D:\linkyun-agent\internal\knowledge\embedding.go:24-50`）— `KNOWLEDGE_EMBEDDING_PROVIDER` 取值为 `"openai"` 或 `"tongyi"` 时 baseURL **写死**为官方地址，**会忽略 `EMBEDDING_BASE_URL`**；只有取其他值（如 `local` / `bge` / `siliconflow` 等任意字串）才走 `default` 分支读你自己填的 baseURL。另外 `EMBEDDING_API_KEY` 被设为非空字符串（如填 `"sk-"`）时会发 `Authorization: Bearer sk-`，本地 BGE 不校验 token 不出问题，但接严格验证的服务会 401。应留空让其 fallback 到 `OPENAI_API_KEY`（也可为空）。
+14. **`embedding` provider 路由逻辑不是广义的**（`@linkyun-agent/internal/knowledge/embedding.go:24-50`）— `KNOWLEDGE_EMBEDDING_PROVIDER` 取值为 `"openai"` 或 `"tongyi"` 时 baseURL **写死**为官方地址，**会忽略 `EMBEDDING_BASE_URL`**；只有取其他值（如 `local` / `bge` / `siliconflow` 等任意字串）才走 `default` 分支读你自己填的 baseURL。另外 `EMBEDDING_API_KEY` 被设为非空字符串（如填 `"sk-"`）时会发 `Authorization: Bearer sk-`，本地 BGE 不校验 token 不出问题，但接严格验证的服务会 401。应留空让其 fallback 到 `OPENAI_API_KEY`（也可为空）。
 
 ---
 
