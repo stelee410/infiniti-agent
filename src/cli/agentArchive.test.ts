@@ -74,6 +74,7 @@ describe('agent archive import/export', () => {
     const source = join(dir, 'source')
     await mkdir(join(source, '.infiniti-agent', 'inbox', 'assets'), { recursive: true })
     await mkdir(join(source, '.infiniti-agent', 'backups', 'sync', 'old'), { recursive: true })
+    await mkdir(join(source, '.infiniti-agent', 'workspace', 'recordings'), { recursive: true })
     await writeFile(join(source, 'SOUL.md'), 'soul\n')
     await writeFile(join(source, '.env.local'), 'LINKYUN_API_KEY=secret\n')
     await writeFile(join(source, '.infiniti-agent', 'session.json'), '{"messages":[]}\n')
@@ -81,6 +82,7 @@ describe('agent archive import/export', () => {
     await writeFile(join(source, '.infiniti-agent', 'inbox', 'message.json'), '{"id":"msg"}\n')
     await writeFile(join(source, '.infiniti-agent', 'inbox', 'assets', 'large.png'), 'large\n')
     await writeFile(join(source, '.infiniti-agent', 'backups', 'sync', 'old', 'session.json'), '{}\n')
+    await writeFile(join(source, '.infiniti-agent', 'workspace', 'recordings', 'rec.webm'), 'audio\n')
 
     const exported = await exportAgentArchive(source, join(dir, 'jess.agent'))
 
@@ -89,6 +91,7 @@ describe('agent archive import/export', () => {
     expect(exported.entries).not.toContain('.infiniti-agent/infiniti-agent.log')
     expect(exported.entries).not.toContain('.infiniti-agent/inbox/assets/large.png')
     expect(exported.entries).not.toContain('.infiniti-agent/backups/sync/old/session.json')
+    expect(exported.entries).not.toContain('.infiniti-agent/workspace/recordings/rec.webm')
     expect(exported.entries).not.toContain('.env.local')
   })
 

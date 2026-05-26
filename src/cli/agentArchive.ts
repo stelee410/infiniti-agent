@@ -21,6 +21,7 @@ const LOCAL_ONLY_PREFIXES = [
   '.infiniti-agent/inbox/assets/',
   '.infiniti-agent/backups/',
   '.infiniti-agent/tmp/',
+  '.infiniti-agent/workspace/', // 本地工作产物（录音等），不同步
 ] as const
 
 const LOCAL_ONLY_FILES = [
