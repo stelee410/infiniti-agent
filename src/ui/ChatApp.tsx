@@ -88,6 +88,7 @@ import {
   handleHelpSlashCommand,
   handleInboxSlashCommand,
   handleMemorySlashCommand,
+  handleRecordSlashCommand,
   handlePermissionSlashCommand,
   handleReloadSlashCommand,
   handleRollSlashCommand,
@@ -801,6 +802,15 @@ export function ChatApp({
           }
           case 'memory':
             await handleMemorySlashCommand(cwd, raw, slashCommand, switchActiveMemory, {
+              setError,
+              setInput,
+              setNotice,
+              clearNoticeLater: (ms) => setTimeout(() => setNotice(null), ms),
+              deliverLocalCommandExchange,
+            })
+            return
+          case 'record':
+            await handleRecordSlashCommand(slashCommand, liveUi, {
               setError,
               setInput,
               setNotice,

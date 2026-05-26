@@ -78,6 +78,16 @@ export function mainSessionPath(cwd: string): string {
   return join(localAgentDir(cwd), 'session.json')
 }
 
+/** 本地工作产物根目录：顶层共享、不随 memory switch 隔离、不随 sync 上传。 */
+export function localWorkspaceDir(cwd: string): string {
+  return join(localAgentDir(cwd), 'workspace')
+}
+
+/** 录音落盘目录：.infiniti-agent/workspace/recordings/ */
+export function recordingsDir(cwd: string): string {
+  return join(localWorkspaceDir(cwd), 'recordings')
+}
+
 export function localConfigPath(cwd: string): string {
   return join(cwd, LOCAL_DIR_NAME, 'config.json')
 }

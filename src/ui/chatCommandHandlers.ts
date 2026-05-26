@@ -40,6 +40,7 @@ type InboxCommand = Extract<ChatSlashCommand, { kind: 'inbox' | 'lastEmail' }>
 type DreamCommand = Extract<ChatSlashCommand, { kind: 'dreamRun' | 'dreamDiary' | 'dreamContext' }>
 type RollCommand = Extract<ChatSlashCommand, { kind: 'roll' }>
 type MemoryCommand = Extract<ChatSlashCommand, { kind: 'memory' }>
+type RecordCommand = Extract<ChatSlashCommand, { kind: 'record' }>
 type SendMediaCommand = Extract<ChatSlashCommand, { kind: 'sendMedia' }>
 type PermissionCommand = Extract<ChatSlashCommand, { kind: 'permission' }>
 type CompactCommand = Extract<ChatSlashCommand, { kind: 'compact' }>
@@ -531,6 +532,76 @@ export async function handleMemorySlashCommand(
         ui.clearNoticeLater(5000)
         return
       }
+    }
+  } catch (e: unknown) {
+    ui.setError(formatChatError(e))
+  }
+}
+
+/** /record 需要的 LiveUI 录音 API（结构化，匹配 LiveUiSession 的公共方法）。 */
+export type RecordCommandLiveUi = {
+  startRecording(opts?: { maxMs?: number }): Promise<
+    { ok: true; recordingId: string; path: string } | { ok: false; error: string }
+  >
+  stopRecording(): Promise<
+    { ok: true; path: string; durationMs: number; bytes: number } | { ok: false; error: string }
+  >
+  recordingStatus():
+    | { active: false }
+    | { active: true; recordingId: string; startedAt: number; durationMs: number; path: string; bytes: number }
+}
+
+function formatRecDuration(ms: number): string {
+  const total = Math.floor(ms / 1000)
+  const hh = Math.floor(total / 3600)
+  const mm = Math.floor((total % 3600) / 60)
+  const ss = total % 60
+  return [hh, mm, ss].map((n) => String(n).padStart(2, '0')).join(':')
+}
+
+export async function handleRecordSlashCommand(
+  command: RecordCommand,
+  liveUi: RecordCommandLiveUi | null | undefined,
+  ui: Pick<LocalCommandUi, 'setError' | 'setInput' | 'setNotice' | 'clearNoticeLater' | 'deliverLocalCommandExchange'>,
+): Promise<void> {
+  ui.setInput('')
+  if (!liveUi) {
+    ui.setError('/record 需要 LiveUI：请用 `infiniti-agent live` 启动并连接客户端后再录音。')
+    return
+  }
+  try {
+    if (command.action === 'start') {
+      const res = await liveUi.startRecording()
+      if (!res.ok) {
+        ui.setError(`录音未开始：${res.error}`)
+        return
+      }
+      ui.setNotice('🔴 录音中…（/record stop 停止，最长 2 小时自动停）')
+      ui.clearNoticeLater(5000)
+      return
+    }
+    if (command.action === 'stop') {
+      const res = await liveUi.stopRecording()
+      if (!res.ok) {
+        ui.setError(`停止失败：${res.error}`)
+        return
+      }
+      const mb = (res.bytes / (1024 * 1024)).toFixed(1)
+      ui.deliverLocalCommandExchange(
+        '/record stop',
+        `录音已保存：${res.path}\n时长 ${formatRecDuration(res.durationMs)} · ${mb} MB`,
+      )
+      return
+    }
+    const st = liveUi.recordingStatus()
+    if (!st.active) {
+      ui.deliverLocalCommandExchange('/record status', '当前没有在录音。/record start 开始。')
+    } else {
+      const mb = (st.bytes / (1024 * 1024)).toFixed(1)
+      ui.deliverLocalCommandExchange(
+        '/record status',
+        `🔴 录音中 · ${formatRecDuration(st.durationMs)} · ${mb} MB\n${st.path}`,
+      )
     }
   } catch (e: unknown) {
     ui.setError(formatChatError(e))

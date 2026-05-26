@@ -130,6 +130,22 @@ export type LiveUiAssistantVoiceMessage = {
       }
 }
 
+/**
+ * 录音控制（server → client）：让渲染端开始/停止一段独立的连续麦克风录制。
+ * 与 ASR/通话用的 MIC_AUDIO 分片采集完全独立——这是一条不丢静音、可拼接的连续流。
+ */
+export type LiveUiRecordingControlMessage = {
+  type: 'RECORDING_CONTROL'
+  data: {
+    action: 'start' | 'stop'
+    recordingId: string
+    /** start 时附带：客户端达到该时长须自动停（兜底，服务端也会兜）。 */
+    maxMs?: number
+    /** start 时附带：分片间隔毫秒（MediaRecorder timeslice）。 */
+    timesliceMs?: number
+  }
+}
+
 /** 告知渲染端 TTS 引擎是否可用（连接时推送）。 */
 export type LiveUiTtsStatusMessage = {
   type: 'TTS_STATUS'
@@ -350,6 +366,7 @@ export type LiveUiMessage =
   | LiveUiTtsStatusMessage
   | LiveUiAsrStatusMessage
   | LiveUiAsrResultMessage
+  | LiveUiRecordingControlMessage
   | LiveUiSlashCompletionMessage
   | LiveUiConfigOpenMessage
   | LiveUiConfigStatusMessage
@@ -563,6 +580,13 @@ export function isLiveUiMessage(x: unknown): x is LiveUiMessage {
     const d = (x as { data?: unknown }).data
     if (!d || typeof d !== 'object') return false
     return typeof (d as { text?: unknown }).text === 'string'
+  }
+  if (o.type === 'RECORDING_CONTROL') {
+    const d = (x as { data?: unknown }).data
+    if (!d || typeof d !== 'object') return false
+    const dd = d as { action?: unknown; recordingId?: unknown }
+    if (dd.action !== 'start' && dd.action !== 'stop') return false
+    return typeof dd.recordingId === 'string' && !!dd.recordingId
   }
   if (o.type === 'SLASH_COMPLETION') {
     const d = (x as { data?: unknown }).data

@@ -29,6 +29,9 @@ export type BuiltinToolName =
   | 'send_image'
   | 'send_video'
   | 'send_file'
+  | 'start_recording'
+  | 'stop_recording'
+  | 'recording_status'
 
 export const BUILTIN_TOOLS: Array<{
   name: BuiltinToolName
@@ -654,6 +657,42 @@ export const BUILTIN_TOOLS: Array<{
         },
       },
       required: ['path'],
+    },
+  },
+  {
+    name: 'start_recording',
+    description:
+      '开始录制麦克风音频（仅在已连接 LiveUI 客户端时可用）。录制连续进行、不丢静音，文件存到 .infiniti-agent/workspace/recordings/ 下，最长 2 小时（到点自动停）。适合用户说“帮我录一下/开始录音/录这段会议”。录制是独立会话，跨多轮对话存活，直到调用 stop_recording 或到达上限。返回 recordingId 与文件路径。注意：录制本身不转写；录完如需文字另行转写。',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        maxMinutes: {
+          type: 'integer',
+          description: '可选，最长录制分钟数；缺省 120（2 小时），上限也是 120。',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'stop_recording',
+    description: '停止当前正在进行的麦克风录音并保存文件。返回最终文件路径、时长与大小。',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'recording_status',
+    description: '查询当前是否在录音；若在录，返回 recordingId、已录时长、已写字节与文件路径。',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {},
+      required: [],
     },
   },
 ]

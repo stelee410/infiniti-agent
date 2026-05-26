@@ -127,4 +127,25 @@ describe('parseFileAttachments', () => {
     expect(attachments.at(-1)?.id).toBe('doc')
     expect(attachments.at(-1)?.text).toHaveLength(80_000)
   })
+
+  it('parses recording control-flow messages', () => {
+    expect(parseLiveUiClientMessage(JSON.stringify({ type: 'REC_STARTED', data: { recordingId: 'r1' } })))
+      .toEqual({ type: 'REC_STARTED', recordingId: 'r1' })
+    expect(parseLiveUiClientMessage(JSON.stringify({
+      type: 'REC_CHUNK', data: { recordingId: 'r1', audioBase64: 'AAA', sequence: 3 },
+    }))).toEqual({ type: 'REC_CHUNK', recordingId: 'r1', audioBase64: 'AAA', sequence: 3 })
+    expect(parseLiveUiClientMessage(JSON.stringify({
+      type: 'REC_STOPPED', data: { recordingId: 'r1', reason: 'maxDuration' },
+    }))).toEqual({ type: 'REC_STOPPED', recordingId: 'r1', reason: 'maxDuration' })
+    expect(parseLiveUiClientMessage(JSON.stringify({
+      type: 'REC_ERROR', data: { recordingId: 'r1', error: 'denied' },
+    }))).toEqual({ type: 'REC_ERROR', recordingId: 'r1', error: 'denied' })
+  })
+
+  it('rejects malformed recording messages', () => {
+    expect(parseLiveUiClientMessage(JSON.stringify({ type: 'REC_STARTED', data: {} }))).toBeNull()
+    expect(parseLiveUiClientMessage(JSON.stringify({ type: 'REC_CHUNK', data: { recordingId: 'r1', audioBase64: 'x' } }))).toBeNull()
+    expect(parseLiveUiClientMessage(JSON.stringify({ type: 'REC_STOPPED', data: { recordingId: 'r1', reason: 'weird' } })))
+      .toEqual({ type: 'REC_STOPPED', recordingId: 'r1' })
+  })
 })

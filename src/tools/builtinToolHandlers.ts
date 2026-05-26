@@ -711,6 +711,31 @@ export const builtinToolHandlers: Record<BuiltinToolName, ToolHandler> = {
   send_image: (args, ctx) => sendAssistantMediaTool(args, ctx, 'image'),
   send_video: (args, ctx) => sendAssistantMediaTool(args, ctx, 'video'),
   send_file: (args, ctx) => sendAssistantMediaTool(args, ctx, 'file'),
+  start_recording: async (args, ctx) => {
+    if (!ctx.liveUi) return toolError('未连接 LiveUI 客户端，无法录音')
+    const maxMinutes =
+      typeof args.maxMinutes === 'number' && Number.isFinite(args.maxMinutes)
+        ? Math.max(1, Math.min(120, Math.floor(args.maxMinutes)))
+        : undefined
+    const res = await ctx.liveUi.startRecording(maxMinutes ? { maxMs: maxMinutes * 60_000 } : {})
+    if (!res.ok) return toolError(res.error)
+    return JSON.stringify({
+      ok: true,
+      recordingId: res.recordingId,
+      path: res.path,
+      note: '录音已开始；停止请用 stop_recording。最长 2 小时后自动停。',
+    })
+  },
+  stop_recording: async (_args, ctx) => {
+    if (!ctx.liveUi) return toolError('未连接 LiveUI 客户端')
+    const res = await ctx.liveUi.stopRecording()
+    if (!res.ok) return toolError(res.error)
+    return JSON.stringify({ ok: true, path: res.path, durationMs: res.durationMs, bytes: res.bytes })
+  },
+  recording_status: (_args, ctx) => {
+    if (!ctx.liveUi) return toolError('未连接 LiveUI 客户端')
+    return JSON.stringify(ctx.liveUi.recordingStatus())
+  },
 }
 
 async function sendAssistantMediaTool(

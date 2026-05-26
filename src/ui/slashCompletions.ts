@@ -78,6 +78,13 @@ const COMMAND_ITEMS: SlashItem[] = [
     insert: '/memory ',
   },
   {
+    id: '/record',
+    kind: 'command',
+    label: '/record',
+    desc: '录制麦克风：start / stop / status（仅 LiveUI，存 workspace/recordings/，最长2h）',
+    insert: '/record ',
+  },
+  {
     id: '/inbox',
     kind: 'command',
     label: '/inbox',

@@ -57,6 +57,14 @@ describe('parseChatSlashCommand', () => {
     expect(parseChatSlashCommand('/memory bogus')).toEqual({ kind: 'memory', action: 'help' })
   })
 
+  it('parses /record subcommands', () => {
+    expect(parseChatSlashCommand('/record')).toEqual({ kind: 'record', action: 'status' })
+    expect(parseChatSlashCommand('/record start')).toEqual({ kind: 'record', action: 'start' })
+    expect(parseChatSlashCommand('/record stop')).toEqual({ kind: 'record', action: 'stop' })
+    expect(parseChatSlashCommand('/record status')).toEqual({ kind: 'record', action: 'status' })
+    expect(parseChatSlashCommand('/record bogus')).toEqual({ kind: 'record', action: 'status' })
+  })
+
   it('ignores non-registered commands', () => {
     expect(parseChatSlashCommand('/snap image')).toBeNull()
     expect(parseChatSlashCommand('hello')).toBeNull()
