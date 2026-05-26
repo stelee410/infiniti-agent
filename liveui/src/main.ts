@@ -3185,6 +3185,19 @@ async function bootstrap(): Promise<void> {
       if (isSocketOpen(socket)) sendSocketMessage(socket, 'REC_ERROR', { recordingId, error: '已有录音在进行' })
       return
     }
+    // 录音独占麦克风：同一输入设备同时开两路 getUserMedia 会互相搞挂（macOS 上先前那路
+    // 直接静音/结束）。先让语音/听写释放设备，保证全程只有一路 getUserMedia。
+    if (voiceMode) exitVoiceMode()
+    if (inputDictationActive || inputDictationOwnsMic) {
+      inputDictationActive = false
+      inputDictationAwaitingAsr = false
+      if (inputDictationAsrTimer) { clearTimeout(inputDictationAsrTimer); inputDictationAsrTimer = undefined }
+      stopSegmentRecording()
+      if (micStream) { micStream.getTracks().forEach((t) => t.stop()); micStream = null }
+      if (micAudioCtx) { void micAudioCtx.close(); micAudioCtx = null; micAnalyser = null }
+      inputDictationOwnsMic = false
+      if (userLineInput) userLineInput.readOnly = false
+    }
     let stream: MediaStream
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 } })
@@ -3246,6 +3259,8 @@ async function bootstrap(): Promise<void> {
     }
     if (isSocketOpen(socket)) sendSocketMessage(socket, 'REC_STARTED', { recordingId })
     recCapTimer = setTimeout(() => stopMicRecording('maxDuration'), Math.max(1000, maxMs))
+    updateMicBtn()
+    showLiveNotice('🔴 录音中，语音对话已暂停；停止录音后恢复')
     console.debug(`[liveui] 录音开始 ${recordingId} (maxMs=${maxMs}, timeslice=${timesliceMs})`)
   }
 
@@ -3324,6 +3339,7 @@ async function bootstrap(): Promise<void> {
 
   const beginInputDictation = async (): Promise<void> => {
     if (!userLineInput || !asrAvailable || voiceMicAuto || inputDictationActive) return
+    if (recRecorder) return // 录音独占麦克风期间不启用听写
     if (voiceMode) {
       // 用户已经在常规 PTT 语音模式里，不重复抢占；让现有 PTT 路径处理空格。
       return
@@ -3485,6 +3501,10 @@ async function bootstrap(): Promise<void> {
 
   const enterVoiceMode = async (): Promise<void> => {
     if (minimalMode) return
+    if (recRecorder) {
+      showLiveNotice('录音中，语音对话已暂停；/record stop 后可再通话')
+      return
+    }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: { sampleRate: 16000, channelCount: 1 },

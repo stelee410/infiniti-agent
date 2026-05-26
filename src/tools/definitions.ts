@@ -662,7 +662,7 @@ export const BUILTIN_TOOLS: Array<{
   {
     name: 'start_recording',
     description:
-      '开始录制麦克风音频（仅在已连接 LiveUI 客户端时可用）。录制连续进行、不丢静音，文件存到 .infiniti-agent/workspace/recordings/ 下，最长 2 小时（到点自动停）。适合用户说“帮我录一下/开始录音/录这段会议”。录制是独立会话，跨多轮对话存活，直到调用 stop_recording 或到达上限。返回 recordingId 与文件路径。注意：录制本身不转写；录完如需文字另行转写。',
+      '开始录制麦克风音频（仅在已连接 LiveUI 客户端时可用）。录制连续进行、不丢静音，文件存到 .infiniti-agent/workspace/recordings/ 下，最长 2 小时（到点自动停）。适合用户说“帮我录一下/开始录音/录这段会议”。录制是独立会话，跨多轮对话存活，直到调用 stop_recording 或到达上限。返回 recordingId 与文件路径。注意：① 录制独占麦克风，录制期间语音通话/听写会暂停，停止录制后恢复；② 录制本身不转写，录完如需文字另行转写。',
     parameters: {
       type: 'object',
       additionalProperties: false,

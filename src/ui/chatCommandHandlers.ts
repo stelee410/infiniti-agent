@@ -576,8 +576,8 @@ export async function handleRecordSlashCommand(
         ui.setError(`录音未开始：${res.error}`)
         return
       }
-      ui.setNotice('🔴 录音中…（/record stop 停止，最长 2 小时自动停）')
-      ui.clearNoticeLater(5000)
+      ui.setNotice('🔴 录音中…（独占麦克风，语音对话暂停；/record stop 停止，最长 2 小时自动停）')
+      ui.clearNoticeLater(6000)
       return
     }
     if (command.action === 'stop') {
