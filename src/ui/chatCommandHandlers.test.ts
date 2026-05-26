@@ -8,6 +8,8 @@ import { loadSession, saveSession } from '../session/file.js'
 import { searchSessions } from '../session/archive.js'
 import { EditHistory } from '../session/editHistory.js'
 import { writeInboxMessage } from '../inbox/store.js'
+import { listMemoryNames } from '../memory/workspace.js'
+import { resetActiveMemoryCache } from '../paths.js'
 import { saveDreamDiary, saveDreamPromptContext } from '../dreaming/dreamStore.js'
 import {
   handleClearSlashCommand,
@@ -32,6 +34,7 @@ let cwd: string
 
 beforeEach(async () => {
   cwd = await mkdtemp(join(tmpdir(), 'infiniti-chat-handler-test-'))
+  resetActiveMemoryCache()
 })
 
 afterEach(async () => {
@@ -299,12 +302,38 @@ describe('simple local command handlers', () => {
     expect(u.setError).toHaveBeenCalledWith(expect.stringContaining('/config'))
   })
 
-  it('formats memory and permission messages', () => {
-    const u = ui()
-    handleMemorySlashCommand(u)
-    expect(u.setError).toHaveBeenCalledWith(expect.stringContaining('memory.json'))
-    expect(u.setInput).toHaveBeenCalledWith('')
+  it('manages memory workspaces', async () => {
+    const noop = async (): Promise<void> => {}
 
+    const uHelp = ui()
+    await handleMemorySlashCommand(cwd, '/memory', { kind: 'memory', action: 'help' }, noop, uHelp)
+    expect(uHelp.deliverLocalCommandExchange).toHaveBeenCalledWith('/memory', expect.stringContaining('switch'))
+    expect(uHelp.setInput).toHaveBeenCalledWith('')
+
+    const uList = ui()
+    await handleMemorySlashCommand(cwd, '/memory list', { kind: 'memory', action: 'list' }, noop, uList)
+    expect(uList.deliverLocalCommandExchange).toHaveBeenCalledWith('/memory list', expect.stringContaining('main'))
+
+    const uNew = ui()
+    await handleMemorySlashCommand(cwd, '/memory new work', { kind: 'memory', action: 'new', name: 'work' }, noop, uNew)
+    expect(uNew.setNotice).toHaveBeenCalledWith(expect.stringContaining('work'))
+    expect(await listMemoryNames(cwd)).toEqual(['main', 'work'])
+
+    const switchFn = vi.fn(async () => {})
+    await handleMemorySlashCommand(cwd, '/memory switch work', { kind: 'memory', action: 'switch', name: 'work' }, switchFn, ui())
+    expect(switchFn).toHaveBeenCalledWith('work')
+
+    const uDel = ui()
+    await handleMemorySlashCommand(cwd, '/memory delete work', { kind: 'memory', action: 'delete', name: 'work' }, noop, uDel)
+    expect(await listMemoryNames(cwd)).toEqual(['main'])
+
+    const uMain = ui()
+    await handleMemorySlashCommand(cwd, '/memory delete main', { kind: 'memory', action: 'delete', name: 'main' }, noop, uMain)
+    expect(uMain.setError).toHaveBeenCalledWith(expect.stringContaining('main'))
+  })
+
+  it('formats permission messages', () => {
+    const u = ui()
     handlePermissionSlashCommand({ kind: 'permission' }, true, u)
     expect(u.setNotice).toHaveBeenCalledWith(expect.stringContaining('全部跳过'))
     expect(u.clearNoticeLater).toHaveBeenCalledWith(8000)

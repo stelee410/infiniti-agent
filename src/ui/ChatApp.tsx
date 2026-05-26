@@ -25,7 +25,8 @@ import { runCallTurn } from '../llm/callTurn.js'
 import { buildCallSystem } from '../prompt/callSystem.js'
 import { CallAugmenter } from '../subconscious/callAugmenter.js'
 import { saveSession, loadSession } from '../session/file.js'
-import { localInboxDir, localSkillsDir } from '../paths.js'
+import { localInboxDir, localSkillsDir, getActiveMemoryName } from '../paths.js'
+import { switchMemory } from '../memory/workspace.js'
 import type { McpManager } from '../mcp/manager.js'
 import { loadConfig, saveProjectConfig } from '../config/io.js'
 import { formatChatError } from '../utils/formatError.js'
@@ -269,6 +270,8 @@ export function ChatApp({
   const { columns, rows } = useWindowSize()
   const [config, setConfig] = useState(initialConfig)
   const [cwd, setCwd] = useState(process.cwd())
+  // 当前激活的记忆工作区名。切换时变化 → 重建潜意识 agent 并重载会话。
+  const [activeMemory, setActiveMemory] = useState<string>(() => getActiveMemoryName(process.cwd()))
   const [messages, setMessages] = useState<PersistedMessage[]>([])
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
@@ -430,11 +433,25 @@ export function ChatApp({
         subconsciousRef.current = null
       }
     }
-  }, [config, cwd, expressionManifest, liveUi])
+  }, [config, cwd, expressionManifest, liveUi, activeMemory])
 
   useEffect(() => {
     void subconsciousRef.current?.setDebugOverlayEnabled(debugOverlayEnabled)
   }, [debugOverlayEnabled])
+
+  // 切换记忆工作区：连同对话一起切。先把当前对话存回当前记忆，翻转激活记忆，
+  // 再载入目标记忆的对话，并通过 activeMemory state 触发潜意识 agent 重建。
+  const switchActiveMemory = useCallback(
+    async (name: string): Promise<void> => {
+      await saveSession(cwd, messagesRef.current).catch(() => {})
+      await switchMemory(cwd, name) // 不存在会抛错，此时尚未翻转，安全
+      const s = await loadSession(cwd).catch(() => null)
+      setMessages(s?.messages ?? [])
+      setStreamText('')
+      setActiveMemory(name)
+    },
+    [cwd],
+  )
 
   useInput(
     (_ch, key) => {
@@ -783,7 +800,13 @@ export function ChatApp({
             return
           }
           case 'memory':
-            handleMemorySlashCommand({ setError, setInput })
+            await handleMemorySlashCommand(cwd, raw, slashCommand, switchActiveMemory, {
+              setError,
+              setInput,
+              setNotice,
+              clearNoticeLater: (ms) => setTimeout(() => setNotice(null), ms),
+              deliverLocalCommandExchange,
+            })
             return
           case 'inbox': {
             await handleInboxSlashCommand(cwd, slashCommand, liveUi, {

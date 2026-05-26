@@ -74,7 +74,7 @@ const COMMAND_ITEMS: SlashItem[] = [
     id: '/memory',
     kind: 'command',
     label: '/memory',
-    desc: '提示长期记忆文件路径',
+    desc: '记忆工作区：list / current / new <名字> / switch <名字> / delete <名字>',
     insert: '/memory ',
   },
   {

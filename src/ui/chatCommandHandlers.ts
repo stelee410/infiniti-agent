@@ -14,6 +14,12 @@ import { compactSessionMessages } from '../llm/compactSession.js'
 import { resolvedCompactionSettings } from '../llm/compactionSettings.js'
 import type { PersistedMessage } from '../llm/persisted.js'
 import { listInboxMessages, type InboxMessage } from '../inbox/store.js'
+import {
+  createMemory,
+  currentMemoryName,
+  deleteMemory,
+  listMemoryNames,
+} from '../memory/workspace.js'
 import { archiveSession } from '../session/archive.js'
 import { rollMessages } from '../session/roll.js'
 import { saveSession } from '../session/file.js'
@@ -33,6 +39,7 @@ type ScheduleCommand = Extract<
 type InboxCommand = Extract<ChatSlashCommand, { kind: 'inbox' | 'lastEmail' }>
 type DreamCommand = Extract<ChatSlashCommand, { kind: 'dreamRun' | 'dreamDiary' | 'dreamContext' }>
 type RollCommand = Extract<ChatSlashCommand, { kind: 'roll' }>
+type MemoryCommand = Extract<ChatSlashCommand, { kind: 'memory' }>
 type SendMediaCommand = Extract<ChatSlashCommand, { kind: 'sendMedia' }>
 type PermissionCommand = Extract<ChatSlashCommand, { kind: 'permission' }>
 type CompactCommand = Extract<ChatSlashCommand, { kind: 'compact' }>
@@ -447,11 +454,87 @@ export async function handleUndoSlashCommand(
   ui.setInput('')
 }
 
-export function handleMemorySlashCommand(
-  ui: Pick<LocalCommandUi, 'setError' | 'setInput'>,
-): void {
-  ui.setError('记忆系统：memory.json（结构化记忆）+ user_profile.json（用户画像）— 在 .infiniti-agent/ 下')
+const MEMORY_USAGE = [
+  '记忆工作区命令：',
+  '  /memory list            列出全部记忆',
+  '  /memory current         显示当前记忆',
+  '  /memory new <名字>      新建一份空记忆',
+  '  /memory switch <名字>   切换到该记忆（连同对话一起切）',
+  '  /memory delete <名字>   删除记忆',
+  '主记忆是 main，不可删除，且目前只有它能同步。',
+].join('\n')
+
+export type MemoryCommandUi = Pick<
+  LocalCommandUi,
+  'setError' | 'setInput' | 'setNotice' | 'clearNoticeLater' | 'deliverLocalCommandExchange'
+>
+
+export async function handleMemorySlashCommand(
+  cwd: string,
+  raw: string,
+  command: MemoryCommand,
+  switchActiveMemory: (name: string) => Promise<void>,
+  ui: MemoryCommandUi,
+): Promise<void> {
   ui.setInput('')
+  try {
+    switch (command.action) {
+      case 'help':
+        ui.deliverLocalCommandExchange(raw, MEMORY_USAGE)
+        return
+      case 'current': {
+        const cur = await currentMemoryName(cwd)
+        ui.deliverLocalCommandExchange(raw, `当前记忆：${cur}`)
+        return
+      }
+      case 'list': {
+        const [names, cur] = await Promise.all([listMemoryNames(cwd), currentMemoryName(cwd)])
+        const lines = names
+          .map((n) => `${n === cur ? '→' : ' '} ${n}${n === 'main' ? '（主记忆 · 可同步）' : ''}`)
+          .join('\n')
+        ui.deliverLocalCommandExchange(raw, `记忆列表：\n${lines}`)
+        return
+      }
+      case 'new': {
+        if (!command.name) {
+          ui.setError('用法：/memory new <名字>')
+          return
+        }
+        await createMemory(cwd, command.name)
+        ui.setNotice(`已新建记忆「${command.name}」，用 /memory switch ${command.name} 切换。`)
+        ui.clearNoticeLater(5000)
+        return
+      }
+      case 'delete': {
+        if (!command.name) {
+          ui.setError('用法：/memory delete <名字>')
+          return
+        }
+        await deleteMemory(cwd, command.name)
+        ui.setNotice(`已删除记忆「${command.name}」。`)
+        ui.clearNoticeLater(5000)
+        return
+      }
+      case 'switch': {
+        if (!command.name) {
+          ui.setError('用法：/memory switch <名字>')
+          return
+        }
+        const cur = await currentMemoryName(cwd)
+        if (cur === command.name) {
+          ui.setNotice(`已经在记忆「${command.name}」。`)
+          ui.clearNoticeLater(4000)
+          return
+        }
+        await switchActiveMemory(command.name)
+        ui.setNotice(`已切换到记忆「${command.name}」。`)
+        ui.clearNoticeLater(5000)
+        return
+      }
+    }
+  } catch (e: unknown) {
+    ui.setError(formatChatError(e))
+  }
 }
 
 export type SendMediaLiveUi = {

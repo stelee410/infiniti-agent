@@ -44,6 +44,19 @@ describe('parseChatSlashCommand', () => {
     expect(parseChatSlashCommand('/dream run light')).toEqual({ kind: 'dreamRun', mode: 'light' })
   })
 
+  it('parses /memory subcommands', () => {
+    expect(parseChatSlashCommand('/memory')).toEqual({ kind: 'memory', action: 'help' })
+    expect(parseChatSlashCommand('/memory list')).toEqual({ kind: 'memory', action: 'list' })
+    expect(parseChatSlashCommand('/memory current')).toEqual({ kind: 'memory', action: 'current' })
+    expect(parseChatSlashCommand('/memory new work')).toEqual({ kind: 'memory', action: 'new', name: 'work' })
+    expect(parseChatSlashCommand('/memory switch work')).toEqual({ kind: 'memory', action: 'switch', name: 'work' })
+    expect(parseChatSlashCommand('/memory delete work')).toEqual({ kind: 'memory', action: 'delete', name: 'work' })
+    expect(parseChatSlashCommand('/memory use work')).toEqual({ kind: 'memory', action: 'switch', name: 'work' })
+    expect(parseChatSlashCommand('/memory rm work')).toEqual({ kind: 'memory', action: 'delete', name: 'work' })
+    // 未知子命令回退到 help
+    expect(parseChatSlashCommand('/memory bogus')).toEqual({ kind: 'memory', action: 'help' })
+  })
+
   it('ignores non-registered commands', () => {
     expect(parseChatSlashCommand('/snap image')).toBeNull()
     expect(parseChatSlashCommand('hello')).toBeNull()
