@@ -1,8 +1,16 @@
 import { describe, expect, it } from 'vitest'
-import { readFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { isAllowedLiveUiMediaPath } from './wsSession.js'
 import { LiveUiSession } from './wsSession.js'
+
+type RecordingTestHooks = {
+  clients: Set<unknown>
+  onRecStarted(recordingId: string): void
+  onRecChunk(recordingId: string, audioBase64: string, sequence: number): void
+  onRecStopped(recordingId: string): void
+}
 
 describe('isAllowedLiveUiMediaPath', () => {
   it('allows files under configured media roots', () => {
@@ -138,5 +146,82 @@ describe('isAllowedLiveUiMediaPath', () => {
     const result = await session.sendAssistantMedia({ filePath: '/tmp/x.png', kind: 'image' })
     expect(result.ok).toBe(false)
     expect(result.error).toBe('no live client connected')
+  })
+})
+
+describe('LiveUiSession recording', () => {
+  it('records: start ack opens file, chunks append in order, stop finalizes', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'liveui-rec-'))
+    try {
+      const session = new LiveUiSession(0, { recordingsDir: join(dir, 'recordings') })
+      const control: Array<{ action?: string; recordingId?: string }> = []
+      session.broadcast = (msg: unknown) => {
+        const m = msg as { type?: string; data?: { action?: string; recordingId?: string } }
+        if (m.type === 'RECORDING_CONTROL' && m.data) control.push(m.data)
+      }
+      const hooks = session as unknown as RecordingTestHooks
+      hooks.clients = new Set([{}]) // 假装有客户端连接
+
+      const startPromise = session.startRecording()
+      await new Promise((r) => setTimeout(r, 0))
+      expect(control[0]?.action).toBe('start')
+      const recId = control[0]!.recordingId as string
+
+      hooks.onRecStarted(recId) // 模拟客户端确认开始 → 服务端开文件
+      const started = await startPromise
+      expect(started.ok).toBe(true)
+
+      hooks.onRecChunk(recId, Buffer.from('hello').toString('base64'), 0)
+      hooks.onRecChunk(recId, Buffer.from('world').toString('base64'), 1)
+
+      const stopPromise = session.stopRecording()
+      await new Promise((r) => setTimeout(r, 0))
+      expect(control[1]?.action).toBe('stop')
+      hooks.onRecStopped(recId)
+      const stopped = await stopPromise
+
+      expect(stopped.ok).toBe(true)
+      if (stopped.ok) {
+        expect(stopped.bytes).toBe(10)
+        expect(await readFile(stopped.path, 'utf8')).toBe('helloworld')
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects start when no client / no recordingsDir / already recording', async () => {
+    const noDir = new LiveUiSession(0)
+    ;(noDir as unknown as RecordingTestHooks).clients = new Set([{}])
+    expect((await noDir.startRecording()).ok).toBe(false) // 未配置 recordingsDir
+
+    const dir = await mkdtemp(join(tmpdir(), 'liveui-rec2-'))
+    try {
+      const session = new LiveUiSession(0, { recordingsDir: join(dir, 'recordings') })
+      session.broadcast = () => {}
+      expect((await session.startRecording()).ok).toBe(false) // 无客户端
+
+      const hooks = session as unknown as RecordingTestHooks
+      hooks.clients = new Set([{}])
+      const control: Array<{ recordingId?: string }> = []
+      session.broadcast = (msg: unknown) => {
+        const m = msg as { type?: string; data?: { recordingId?: string } }
+        if (m.type === 'RECORDING_CONTROL' && m.data) control.push(m.data)
+      }
+      const p = session.startRecording()
+      await new Promise((r) => setTimeout(r, 0))
+      hooks.onRecStarted(control[0]!.recordingId as string)
+      await p
+      expect((await session.startRecording()).ok).toBe(false) // 已在录音
+      expect(session.recordingStatus().active).toBe(true)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('stopRecording errors when nothing is recording', async () => {
+    const session = new LiveUiSession(0, { recordingsDir: '/tmp/whatever' })
+    expect((await session.stopRecording()).ok).toBe(false)
+    expect(session.recordingStatus().active).toBe(false)
   })
 })

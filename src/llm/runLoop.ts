@@ -726,6 +726,7 @@ async function runOpenAI(
         { role: 'system' as const, content: opts.system },
         ...toOpenAIMessages(working),
       ],
+      max_tokens: DEFAULT_MAX_TOKENS,
       ...(useTools
         ? { tools: openaiTools, parallel_tool_calls: true as const }
         : {}),

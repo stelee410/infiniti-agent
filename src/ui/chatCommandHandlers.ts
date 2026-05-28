@@ -14,6 +14,12 @@ import { compactSessionMessages } from '../llm/compactSession.js'
 import { resolvedCompactionSettings } from '../llm/compactionSettings.js'
 import type { PersistedMessage } from '../llm/persisted.js'
 import { listInboxMessages, type InboxMessage } from '../inbox/store.js'
+import {
+  createMemory,
+  currentMemoryName,
+  deleteMemory,
+  listMemoryNames,
+} from '../memory/workspace.js'
 import { archiveSession } from '../session/archive.js'
 import { rollMessages } from '../session/roll.js'
 import { saveSession } from '../session/file.js'
@@ -33,6 +39,8 @@ type ScheduleCommand = Extract<
 type InboxCommand = Extract<ChatSlashCommand, { kind: 'inbox' | 'lastEmail' }>
 type DreamCommand = Extract<ChatSlashCommand, { kind: 'dreamRun' | 'dreamDiary' | 'dreamContext' }>
 type RollCommand = Extract<ChatSlashCommand, { kind: 'roll' }>
+type MemoryCommand = Extract<ChatSlashCommand, { kind: 'memory' }>
+type RecordCommand = Extract<ChatSlashCommand, { kind: 'record' }>
 type SendMediaCommand = Extract<ChatSlashCommand, { kind: 'sendMedia' }>
 type PermissionCommand = Extract<ChatSlashCommand, { kind: 'permission' }>
 type CompactCommand = Extract<ChatSlashCommand, { kind: 'compact' }>
@@ -447,11 +455,157 @@ export async function handleUndoSlashCommand(
   ui.setInput('')
 }
 
-export function handleMemorySlashCommand(
-  ui: Pick<LocalCommandUi, 'setError' | 'setInput'>,
-): void {
-  ui.setError('记忆系统：memory.json（结构化记忆）+ user_profile.json（用户画像）— 在 .infiniti-agent/ 下')
+const MEMORY_USAGE = [
+  '记忆工作区命令：',
+  '  /memory list            列出全部记忆',
+  '  /memory current         显示当前记忆',
+  '  /memory new <名字>      新建一份空记忆',
+  '  /memory switch <名字>   切换到该记忆（连同对话一起切）',
+  '  /memory delete <名字>   删除记忆',
+  '主记忆是 main，不可删除，且目前只有它能同步。',
+].join('\n')
+
+export type MemoryCommandUi = Pick<
+  LocalCommandUi,
+  'setError' | 'setInput' | 'setNotice' | 'clearNoticeLater' | 'deliverLocalCommandExchange'
+>
+
+export async function handleMemorySlashCommand(
+  cwd: string,
+  raw: string,
+  command: MemoryCommand,
+  switchActiveMemory: (name: string) => Promise<void>,
+  ui: MemoryCommandUi,
+): Promise<void> {
   ui.setInput('')
+  try {
+    switch (command.action) {
+      case 'help':
+        ui.deliverLocalCommandExchange(raw, MEMORY_USAGE)
+        return
+      case 'current': {
+        const cur = await currentMemoryName(cwd)
+        ui.deliverLocalCommandExchange(raw, `当前记忆：${cur}`)
+        return
+      }
+      case 'list': {
+        const [names, cur] = await Promise.all([listMemoryNames(cwd), currentMemoryName(cwd)])
+        const lines = names
+          .map((n) => `${n === cur ? '→' : ' '} ${n}${n === 'main' ? '（主记忆 · 可同步）' : ''}`)
+          .join('\n')
+        ui.deliverLocalCommandExchange(raw, `记忆列表：\n${lines}`)
+        return
+      }
+      case 'new': {
+        if (!command.name) {
+          ui.setError('用法：/memory new <名字>')
+          return
+        }
+        await createMemory(cwd, command.name)
+        ui.setNotice(`已新建记忆「${command.name}」，用 /memory switch ${command.name} 切换。`)
+        ui.clearNoticeLater(5000)
+        return
+      }
+      case 'delete': {
+        if (!command.name) {
+          ui.setError('用法：/memory delete <名字>')
+          return
+        }
+        await deleteMemory(cwd, command.name)
+        ui.setNotice(`已删除记忆「${command.name}」。`)
+        ui.clearNoticeLater(5000)
+        return
+      }
+      case 'switch': {
+        if (!command.name) {
+          ui.setError('用法：/memory switch <名字>')
+          return
+        }
+        const cur = await currentMemoryName(cwd)
+        if (cur === command.name) {
+          ui.setNotice(`已经在记忆「${command.name}」。`)
+          ui.clearNoticeLater(4000)
+          return
+        }
+        await switchActiveMemory(command.name)
+        ui.setNotice(`已切换到记忆「${command.name}」。`)
+        ui.clearNoticeLater(5000)
+        return
+      }
+    }
+  } catch (e: unknown) {
+    ui.setError(formatChatError(e))
+  }
+}
+
+/** /record 需要的 LiveUI 录音 API（结构化，匹配 LiveUiSession 的公共方法）。 */
+export type RecordCommandLiveUi = {
+  startRecording(opts?: { maxMs?: number }): Promise<
+    { ok: true; recordingId: string; path: string } | { ok: false; error: string }
+  >
+  stopRecording(): Promise<
+    { ok: true; path: string; durationMs: number; bytes: number } | { ok: false; error: string }
+  >
+  recordingStatus():
+    | { active: false }
+    | { active: true; recordingId: string; startedAt: number; durationMs: number; path: string; bytes: number }
+}
+
+function formatRecDuration(ms: number): string {
+  const total = Math.floor(ms / 1000)
+  const hh = Math.floor(total / 3600)
+  const mm = Math.floor((total % 3600) / 60)
+  const ss = total % 60
+  return [hh, mm, ss].map((n) => String(n).padStart(2, '0')).join(':')
+}
+
+export async function handleRecordSlashCommand(
+  command: RecordCommand,
+  liveUi: RecordCommandLiveUi | null | undefined,
+  ui: Pick<LocalCommandUi, 'setError' | 'setInput' | 'setNotice' | 'clearNoticeLater' | 'deliverLocalCommandExchange'>,
+): Promise<void> {
+  ui.setInput('')
+  if (!liveUi) {
+    ui.setError('/record 需要 LiveUI：请用 `infiniti-agent live` 启动并连接客户端后再录音。')
+    return
+  }
+  try {
+    if (command.action === 'start') {
+      const res = await liveUi.startRecording()
+      if (!res.ok) {
+        ui.setError(`录音未开始：${res.error}`)
+        return
+      }
+      ui.setNotice('🔴 录音中…（独占麦克风，语音对话暂停；/record stop 停止，最长 2 小时自动停）')
+      ui.clearNoticeLater(6000)
+      return
+    }
+    if (command.action === 'stop') {
+      const res = await liveUi.stopRecording()
+      if (!res.ok) {
+        ui.setError(`停止失败：${res.error}`)
+        return
+      }
+      const mb = (res.bytes / (1024 * 1024)).toFixed(1)
+      ui.deliverLocalCommandExchange(
+        '/record stop',
+        `录音已保存：${res.path}\n时长 ${formatRecDuration(res.durationMs)} · ${mb} MB`,
+      )
+      return
+    }
+    const st = liveUi.recordingStatus()
+    if (!st.active) {
+      ui.deliverLocalCommandExchange('/record status', '当前没有在录音。/record start 开始。')
+    } else {
+      const mb = (st.bytes / (1024 * 1024)).toFixed(1)
+      ui.deliverLocalCommandExchange(
+        '/record status',
+        `🔴 录音中 · ${formatRecDuration(st.durationMs)} · ${mb} MB\n${st.path}`,
+      )
+    }
+  } catch (e: unknown) {
+    ui.setError(formatChatError(e))
+  }
 }
 
 export type SendMediaLiveUi = {

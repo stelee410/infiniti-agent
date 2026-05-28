@@ -44,7 +44,7 @@ export type OneShotParams = {
 export async function oneShotTextCompletion(
   opts: OneShotParams,
 ): Promise<string> {
-  const maxOut = Math.min(8192, Math.max(256, opts.maxOutTokens ?? 4096))
+  const maxOut = Math.min(8192, Math.max(512, opts.maxOutTokens ?? 4096))
   const llm = resolveLlmProfile(opts.config, opts.profile)
 
   if (llm.provider === 'anthropic') {

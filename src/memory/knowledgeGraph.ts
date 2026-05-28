@@ -1,12 +1,12 @@
 import Database from 'better-sqlite3'
 import { mkdir } from 'fs/promises'
 import { dirname, join } from 'path'
-import { localAgentDir } from '../paths.js'
+import { activeMemoryDir } from '../paths.js'
 
 const KG_DB_FILE = 'knowledge.db'
 
 function kgDbPath(cwd: string): string {
-  return join(localAgentDir(cwd), KG_DB_FILE)
+  return join(activeMemoryDir(cwd), KG_DB_FILE)
 }
 
 function openKgDb(cwd: string): Database.Database {

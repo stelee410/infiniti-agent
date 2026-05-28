@@ -191,6 +191,10 @@ type AudioResetMsg = { type: 'AUDIO_RESET' }
 type TtsStatusMsg = { type: 'TTS_STATUS'; data: { available: boolean; enabled?: unknown } }
 type AsrStatusMsg = { type: 'ASR_STATUS'; data: { available: boolean } }
 type AsrResultMsg = { type: 'ASR_RESULT'; data: { text: string } }
+type RecordingControlMsg = {
+  type: 'RECORDING_CONTROL'
+  data: { action: 'start' | 'stop'; recordingId: string; maxMs?: number; timesliceMs?: number }
+}
 type CallAvailabilityMsg = { type: 'CALL_AVAILABILITY'; data: { asr: boolean; tts: boolean; reasons?: string[] } }
 
 type SlashCompletionMsg = {
@@ -300,6 +304,7 @@ type Msg =
   | TtsStatusMsg
   | AsrStatusMsg
   | AsrResultMsg
+  | RecordingControlMsg
   | CallAvailabilityMsg
   | SlashCompletionMsg
   | ConfigOpenMsg
@@ -2637,6 +2642,16 @@ async function bootstrap(): Promise<void> {
       if (!minimalMode && ttsEnabled && msg.data) enqueueAudioChunk(msg.data)
     } else if (msg.type === 'AUDIO_RESET') {
       resetAudioQueue()
+    } else if (msg.type === 'RECORDING_CONTROL') {
+      const action = msg.data?.action
+      const recordingId = typeof msg.data?.recordingId === 'string' ? msg.data.recordingId : ''
+      if (recordingId && action === 'start') {
+        const maxMs = typeof msg.data?.maxMs === 'number' ? msg.data.maxMs : 2 * 60 * 60 * 1000
+        const timesliceMs = typeof msg.data?.timesliceMs === 'number' ? msg.data.timesliceMs : 1000
+        void startMicRecording(recordingId, maxMs, timesliceMs)
+      } else if (recordingId && action === 'stop') {
+        stopMicRecording('user')
+      }
     } else if (msg.type === 'ACTION') {
       const em = msg.data?.expression
       if (em) applyLive2dExpression(em, msg.data?.intensity)
@@ -3147,6 +3162,120 @@ async function bootstrap(): Promise<void> {
     }
   }
 
+  // ===== 独立麦克风录音（与 ASR/VAD 完全分离：专用 stream + 连续 MediaRecorder，分片流式回传） =====
+  let recRecorder: MediaRecorder | null = null
+  let recStream: MediaStream | null = null
+  let recId: string | null = null
+  let recSeq = 0
+  let recCapTimer: ReturnType<typeof setTimeout> | undefined
+  let recStopReason: 'user' | 'maxDuration' | 'error' = 'user'
+  // 串行化编码+发送，保证 webm 分片按序到达服务端（FileReader 异步，不可乱序拼接）。
+  let recSendChain: Promise<void> = Promise.resolve()
+
+  const cleanupRecStream = (): void => {
+    if (recCapTimer) { clearTimeout(recCapTimer); recCapTimer = undefined }
+    if (recStream) {
+      recStream.getTracks().forEach((t) => t.stop())
+      recStream = null
+    }
+  }
+
+  const startMicRecording = async (recordingId: string, maxMs: number, timesliceMs: number): Promise<void> => {
+    if (recRecorder) {
+      if (isSocketOpen(socket)) sendSocketMessage(socket, 'REC_ERROR', { recordingId, error: '已有录音在进行' })
+      return
+    }
+    // 录音独占麦克风：同一输入设备同时开两路 getUserMedia 会互相搞挂（macOS 上先前那路
+    // 直接静音/结束）。先让语音/听写释放设备，保证全程只有一路 getUserMedia。
+    if (voiceMode) exitVoiceMode()
+    if (inputDictationActive || inputDictationOwnsMic) {
+      inputDictationActive = false
+      inputDictationAwaitingAsr = false
+      if (inputDictationAsrTimer) { clearTimeout(inputDictationAsrTimer); inputDictationAsrTimer = undefined }
+      stopSegmentRecording()
+      if (micStream) { micStream.getTracks().forEach((t) => t.stop()); micStream = null }
+      if (micAudioCtx) { void micAudioCtx.close(); micAudioCtx = null; micAnalyser = null }
+      inputDictationOwnsMic = false
+      if (userLineInput) userLineInput.readOnly = false
+    }
+    let stream: MediaStream
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 } })
+    } catch (e) {
+      if (isSocketOpen(socket)) sendSocketMessage(socket, 'REC_ERROR', { recordingId, error: `麦克风获取失败: ${(e as Error)?.message ?? e}` })
+      return
+    }
+    let mr: MediaRecorder
+    try {
+      const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/webm'
+      mr = new MediaRecorder(stream, { mimeType: mime })
+    } catch (e) {
+      stream.getTracks().forEach((t) => t.stop())
+      if (isSocketOpen(socket)) sendSocketMessage(socket, 'REC_ERROR', { recordingId, error: `MediaRecorder 创建失败: ${(e as Error)?.message ?? e}` })
+      return
+    }
+    recStream = stream
+    recRecorder = mr
+    recId = recordingId
+    recSeq = 0
+    recStopReason = 'user'
+    recSendChain = Promise.resolve()
+    mr.ondataavailable = (e) => {
+      if (e.data.size === 0) return
+      const seq = recSeq++
+      const blob = e.data
+      recSendChain = recSendChain.then(() => new Promise<void>((resolve) => {
+        const reader = new FileReader()
+        reader.onloadend = () => {
+          const base64 = (reader.result as string).split(',')[1]
+          if (base64 && recId === recordingId && isSocketOpen(socket)) {
+            sendSocketMessage(socket, 'REC_CHUNK', { recordingId, audioBase64: base64, sequence: seq })
+          }
+          resolve()
+        }
+        reader.onerror = () => resolve()
+        reader.readAsDataURL(blob)
+      }))
+    }
+    mr.onstop = () => {
+      const reason = recStopReason
+      const id = recId
+      recId = null
+      recRecorder = null
+      // 等最后一片刷完再发 REC_STOPPED，确保服务端先收齐音频再 finalize。
+      recSendChain.then(() => {
+        cleanupRecStream()
+        if (id && isSocketOpen(socket)) sendSocketMessage(socket, 'REC_STOPPED', { recordingId: id, reason })
+      })
+    }
+    try {
+      mr.start(timesliceMs)
+    } catch (e) {
+      cleanupRecStream()
+      recRecorder = null
+      recId = null
+      if (isSocketOpen(socket)) sendSocketMessage(socket, 'REC_ERROR', { recordingId, error: `录音启动失败: ${(e as Error)?.message ?? e}` })
+      return
+    }
+    if (isSocketOpen(socket)) sendSocketMessage(socket, 'REC_STARTED', { recordingId })
+    recCapTimer = setTimeout(() => stopMicRecording('maxDuration'), Math.max(1000, maxMs))
+    updateMicBtn()
+    showLiveNotice('🔴 录音中，语音对话已暂停；停止录音后恢复')
+    console.debug(`[liveui] 录音开始 ${recordingId} (maxMs=${maxMs}, timeslice=${timesliceMs})`)
+  }
+
+  const stopMicRecording = (reason: 'user' | 'maxDuration' | 'error'): void => {
+    if (recCapTimer) { clearTimeout(recCapTimer); recCapTimer = undefined }
+    const rec = recRecorder
+    if (!rec) return
+    recStopReason = reason
+    try {
+      if (rec.state !== 'inactive') rec.stop() // 触发最后一片 dataavailable + onstop
+    } catch (e) {
+      console.warn('[liveui] 录音 stop 失败:', e)
+    }
+  }
+
   const beginPushToTalk = (): void => {
     if (!voiceMode || voiceMicAuto || pttRecording || !micStream) return
     if (llmBusy && !interruptSent) {
@@ -3210,6 +3339,7 @@ async function bootstrap(): Promise<void> {
 
   const beginInputDictation = async (): Promise<void> => {
     if (!userLineInput || !asrAvailable || voiceMicAuto || inputDictationActive) return
+    if (recRecorder) return // 录音独占麦克风期间不启用听写
     if (voiceMode) {
       // 用户已经在常规 PTT 语音模式里，不重复抢占；让现有 PTT 路径处理空格。
       return
@@ -3371,6 +3501,10 @@ async function bootstrap(): Promise<void> {
 
   const enterVoiceMode = async (): Promise<void> => {
     if (minimalMode) return
+    if (recRecorder) {
+      showLiveNotice('录音中，语音对话已暂停；/record stop 后可再通话')
+      return
+    }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: { sampleRate: 16000, channelCount: 1 },

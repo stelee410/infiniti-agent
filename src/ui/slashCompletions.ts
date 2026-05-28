@@ -74,8 +74,15 @@ const COMMAND_ITEMS: SlashItem[] = [
     id: '/memory',
     kind: 'command',
     label: '/memory',
-    desc: '提示长期记忆文件路径',
+    desc: '记忆工作区：list / current / new <名字> / switch <名字> / delete <名字>',
     insert: '/memory ',
+  },
+  {
+    id: '/record',
+    kind: 'command',
+    label: '/record',
+    desc: '录制麦克风：start / stop / status（仅 LiveUI，存 workspace/recordings/，最长2h）',
+    insert: '/record ',
   },
   {
     id: '/inbox',

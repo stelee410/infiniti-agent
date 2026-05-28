@@ -5,7 +5,8 @@ import { compactSessionMessages } from '../llm/compactSession.js'
 import { executeMemoryAction, loadMemoryStore, type MemoryAction } from '../memory/structured.js'
 import { executeProfileAction, loadProfileStore, type ProfileAction } from '../memory/userProfile.js'
 import { executeKgAction, type KgAction } from '../memory/knowledgeGraph.js'
-import { documentMemoryHitsToPromptBlock, retrieveDocumentMemories, syncDocumentMemory } from '../memory/documentMemory.js'
+import { syncDocumentMemory } from '../memory/documentMemory.js'
+import * as memory from '../memory/index.js'
 import { chooseDreamMode, runDream, shouldRunDream, type RunDreamResult } from '../dreaming/dreamRunner.js'
 import type { DreamMode, DreamSource } from '../dreaming/types.js'
 import { archiveSession } from '../session/archive.js'
@@ -15,17 +16,14 @@ import type { LiveUiSession } from '../liveui/wsSession.js'
 import { agentDebug } from '../utils/agentDebug.js'
 import {
   analyzeAgentResponse,
-  analyzeInput,
   applyHeartbeatDecay,
   applyUpdate,
-  immediateDeltaFromAgentResponse,
   planBehavior,
   relationshipDeltaFromDialogueWindow,
 } from './engine.js'
 import { consolidateRecentMemory } from './memoryConsolidator.js'
-import { SUBCONSCIOUS_DELTA_SYSTEM } from './prompts.js'
 import { loadSubconsciousStore, saveSubconsciousStore } from './state.js'
-import type { MetaState, StateDelta, SubconsciousStore } from './types.js'
+import type { MetaState, SubconsciousStore } from './types.js'
 import {
   DURABLE_CONSOLIDATION_SYSTEM,
   dominantTopic,
@@ -46,17 +44,8 @@ import {
   longTermNeedsCompression,
 } from './memoryLifecycle.js'
 
-const RECENT_LIMIT = 20
 const PROACTIVE_IDLE_HEARTBEATS = 10
 const PROACTIVE_MIN_INTERVAL_MS = 30 * 60 * 1000
-
-function parseDelta(raw: string): StateDelta | null {
-  const match = raw.match(/\{[\s\S]*\}/)
-  if (!match) return null
-  const parsed = JSON.parse(match[0]) as StateDelta
-  if (!parsed || typeof parsed !== 'object') return null
-  return parsed
-}
 
 function documentMemoryFingerprint(store: SubconsciousStore): string {
   return JSON.stringify({
@@ -86,20 +75,22 @@ function documentMemoryFingerprint(store: SubconsciousStore): string {
 }
 
 export class SubconsciousAgent {
-  private store: SubconsciousStore | null = null
+  /** memory module 直接读写 store。 */
+  store: SubconsciousStore | null = null
   private running = false
   private memoryQueue: Promise<unknown> = Promise.resolve()
   private refineQueue: Promise<unknown> = Promise.resolve()
   private compacting = false
   private documentMemoryFingerprint: string | null = null
   private debugOverlayEnabled = false
-  private idleHeartbeatCount = 0
+  /** memory module 在 observeUserInput 时清零。 */
+  idleHeartbeatCount = 0
   private lastProactiveGreetingAt = 0
   private dreaming = false
 
   constructor(
-    private readonly config: InfinitiConfig,
-    private readonly cwd: string,
+    readonly config: InfinitiConfig,
+    readonly cwd: string,
     private readonly liveUi?: LiveUiSession | null,
   ) {}
 
@@ -126,58 +117,15 @@ export class SubconsciousAgent {
   }
 
   async observeUserInput(input: string): Promise<void> {
-    await this.start()
-    if (!this.store) return
-    this.idleHeartbeatCount = 0
-    const analysis = analyzeInput(input)
-    const delta = {}
-    this.store.recent = [
-      ...this.store.recent,
-      { at: new Date().toISOString(), source: 'user' as const, text: input.slice(0, 500), analysis, delta },
-    ].slice(-RECENT_LIMIT)
-    await saveSubconsciousStore(this.cwd, this.store)
+    return memory.observeUserInput(this, input)
   }
 
   async observeAssistantOutput(output: string): Promise<void> {
-    await this.start()
-    if (!this.store || !output.trim()) return
-    const analysis = analyzeAgentResponse(output)
-    const delta = immediateDeltaFromAgentResponse(analysis)
-    this.store.state = applyUpdate(this.store.state, delta)
-    this.store.recent = [
-      ...this.store.recent,
-      { at: new Date().toISOString(), source: 'assistant' as const, text: output.slice(0, 500), analysis, delta },
-    ].slice(-RECENT_LIMIT)
-    this.applyRelationshipWindow()
-    await saveSubconsciousStore(this.cwd, this.store)
-    this.render()
-    this.enqueueRefine(() => this.refineWithLlm(output))
+    return memory.observeAssistantOutput(this, output)
   }
 
   async consolidateFromMessages(messages: PersistedMessage[]): Promise<void> {
-    await this.start()
-    if (!this.store) return
-    const recent = messages.slice(-20)
-    const additions: SubconsciousStore['recent'] = []
-    for (const m of recent) {
-      if (m.role === 'user') {
-        const text = m.content.slice(0, 500)
-        additions.push({ at: new Date().toISOString(), source: 'user', text, analysis: analyzeInput(text), delta: {} })
-        continue
-      }
-      if (m.role === 'assistant' && m.content?.trim()) {
-        const text = m.content.slice(0, 500)
-        additions.push({ at: new Date().toISOString(), source: 'assistant', text, analysis: analyzeAgentResponse(text), delta: {} })
-      }
-    }
-    if (additions.length === 0) return
-    this.store.recent = [...this.store.recent, ...additions].slice(-RECENT_LIMIT)
-    this.applyRelationshipWindow()
-    const beforeMemory = this.currentDocumentMemoryFingerprint()
-    this.store = consolidateRecentMemory(this.store)
-    await saveSubconsciousStore(this.cwd, this.store)
-    await this.syncDocumentMemoryIfChanged(beforeMemory)
-    this.render()
+    return memory.consolidateFromMessages(this, messages)
   }
 
   async heartbeat(
@@ -225,15 +173,15 @@ export class SubconsciousAgent {
   }
 
   async executeMemoryAction(act: MemoryAction): Promise<Awaited<ReturnType<typeof executeMemoryAction>>> {
-    return this.enqueueMemoryWork(() => executeMemoryAction(this.cwd, act))
+    return memory.executeMemoryAction(this, act)
   }
 
   async executeProfileAction(act: ProfileAction): Promise<Awaited<ReturnType<typeof executeProfileAction>>> {
-    return this.enqueueMemoryWork(() => executeProfileAction(this.cwd, act))
+    return memory.executeProfileAction(this, act)
   }
 
   async executeKgAction(act: KgAction): Promise<Awaited<ReturnType<typeof executeKgAction>>> {
-    return this.enqueueMemoryWork(() => executeKgAction(this.cwd, act))
+    return memory.executeKgAction(this, act)
   }
 
   async loadMemoryStore(): Promise<Awaited<ReturnType<typeof loadMemoryStore>>> {
@@ -245,12 +193,7 @@ export class SubconsciousAgent {
   }
 
   async retrieveRelevantMemory(query: string): Promise<string> {
-    await this.start()
-    const hits = await retrieveDocumentMemories(this.cwd, query, 6)
-    void this.enqueueMemoryWork(() => this.reinforceRetrievedMemories(hits.map((hit) => hit.id))).catch((e) => {
-      agentDebug('[subconscious-agent] memory reinforcement failed', e)
-    })
-    return documentMemoryHitsToPromptBlock(hits)
+    return memory.retrieveRelevantMemory(this, query)
   }
 
   async runDreamNow(opts: {
@@ -338,27 +281,6 @@ export class SubconsciousAgent {
         this.compacting = false
       }
     })
-  }
-
-  private async refineWithLlm(input: string): Promise<void> {
-    const profile = this.config.llm.subconsciousProfile?.trim() || undefined
-    if (!this.store) return
-    try {
-      const raw = await oneShotTextCompletion({
-        config: this.config,
-        profile,
-        system: SUBCONSCIOUS_DELTA_SYSTEM,
-        user: `当前状态：${JSON.stringify(this.store.state)}\n\n主 Agent 回复：${input}`,
-        maxOutTokens: 512,
-      })
-      const delta = parseDelta(raw)
-      if (!delta || !this.store) return
-      this.store.state = applyUpdate(this.store.state, delta)
-      await saveSubconsciousStore(this.cwd, this.store)
-      this.render()
-    } catch (e) {
-      agentDebug('[subconscious-agent] refine failed', e)
-    }
   }
 
   private async scanHistoryForStableFacts(now: Date): Promise<void> {
@@ -470,7 +392,7 @@ export class SubconsciousAgent {
     }
   }
 
-  private async reinforceRetrievedMemories(ids: string[]): Promise<void> {
+  async reinforceRetrievedMemories(ids: string[]): Promise<void> {
     if (!this.store || ids.length === 0) return
     const idSet = new Set(ids)
     const now = new Date().toISOString()
@@ -487,11 +409,11 @@ export class SubconsciousAgent {
     await this.syncDocumentMemoryIfChanged()
   }
 
-  private currentDocumentMemoryFingerprint(): string | null {
+  currentDocumentMemoryFingerprint(): string | null {
     return this.store ? documentMemoryFingerprint(this.store) : null
   }
 
-  private async syncDocumentMemoryIfChanged(previous?: string | null): Promise<void> {
+  async syncDocumentMemoryIfChanged(previous?: string | null): Promise<void> {
     if (!this.store) return
     const next = documentMemoryFingerprint(this.store)
     const before = previous ?? this.documentMemoryFingerprint
@@ -506,7 +428,7 @@ export class SubconsciousAgent {
     }
   }
 
-  private enqueueMemoryWork<T>(work: () => Promise<T>): Promise<T> {
+  enqueueMemoryWork<T>(work: () => Promise<T>): Promise<T> {
     const run = this.memoryQueue.then(work, work)
     this.memoryQueue = run.catch(() => {})
     return run
@@ -517,12 +439,12 @@ export class SubconsciousAgent {
     await this.refineQueue.catch(() => {})
   }
 
-  private enqueueRefine(work: () => Promise<void>): void {
+  enqueueRefine(work: () => Promise<void>): void {
     const run = this.refineQueue.then(work, work)
     this.refineQueue = run.catch(() => {})
   }
 
-  private applyRelationshipWindow(): void {
+  applyRelationshipWindow(): void {
     if (!this.store) return
     const analyses = this.store.recent
       .filter((r) => r.source === 'assistant')
@@ -533,7 +455,7 @@ export class SubconsciousAgent {
     this.store.state = applyUpdate(this.store.state, delta)
   }
 
-  private render(opts: { heartbeatMicroAction?: boolean } = {}): void {
+  render(opts: { heartbeatMicroAction?: boolean } = {}): void {
     if (!this.liveUi || !this.store) return
     const command = planBehavior(this.store.state)
     const microAction = opts.heartbeatMicroAction ? this.heartbeatMicroAction() : {}
@@ -600,7 +522,7 @@ export class SubconsciousAgent {
       const text = await oneShotTextCompletion({
         config: this.config,
         profile,
-        maxOutTokens: 260,
+        maxOutTokens: 512,
         system:
           '你是 subconscious-agent 的主动陪伴模块。只在用户长时间没有互动时，为主 Agent 生成一句非常短的中文招呼。要求：自然、克制、不打扰；不要解释原因；不要提 heartbeat；可以带一个 LiveUI 表情标签，如 [Happy] 或 [Thinking]；最多 35 个中文字符。',
         user:

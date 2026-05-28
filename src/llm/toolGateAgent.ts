@@ -125,7 +125,7 @@ async function llmEvaluate(
       config,
       system: GATE_SYSTEM,
       user: userPrompt,
-      maxOutTokens: 256,
+      maxOutTokens: 512,
       profile,
     })
 

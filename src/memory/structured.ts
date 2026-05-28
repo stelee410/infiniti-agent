@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from 'fs/promises'
 import { dirname } from 'path'
-import { localAgentDir } from '../paths.js'
+import { activeMemoryDir } from '../paths.js'
 import { join } from 'path'
 
 export type MemoryTag = 'fact' | 'preference' | 'lesson' | 'convention' | 'environment' | 'other'
@@ -23,7 +23,7 @@ const MAX_TOTAL_CHARS = 6000
 const MEMORY_FILE = 'memory.json'
 
 function memoryJsonPath(cwd: string): string {
-  return join(localAgentDir(cwd), MEMORY_FILE)
+  return join(activeMemoryDir(cwd), MEMORY_FILE)
 }
 
 function generateId(): string {

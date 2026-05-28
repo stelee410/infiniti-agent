@@ -1,7 +1,7 @@
 import { type ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
-import { createReadStream, statSync } from 'node:fs'
-import { mkdtemp, writeFile } from 'node:fs/promises'
+import { createReadStream, createWriteStream, statSync, type WriteStream } from 'node:fs'
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { tmpdir } from 'node:os'
 import { extname, isAbsolute, join, relative, resolve } from 'node:path'
@@ -19,6 +19,7 @@ import type {
   LiveUiVisionAttachment,
   LiveUiH5AppletLibraryItem,
   LiveUiAssistantVoiceMessage,
+  LiveUiRecordingControlMessage,
 } from './protocol.js'
 import { parseSpeakCommandLine } from './speakCommandLine.js'
 import { StreamMouthEstimator } from './streamMouth.js'
@@ -87,6 +88,39 @@ function nextAssistantMediaRequestId(): string {
   return `am-${Date.now().toString(36)}-${assistantMediaSeq}`
 }
 
+/** 录音默认上限 2 小时；客户端与服务端双重兜底。 */
+const RECORDING_MAX_MS = 2 * 60 * 60 * 1000
+/** MediaRecorder 分片间隔：1s 一片，流式回传追加写盘。 */
+const RECORDING_TIMESLICE_MS = 1000
+const RECORDING_START_ACK_MS = 8000
+const RECORDING_STOP_ACK_MS = 6000
+
+export type RecordingStartResult =
+  | { ok: true; recordingId: string; path: string }
+  | { ok: false; error: string }
+export type RecordingStopResult =
+  | { ok: true; path: string; durationMs: number; bytes: number }
+  | { ok: false; error: string }
+export type RecordingStatus =
+  | { active: false }
+  | { active: true; recordingId: string; startedAt: number; durationMs: number; path: string; bytes: number }
+
+type RecordingState = {
+  id: string
+  startedAt: number
+  path: string
+  stream: WriteStream | null
+  bytes: number
+  chunks: number
+  maxMs: number
+  status: 'starting' | 'recording' | 'stopping'
+  capTimer: ReturnType<typeof setTimeout> | null
+  ackResolve: ((r: RecordingStartResult) => void) | null
+  ackTimer: ReturnType<typeof setTimeout> | null
+  stopResolve: ((r: RecordingStopResult) => void) | null
+  stopTimer: ReturnType<typeof setTimeout> | null
+}
+
 export class LiveUiSession {
   readonly port: number
   readonly mouth = new StreamMouthEstimator()
@@ -128,18 +162,23 @@ export class LiveUiSession {
   private readonly assistantVoicePossible: number
   private readonly streamTtsPlayback: boolean
   private readonly random: () => number
+  /** 录音落盘目录（.infiniti-agent/workspace/recordings/）；未配置则录音不可用。 */
+  private readonly recordingsDir: string | null
+  private recording: RecordingState | null = null
 
   constructor(port: number, opts: {
     mediaRoots?: string[]
     assistantVoicePossible?: number
     streamTtsPlayback?: boolean
     random?: () => number
+    recordingsDir?: string
   } = {}) {
     this.port = port
     this.mediaRoots = (opts.mediaRoots ?? []).map((p) => resolve(p))
     this.assistantVoicePossible = clampProbability(opts.assistantVoicePossible ?? 0)
     this.streamTtsPlayback = opts.streamTtsPlayback ?? true
     this.random = opts.random ?? Math.random
+    this.recordingsDir = opts.recordingsDir ? resolve(opts.recordingsDir) : null
   }
 
   setTtsEnabled(enabled: boolean): void {
@@ -437,10 +476,12 @@ export class LiveUiSession {
       ws.on('close', () => {
         this.clients.delete(ws)
         this.emitConn()
+        this.finalizeRecordingIfClientGone()
       })
       ws.on('error', () => {
         this.clients.delete(ws)
         this.emitConn()
+        this.finalizeRecordingIfClientGone()
       })
     })
 
@@ -549,6 +590,18 @@ export class LiveUiSession {
         return
       case 'CALL_USER_INPUT':
         this.emitCallUserInput(message.text)
+        return
+      case 'REC_STARTED':
+        this.onRecStarted(message.recordingId)
+        return
+      case 'REC_CHUNK':
+        this.onRecChunk(message.recordingId, message.audioBase64, message.sequence)
+        return
+      case 'REC_STOPPED':
+        this.onRecStopped(message.recordingId)
+        return
+      case 'REC_ERROR':
+        this.onRecError(message.recordingId, message.error)
         return
     }
   }
@@ -945,6 +998,187 @@ export class LiveUiSession {
     }
   }
 
+  // ===== 录音（独立连续采集，不走 ASR 的 MIC_AUDIO 分片） =====
+
+  /**
+   * 开始一段麦克风录音。让渲染端起一个专用 MediaRecorder 连续采集，分片回传追加写盘。
+   * 返回 promise：客户端确认开始（REC_STARTED）后 resolve 成功，权限失败/无客户端/超时则失败。
+   */
+  startRecording(opts: { maxMs?: number } = {}): Promise<RecordingStartResult> {
+    if (!this.recordingsDir) {
+      return Promise.resolve({ ok: false, error: '录音未配置落盘目录（需 LiveUI 模式）' })
+    }
+    if (this.recording) {
+      return Promise.resolve({ ok: false, error: '已有录音在进行，请先停止' })
+    }
+    if (this.clients.size === 0) {
+      return Promise.resolve({ ok: false, error: '未连接 LiveUI 客户端，无法采集麦克风' })
+    }
+    const id = `rec-${Date.now().toString(36)}-${Math.floor(this.random() * 1e6).toString(36)}`
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+    const path = join(this.recordingsDir, `${stamp}-${id}.webm`)
+    const maxMs = Math.max(1000, Math.min(RECORDING_MAX_MS, opts.maxMs ?? RECORDING_MAX_MS))
+    const state: RecordingState = {
+      id,
+      startedAt: Date.now(),
+      path,
+      stream: null,
+      bytes: 0,
+      chunks: 0,
+      maxMs,
+      status: 'starting',
+      capTimer: null,
+      ackResolve: null,
+      ackTimer: null,
+      stopResolve: null,
+      stopTimer: null,
+    }
+    this.recording = state
+    const promise = new Promise<RecordingStartResult>((resolve) => {
+      state.ackResolve = resolve
+      state.ackTimer = setTimeout(() => {
+        // 客户端无响应：清理状态（很可能是麦克风未授权或渲染端未实现）。
+        if (this.recording === state && state.status === 'starting') {
+          this.recording = null
+          this.resolveStart(state, { ok: false, error: '客户端无响应（麦克风未授权？）' })
+        }
+      }, RECORDING_START_ACK_MS)
+    })
+    this.broadcast({
+      type: 'RECORDING_CONTROL',
+      data: { action: 'start', recordingId: id, maxMs, timesliceMs: RECORDING_TIMESLICE_MS },
+    } as LiveUiRecordingControlMessage as LiveUiMessage)
+    return promise
+  }
+
+  /** 停止当前录音并 finalize 文件。返回最终路径/时长/字节数。 */
+  stopRecording(): Promise<RecordingStopResult> {
+    const state = this.recording
+    if (!state) return Promise.resolve({ ok: false, error: '当前没有在录音' })
+    if (state.status === 'stopping' && state.stopResolve) {
+      return Promise.resolve({ ok: false, error: '正在停止中' })
+    }
+    state.status = 'stopping'
+    const promise = new Promise<RecordingStopResult>((resolve) => {
+      state.stopResolve = resolve
+      state.stopTimer = setTimeout(() => {
+        // 客户端没回 REC_STOPPED：用已落盘内容兜底 finalize。
+        void this.finalizeRecording(state, 'timeout')
+      }, RECORDING_STOP_ACK_MS)
+    })
+    this.broadcast({
+      type: 'RECORDING_CONTROL',
+      data: { action: 'stop', recordingId: state.id },
+    } as LiveUiRecordingControlMessage as LiveUiMessage)
+    return promise
+  }
+
+  recordingStatus(): RecordingStatus {
+    const s = this.recording
+    if (!s) return { active: false }
+    return {
+      active: true,
+      recordingId: s.id,
+      startedAt: s.startedAt,
+      durationMs: Date.now() - s.startedAt,
+      path: s.path,
+      bytes: s.bytes,
+    }
+  }
+
+  private onRecStarted(recordingId: string): void {
+    const state = this.recording
+    if (!state || state.id !== recordingId || state.status !== 'starting') return
+    void this.beginRecordingFile(state)
+  }
+
+  private async beginRecordingFile(state: RecordingState): Promise<void> {
+    try {
+      await mkdir(this.recordingsDir!, { recursive: true })
+      state.stream = createWriteStream(state.path)
+    } catch (e) {
+      if (this.recording === state) this.recording = null
+      this.resolveStart(state, { ok: false, error: `创建录音文件失败：${(e as Error).message}` })
+      return
+    }
+    if (this.recording !== state) {
+      // 期间被取消
+      state.stream.end()
+      return
+    }
+    state.status = 'recording'
+    state.startedAt = Date.now()
+    state.capTimer = setTimeout(() => {
+      // 服务端 2h 兜底：通知客户端停止（客户端通常已自停）。
+      this.broadcast({
+        type: 'RECORDING_CONTROL',
+        data: { action: 'stop', recordingId: state.id },
+      } as LiveUiRecordingControlMessage as LiveUiMessage)
+      void this.finalizeRecording(state, 'maxDuration')
+    }, state.maxMs)
+    this.resolveStart(state, { ok: true, recordingId: state.id, path: state.path })
+  }
+
+  private onRecChunk(recordingId: string, audioBase64: string, _sequence: number): void {
+    const state = this.recording
+    if (!state || state.id !== recordingId || !state.stream || state.status === 'starting') return
+    const buf = Buffer.from(audioBase64, 'base64')
+    state.bytes += buf.length
+    state.chunks += 1
+    state.stream.write(buf)
+  }
+
+  private onRecStopped(recordingId: string): void {
+    const state = this.recording
+    if (!state || state.id !== recordingId) return
+    void this.finalizeRecording(state, 'client')
+  }
+
+  private onRecError(recordingId: string, error: string): void {
+    const state = this.recording
+    if (!state || state.id !== recordingId) return
+    if (state.status === 'starting') {
+      this.recording = null
+      this.resolveStart(state, { ok: false, error })
+      return
+    }
+    void this.finalizeRecording(state, 'error')
+  }
+
+  /** 采集客户端断连时，把已落盘的录音 finalize，不丢已录部分。 */
+  private finalizeRecordingIfClientGone(): void {
+    if (this.recording && this.clients.size === 0) {
+      void this.finalizeRecording(this.recording, 'disconnect')
+    }
+  }
+
+  private resolveStart(state: RecordingState, result: RecordingStartResult): void {
+    if (state.ackTimer) { clearTimeout(state.ackTimer); state.ackTimer = null }
+    const resolve = state.ackResolve
+    state.ackResolve = null
+    resolve?.(result)
+  }
+
+  /** 关闭写流、清理定时器、resolve 等待中的 stop promise。幂等。 */
+  private async finalizeRecording(state: RecordingState, _reason: string): Promise<void> {
+    if (this.recording !== state) return
+    this.recording = null
+    if (state.capTimer) { clearTimeout(state.capTimer); state.capTimer = null }
+    if (state.ackTimer) { clearTimeout(state.ackTimer); state.ackTimer = null }
+    if (state.stopTimer) { clearTimeout(state.stopTimer); state.stopTimer = null }
+    if (state.stream) {
+      await new Promise<void>((resolve) => state.stream!.end(() => resolve()))
+    }
+    const durationMs = Date.now() - state.startedAt
+    const stopResolve = state.stopResolve
+    state.stopResolve = null
+    if (state.bytes > 0) {
+      stopResolve?.({ ok: true, path: state.path, durationMs, bytes: state.bytes })
+    } else {
+      stopResolve?.({ ok: false, error: '没有录到任何音频数据' })
+    }
+  }
+
   get hasTts(): boolean {
     return this.ttsEngine != null && this.ttsEnabled
   }
@@ -974,6 +1208,9 @@ export class LiveUiSession {
 
   async dispose(): Promise<void> {
     this.stopMouthPump()
+    if (this.recording) {
+      await this.finalizeRecording(this.recording, 'dispose')
+    }
     for (const c of this.clients) {
       try {
         c.close()

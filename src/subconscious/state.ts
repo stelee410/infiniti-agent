@@ -1,12 +1,12 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { localAgentDir } from '../paths.js'
+import { activeMemoryDir } from '../paths.js'
 import type { MetaState, SubconsciousMemoryEntry, SubconsciousStore } from './types.js'
 
 const FILE = 'subconscious.json'
 
 export function subconsciousPath(cwd: string): string {
-  return join(localAgentDir(cwd), FILE)
+  return join(activeMemoryDir(cwd), FILE)
 }
 
 export function defaultMetaState(now = new Date().toISOString()): MetaState {

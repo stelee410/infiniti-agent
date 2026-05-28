@@ -1,7 +1,7 @@
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import Database from 'better-sqlite3'
-import { localAgentDir } from '../paths.js'
+import { activeMemoryDir } from '../paths.js'
 import type { SubconsciousMemoryEntry, SubconsciousStore } from '../subconscious/types.js'
 
 const DOC_DIR = join('memory', 'long-term')
@@ -41,7 +41,7 @@ type ParsedDocEntry = DocumentMemoryIndex['entries'][number] & {
 }
 
 export function documentMemoryDir(cwd: string): string {
-  return join(localAgentDir(cwd), DOC_DIR)
+  return join(activeMemoryDir(cwd), DOC_DIR)
 }
 
 export async function syncDocumentMemory(cwd: string, store: SubconsciousStore): Promise<void> {

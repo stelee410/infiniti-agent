@@ -2,7 +2,7 @@ import { parseScheduleRequest } from '../schedule/parser.js'
 import type { ScheduleCreateInput } from '../schedule/store.js'
 
 export const CHAT_HELP_TEXT =
-  '输入 / 可补全：斜杠命令与全部工具（↑↓ Tab）。命令: /exit /clear /reload /config /schedule /memory /inbox /last_email /undo /roll /compact /permission /speak /showmemagic /snap /avatargen /video /sendImage /sendVideo /sendFile — /schedule list 查看计划，/schedule add 每天早上8点做某事 创建计划；自然语言提醒/定时会由模型调用 schedule 工具。/config 仅 Live 模式打开配置面板；/showmemagic 打开官方 H5/SVG/CSS 动画测试页；/last_email 打开最近一封邮箱消息；/speak 后接正文仅 TTS 朗读、不写会话；/snap 后接提示词异步生成合照/写实照片；/avatargen 后接要求并附带头像图，异步生成 real2d 的 exp01..exp06 与 exp_open；/video 后接提示词异步生成 Seedance 视频，完成后写入你的邮箱；/sendImage <path> [caption] 把本地图片直接推给已连接的 LiveUI 客户端（如微信桥接），/sendVideo /sendFile 同理。/roll 2 可按 LLM 输出层回滚对话。改文件/bash/HTTP 默认需确认（Y 允许 · A 本次会话始终允许该工具 · N 拒绝）；启动时加 --dangerously-skip-permissions 可跳过所有确认。/permission 查看当前状态。/compact 压缩较早历史。卡死排查：INFINITI_AGENT_DEBUG=1。'
+  '输入 / 可补全：斜杠命令与全部工具（↑↓ Tab）。命令: /exit /clear /reload /config /schedule /memory /inbox /last_email /undo /roll /compact /permission /speak /showmemagic /snap /avatargen /video /record /sendImage /sendVideo /sendFile — /schedule list 查看计划，/schedule add 每天早上8点做某事 创建计划；自然语言提醒/定时会由模型调用 schedule 工具。/config 仅 Live 模式打开配置面板；/showmemagic 打开官方 H5/SVG/CSS 动画测试页；/last_email 打开最近一封邮箱消息；/speak 后接正文仅 TTS 朗读、不写会话；/snap 后接提示词异步生成合照/写实照片；/avatargen 后接要求并附带头像图，异步生成 real2d 的 exp01..exp06 与 exp_open；/video 后接提示词异步生成 Seedance 视频，完成后写入你的邮箱；/sendImage <path> [caption] 把本地图片直接推给已连接的 LiveUI 客户端（如微信桥接），/sendVideo /sendFile 同理。/memory 管理记忆工作区：/memory list 列出全部、/memory current 当前记忆、/memory new <名字> 新建、/memory switch <名字> 切换（连同对话一起切，main 为主记忆且唯一可同步）、/memory delete <名字> 删除。/record start|stop|status 录制麦克风（仅 LiveUI，存到 workspace/recordings/，最长2小时，录完再转写）。/roll 2 可按 LLM 输出层回滚对话。改文件/bash/HTTP 默认需确认（Y 允许 · A 本次会话始终允许该工具 · N 拒绝）；启动时加 --dangerously-skip-permissions 可跳过所有确认。/permission 查看当前状态。/compact 压缩较早历史。卡死排查：INFINITI_AGENT_DEBUG=1。'
 
 export type ChatSlashCommand =
   | { kind: 'exit' }
@@ -17,7 +17,9 @@ export type ChatSlashCommand =
   | { kind: 'dreamRun'; mode: 'light' | 'full' }
   | { kind: 'dreamDiary' }
   | { kind: 'dreamContext' }
-  | { kind: 'memory' }
+  | { kind: 'memory'; action: 'help' | 'current' | 'list' }
+  | { kind: 'memory'; action: 'new' | 'switch' | 'delete'; name: string }
+  | { kind: 'record'; action: 'start' | 'stop' | 'status' }
   | { kind: 'inbox'; unreadOnly: boolean }
   | { kind: 'lastEmail' }
   | { kind: 'help' }
@@ -38,6 +40,7 @@ type ExactCommand = {
     | 'compact'
     | 'roll'
     | 'sendMedia'
+    | 'memory'
   >
 }
 
@@ -51,7 +54,6 @@ const EXACT_COMMANDS: readonly ExactCommand[] = [
   { names: ['/schedule clear'], kind: 'scheduleClear' },
   { names: ['/dream', '/dream diary'], kind: 'dreamDiary' },
   { names: ['/dream context'], kind: 'dreamContext' },
-  { names: ['/memory'], kind: 'memory' },
   { names: ['/last_email'], kind: 'lastEmail' },
   { names: ['/help'], kind: 'help' },
   {
@@ -69,6 +71,25 @@ export function parseChatSlashCommand(raw: string): ChatSlashCommand | null {
     }
   }
 
+  if (raw === '/record' || raw.startsWith('/record ')) {
+    const sub = raw.slice('/record'.length).trim().toLowerCase()
+    if (sub === 'start' || sub === 'rec') return { kind: 'record', action: 'start' }
+    if (sub === 'stop' || sub === 'end') return { kind: 'record', action: 'stop' }
+    return { kind: 'record', action: 'status' }
+  }
+  if (raw === '/memory' || raw.startsWith('/memory ')) {
+    const rest = raw.slice('/memory'.length).trim()
+    if (!rest) return { kind: 'memory', action: 'help' }
+    const sp = rest.indexOf(' ')
+    const sub = (sp < 0 ? rest : rest.slice(0, sp)).toLowerCase()
+    const name = sp < 0 ? '' : rest.slice(sp + 1).trim()
+    if (sub === 'current') return { kind: 'memory', action: 'current' }
+    if (sub === 'list' || sub === 'ls') return { kind: 'memory', action: 'list' }
+    if (sub === 'new' || sub === 'create') return { kind: 'memory', action: 'new', name }
+    if (sub === 'switch' || sub === 'use' || sub === 'load') return { kind: 'memory', action: 'switch', name }
+    if (sub === 'delete' || sub === 'rm' || sub === 'del') return { kind: 'memory', action: 'delete', name }
+    return { kind: 'memory', action: 'help' }
+  }
   if (raw.startsWith('/schedule remove ') || raw.startsWith('/schedule rm ')) {
     return {
       kind: 'scheduleRemove',

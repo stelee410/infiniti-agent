@@ -6,7 +6,7 @@ import { hostname, tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import { basename, dirname, join } from 'node:path'
 import { ensureLocalAgentDir } from '../config/io.js'
-import { localAgentDir, localLinkyunRefDir, localSessionPath } from '../paths.js'
+import { localAgentDir, localLinkyunRefDir, mainSessionPath } from '../paths.js'
 import { exportAgentArchive, importAgentArchive } from './agentArchive.js'
 
 const DEFAULT_API_BASE = 'https://api.linkyun.co'
@@ -511,7 +511,7 @@ async function syncAgentMetadata(
 
 async function localSessionMtimeMs(cwd: string): Promise<number | null> {
   try {
-    return (await stat(localSessionPath(cwd))).mtimeMs
+    return (await stat(mainSessionPath(cwd))).mtimeMs
   } catch {
     return null
   }
@@ -692,7 +692,7 @@ async function uploadAgentArchive(
 
 async function alignLocalSessionMtime(cwd: string, timeMs: number | null): Promise<void> {
   if (timeMs === null) return
-  const path = localSessionPath(cwd)
+  const path = mainSessionPath(cwd)
   if (!existsSync(path)) return
   const date = new Date(timeMs)
   await utimes(path, date, date).catch(() => {})

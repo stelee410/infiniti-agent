@@ -14,6 +14,7 @@ import {
   expandUserPath,
   localAgentDir,
   localSkillsDir,
+  recordingsDir,
   GLOBAL_AGENT_DIR,
 } from './paths.js'
 import { runCliPrompt } from './runCliPrompt.js'
@@ -503,6 +504,7 @@ async function main(): Promise<void> {
           mediaRoots: [localAgentDir(cwd)],
           assistantVoicePossible: livePlan.voicePossible,
           streamTtsPlayback: !livePlan.headless,
+          recordingsDir: recordingsDir(cwd),
         })
         await runChatTui({
           skipPermissions,

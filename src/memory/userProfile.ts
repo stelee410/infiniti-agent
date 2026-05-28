@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from 'fs/promises'
 import { dirname, join } from 'path'
-import { localAgentDir } from '../paths.js'
+import { activeMemoryDir } from '../paths.js'
 
 export type ProfileTag = 'tech_stack' | 'communication' | 'workflow' | 'background' | 'other'
 
@@ -22,7 +22,7 @@ const MAX_TOTAL_CHARS = 3000
 const PROFILE_FILE = 'user_profile.json'
 
 function profileJsonPath(cwd: string): string {
-  return join(localAgentDir(cwd), PROFILE_FILE)
+  return join(activeMemoryDir(cwd), PROFILE_FILE)
 }
 
 function generateId(): string {

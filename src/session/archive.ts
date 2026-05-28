@@ -1,13 +1,13 @@
 import Database from 'better-sqlite3'
 import { mkdir } from 'fs/promises'
 import { dirname, join } from 'path'
-import { localAgentDir } from '../paths.js'
+import { activeMemoryDir } from '../paths.js'
 import type { PersistedMessage } from '../llm/persisted.js'
 
 const DB_FILE = 'sessions.db'
 
 function dbPath(cwd: string): string {
-  return join(localAgentDir(cwd), DB_FILE)
+  return join(activeMemoryDir(cwd), DB_FILE)
 }
 
 function openDb(cwd: string): Database.Database {

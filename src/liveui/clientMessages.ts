@@ -24,6 +24,10 @@ export type LiveUiClientMessage =
   | { type: 'CALL_MODE_START' }
   | { type: 'CALL_MODE_END' }
   | { type: 'CALL_USER_INPUT'; text: string }
+  | { type: 'REC_STARTED'; recordingId: string }
+  | { type: 'REC_CHUNK'; recordingId: string; audioBase64: string; sequence: number }
+  | { type: 'REC_STOPPED'; recordingId: string; reason?: 'user' | 'maxDuration' | 'error' }
+  | { type: 'REC_ERROR'; recordingId: string; error: string }
 
 export function parseLiveUiClientMessage(raw: string): LiveUiClientMessage | null {
   let parsed: { type?: unknown; data?: unknown }
@@ -150,6 +154,37 @@ export function parseLiveUiClientMessage(raw: string): LiveUiClientMessage | nul
       const text = data.text.trim()
       if (!text) return null
       return { type: 'CALL_USER_INPUT', text }
+    }
+    case 'REC_STARTED': {
+      if (!data || typeof data.recordingId !== 'string' || !data.recordingId) return null
+      return { type: 'REC_STARTED', recordingId: data.recordingId }
+    }
+    case 'REC_CHUNK': {
+      if (!data || typeof data.recordingId !== 'string' || !data.recordingId) return null
+      if (typeof data.audioBase64 !== 'string' || typeof data.sequence !== 'number') return null
+      return {
+        type: 'REC_CHUNK',
+        recordingId: data.recordingId,
+        audioBase64: data.audioBase64,
+        sequence: data.sequence,
+      }
+    }
+    case 'REC_STOPPED': {
+      if (!data || typeof data.recordingId !== 'string' || !data.recordingId) return null
+      const reason = data.reason
+      return {
+        type: 'REC_STOPPED',
+        recordingId: data.recordingId,
+        ...(reason === 'user' || reason === 'maxDuration' || reason === 'error' ? { reason } : {}),
+      }
+    }
+    case 'REC_ERROR': {
+      if (!data || typeof data.recordingId !== 'string' || !data.recordingId) return null
+      return {
+        type: 'REC_ERROR',
+        recordingId: data.recordingId,
+        error: typeof data.error === 'string' ? data.error : 'unknown',
+      }
     }
     default:
       return null
