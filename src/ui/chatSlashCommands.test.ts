@@ -65,6 +65,12 @@ describe('parseChatSlashCommand', () => {
     expect(parseChatSlashCommand('/record bogus')).toEqual({ kind: 'record', action: 'status' })
   })
 
+  it('parses /screenshot with optional hint', () => {
+    expect(parseChatSlashCommand('/screenshot')).toEqual({ kind: 'screenshot', hint: '' })
+    expect(parseChatSlashCommand('/screenshot 看看我在写什么代码')).toEqual({ kind: 'screenshot', hint: '看看我在写什么代码' })
+    expect(parseChatSlashCommand('/screen')).toEqual({ kind: 'screenshot', hint: '' })
+  })
+
   it('ignores non-registered commands', () => {
     expect(parseChatSlashCommand('/snap image')).toBeNull()
     expect(parseChatSlashCommand('hello')).toBeNull()

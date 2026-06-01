@@ -292,6 +292,11 @@ export class LiveUiSession {
     return vision
   }
 
+  /** 暂存一张视觉附件（如截屏），它会挂到用户下一条消息上一起发给 LLM。 */
+  stagePendingVision(vision: LiveUiVisionAttachment): void {
+    this.pendingVisionAttachment = vision
+  }
+
   consumePendingFileAttachments(): LiveUiFileAttachment[] {
     const attachments = this.pendingFileAttachments
     this.pendingFileAttachments = []

@@ -85,6 +85,13 @@ const COMMAND_ITEMS: SlashItem[] = [
     insert: '/record ',
   },
   {
+    id: '/screenshot',
+    kind: 'command',
+    label: '/screenshot',
+    desc: '截取主屏并看图理解你在做什么（仅 macOS，需屏幕录制权限）',
+    insert: '/screenshot ',
+  },
+  {
     id: '/inbox',
     kind: 'command',
     label: '/inbox',

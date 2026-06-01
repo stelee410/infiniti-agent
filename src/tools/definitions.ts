@@ -32,6 +32,7 @@ export type BuiltinToolName =
   | 'start_recording'
   | 'stop_recording'
   | 'recording_status'
+  | 'screenshot'
 
 export const BUILTIN_TOOLS: Array<{
   name: BuiltinToolName
@@ -688,6 +689,17 @@ export const BUILTIN_TOOLS: Array<{
   {
     name: 'recording_status',
     description: '查询当前是否在录音；若在录，返回 recordingId、已录时长、已写字节与文件路径。',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'screenshot',
+    description:
+      '截取主显示器整屏，保存到 .infiniti-agent/workspace/screenshots/（仅 macOS，需「屏幕录制」权限）。截图会作为视觉附件附到对话上——你会在用户的下一条消息里看到这张屏幕图，从而理解用户在做什么。注意：本工具不会在当前这一轮就把图返回给你；要让用户立刻得到你对屏幕的解读，请引导用户用 /screenshot 命令（它会立即带图触发一轮）。',
     parameters: {
       type: 'object',
       additionalProperties: false,

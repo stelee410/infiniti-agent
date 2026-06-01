@@ -88,6 +88,11 @@ export function recordingsDir(cwd: string): string {
   return join(localWorkspaceDir(cwd), 'recordings')
 }
 
+/** 截图落盘目录：.infiniti-agent/workspace/screenshots/ */
+export function screenshotsDir(cwd: string): string {
+  return join(localWorkspaceDir(cwd), 'screenshots')
+}
+
 export function localConfigPath(cwd: string): string {
   return join(cwd, LOCAL_DIR_NAME, 'config.json')
 }

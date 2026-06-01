@@ -27,6 +27,7 @@ import { CallAugmenter } from '../subconscious/callAugmenter.js'
 import { saveSession, loadSession } from '../session/file.js'
 import { localInboxDir, localSkillsDir, getActiveMemoryName } from '../paths.js'
 import { switchMemory } from '../memory/workspace.js'
+import { captureMainScreenVision } from '../screenshot/capture.js'
 import type { McpManager } from '../mcp/manager.js'
 import { loadConfig, saveProjectConfig } from '../config/io.js'
 import { formatChatError } from '../utils/formatError.js'
@@ -818,6 +819,19 @@ export function ChatApp({
               deliverLocalCommandExchange,
             })
             return
+          case 'screenshot': {
+            setInput('')
+            setNotice('📸 截屏中…')
+            const shot = await captureMainScreenVision(cwd)
+            setNotice(null)
+            if (!shot.ok) {
+              setError(shot.error)
+              return
+            }
+            // 走 vision 管线：把截图作为视觉附件挂到一轮用户消息上，触发 LLM 看图理解。
+            await handleSubmit(slashCommand.hint || '这是我现在的屏幕截图，看看我在做什么。', shot.vision)
+            return
+          }
           case 'inbox': {
             await handleInboxSlashCommand(cwd, slashCommand, liveUi, {
               setInput,

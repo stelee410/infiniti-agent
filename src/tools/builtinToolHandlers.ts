@@ -736,6 +736,28 @@ export const builtinToolHandlers: Record<BuiltinToolName, ToolHandler> = {
     if (!ctx.liveUi) return toolError('未连接 LiveUI 客户端')
     return JSON.stringify(ctx.liveUi.recordingStatus())
   },
+  screenshot: async (_args, ctx) => {
+    const { captureMainScreenVision } = await import('../screenshot/capture.js')
+    const shot = await captureMainScreenVision(ctx.sessionCwd)
+    if (!shot.ok) return toolError(shot.error)
+    if (ctx.liveUi) {
+      ctx.liveUi.stagePendingVision(shot.vision)
+      return JSON.stringify({
+        ok: true,
+        path: shot.path,
+        bytes: shot.bytes,
+        staged: true,
+        note: '已截屏并附到对话；我会在用户下一条消息里看到这张屏幕图。',
+      })
+    }
+    return JSON.stringify({
+      ok: true,
+      path: shot.path,
+      bytes: shot.bytes,
+      staged: false,
+      note: '已截屏保存；要我立刻看图解读，请用 /screenshot 命令。',
+    })
+  },
 }
 
 async function sendAssistantMediaTool(
