@@ -98,10 +98,15 @@ export async function consolidateFromMessages(
   if (additions.length === 0) return
   agent.store.recent = [...agent.store.recent, ...additions].slice(-RECENT_LIMIT)
   agent.applyRelationshipWindow()
-  const beforeMemory = agent.currentDocumentMemoryFingerprint()
-  agent.store = consolidateRecentMemory(agent.store)
-  await saveSubconsciousStore(agent.cwd, agent.store)
-  await agent.syncDocumentMemoryIfChanged(beforeMemory)
+  // agentmem 模式：情景/长期记忆由 AgentMem 托管，跳过本地 documentMemory 巩固，仅保留情绪 recent 窗口。
+  if (!agent.usesExternalMemory) {
+    const beforeMemory = agent.currentDocumentMemoryFingerprint()
+    agent.store = consolidateRecentMemory(agent.store)
+    await saveSubconsciousStore(agent.cwd, agent.store)
+    await agent.syncDocumentMemoryIfChanged(beforeMemory)
+  } else {
+    await saveSubconsciousStore(agent.cwd, agent.store)
+  }
   agent.render()
 }
 

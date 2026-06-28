@@ -334,6 +334,33 @@ done
 
 - TUI 中输入 `/clear` 清空当前会话，`/compact` 手动触发压缩
 
+## 外部记忆（AgentMem）
+
+默认情况下记忆是**纯本地**的（`.infiniti-agent/` 下的 documentMemory + 潜意识巩固）。你也可以把记忆整体托管给外部 [AgentMem](https://agentmem.oyii.ai) 服务：配置后，agent 每轮对话后把原文上送服务端，下一轮对话前从服务端检索相关记忆注入 system prompt（**替换**本地记忆，本地提炼链路停用）。
+
+**只需一把 Memory-Key（`mem_` 前缀）**，从 AgentMem 控制台为终端用户创建 Memory 后获取；创建 Memory / 管理 Admin-Key 是平台后端职责，不在 CLI 范围内。
+
+配置方式（任选其一）：
+
+- **Live 配置面板**：`infiniti-agent live` 后用 `/config` 打开面板，切到 **Memory** 标签，后端选 `agentmem`，填服务 URL 和 Memory-Key。
+- **直接编辑** `~/.infiniti-agent/config.json` 或项目 `.infiniti-agent/config.json`：
+
+```json
+{
+  "memory": {
+    "backend": "agentmem",
+    "agentmem": {
+      "baseUrl": "https://agentmem.oyii.ai",
+      "apiKey": "mem_xxx",
+      "topK": 6,
+      "timeoutMs": 8000
+    }
+  }
+}
+```
+
+`backend` 省略或设为 `local` 时使用本地记忆。外部调用全部异步且带超时，网络故障会静默降级，不阻塞对话。实现细节见 `docs/external-memory-agentmem.md`。
+
 ## 开发
 
 ```bash

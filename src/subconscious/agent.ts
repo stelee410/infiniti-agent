@@ -13,6 +13,7 @@ import { archiveSession } from '../session/archive.js'
 import { searchSessions } from '../session/archive.js'
 import { saveSession } from '../session/file.js'
 import type { LiveUiSession } from '../liveui/wsSession.js'
+import type { ExternalMemoryBackend } from '../memory/external/agentmem.js'
 import { agentDebug } from '../utils/agentDebug.js'
 import {
   analyzeAgentResponse,
@@ -87,11 +88,17 @@ export class SubconsciousAgent {
   idleHeartbeatCount = 0
   private lastProactiveGreetingAt = 0
   private dreaming = false
+  /** Replace 模式下暂存上一条用户输入，用于配对每轮原文上送外部记忆。 */
+  private lastUserInput = ''
+  /** 外部记忆每轮 Idempotency-Key 的自增轮次。 */
+  private externalTurnCounter = 0
 
   constructor(
     readonly config: InfinitiConfig,
     readonly cwd: string,
     private readonly liveUi?: LiveUiSession | null,
+    /** 配置了 AgentMem 时注入；存在即 Replace 模式（检索/写入走外部，短路本地提炼）。 */
+    private readonly externalMemory?: ExternalMemoryBackend,
   ) {}
 
   async start(): Promise<void> {
@@ -116,15 +123,47 @@ export class SubconsciousAgent {
     return this.dreaming
   }
 
+  /** agentmem 模式：AgentMem 接管情景/长期记忆，本地仍跑情绪引擎与常驻记忆层。 */
+  get usesExternalMemory(): boolean {
+    return !!this.externalMemory
+  }
+
   async observeUserInput(input: string): Promise<void> {
+    // 情绪引擎始终在本地运行；agentmem 模式下额外暂存用户输入用于配对上送。
+    if (this.externalMemory) this.lastUserInput = input
     return memory.observeUserInput(this, input)
   }
 
   async observeAssistantOutput(output: string): Promise<void> {
+    // agentmem 模式：把这一轮原文上送外部记忆（情绪引擎仍照常在本地跑）。
+    if (this.externalMemory && output.trim()) {
+      const user = this.lastUserInput
+      this.lastUserInput = ''
+      const idemKey = this.makeExternalIdempotencyKey()
+      const backend = this.externalMemory
+      void this.enqueueMemoryWork(() => backend.add(user, output, idemKey)).catch((e) => {
+        agentDebug('[agentmem] add enqueue failed', e)
+      })
+    }
     return memory.observeAssistantOutput(this, output)
   }
 
+  /** session 标识 + 自增轮次，幂等防重放（不使用时间戳）。 */
+  private makeExternalIdempotencyKey(): string {
+    this.externalTurnCounter += 1
+    return `${this.externalSessionTag()}_turn_${this.externalTurnCounter}`
+  }
+
+  private externalSessionTag(): string {
+    let hash = 0
+    for (let i = 0; i < this.cwd.length; i++) {
+      hash = (hash * 31 + this.cwd.charCodeAt(i)) | 0
+    }
+    return `sess_${(hash >>> 0).toString(36)}`
+  }
+
   async consolidateFromMessages(messages: PersistedMessage[]): Promise<void> {
+    // agentmem 模式下，write.ts 内部会跳过本地 documentMemory 巩固，仅保留情绪 recent 窗口。
     return memory.consolidateFromMessages(this, messages)
   }
 
@@ -137,23 +176,29 @@ export class SubconsciousAgent {
     this.running = true
     const started = Date.now()
     let proactiveGreeting: string | null = null
+    // agentmem 模式：保留情绪衰减 / render / 主动打招呼 / dream，跳过本地 documentMemory 巩固。
+    const localMemory = !this.usesExternalMemory
     try {
       const beforeMemory = this.currentDocumentMemoryFingerprint()
       this.store.state = applyHeartbeatDecay(this.store.state, now.toISOString())
       this.applyRelationshipWindow()
-      this.store = consolidateRecentMemory(this.store)
-      this.store = decayFuzzyMemories(this.store, now)
-      this.store = compressLongTermMemories(this.store, now)
+      if (localMemory) {
+        this.store = consolidateRecentMemory(this.store)
+        this.store = decayFuzzyMemories(this.store, now)
+        this.store = compressLongTermMemories(this.store, now)
+      }
       this.store.metadata.lastHeartbeatAt = now.toISOString()
       this.store.metadata.lastHeartbeatDurationMs = Date.now() - started
       await saveSubconsciousStore(this.cwd, this.store)
-      await this.syncDocumentMemoryIfChanged(beforeMemory)
+      if (localMemory) await this.syncDocumentMemoryIfChanged(beforeMemory)
       this.idleHeartbeatCount += 1
       this.render({ heartbeatMicroAction: true })
       proactiveGreeting = await this.maybeCreateProactiveGreeting(now, opts.allowProactiveGreeting === true)
-      this.enqueueMemoryWork(() => this.scanHistoryForStableFacts(now)).catch((e) => {
-        agentDebug('[subconscious-agent] history scan failed', e)
-      })
+      if (localMemory) {
+        this.enqueueMemoryWork(() => this.scanHistoryForStableFacts(now)).catch((e) => {
+          agentDebug('[subconscious-agent] history scan failed', e)
+        })
+      }
       if (shouldRunDream(this.store, now)) {
         const mode = chooseDreamMode(this.store)
         this.enqueueMemoryWork(async () => {
@@ -172,6 +217,7 @@ export class SubconsciousAgent {
     return proactiveGreeting
   }
 
+  // structured 记忆 / 用户画像 / 知识图谱属于「常驻小层」，agentmem 模式下仍保留在本地、每轮全量注入。
   async executeMemoryAction(act: MemoryAction): Promise<Awaited<ReturnType<typeof executeMemoryAction>>> {
     return memory.executeMemoryAction(this, act)
   }
@@ -193,6 +239,10 @@ export class SubconsciousAgent {
   }
 
   async retrieveRelevantMemory(query: string): Promise<string> {
+    if (this.externalMemory) {
+      const ctx = await this.externalMemory.query(query)
+      return ctx ? `## 相关长期记忆（来自 AgentMem）\n${ctx}` : ''
+    }
     return memory.retrieveRelevantMemory(this, query)
   }
 

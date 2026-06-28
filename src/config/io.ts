@@ -9,10 +9,12 @@ import type {
   CompactionConfig,
   ImageConfig,
   ImageProfile,
+  AgentMemConfig,
   InfinitiConfig,
   LiveUiConfig,
   LlmProfile,
   McpServerConfig,
+  MemoryConfig,
   SeedanceVideoConfig,
   SnapImageConfig,
   TtsConfig,
@@ -153,6 +155,7 @@ export async function loadConfig(cwd?: string): Promise<InfinitiConfig> {
   const avatarGen = parseAvatarGenConfig(o.avatarGen)
   const snap = parseSnapImageConfig(o.snap)
   const seedance = parseSeedanceVideoConfig(o.seedance)
+  const memory = parseMemoryConfig(o.memory)
 
   const flatDisableTools = llm.disableTools
   const resolvedDisableTools =
@@ -191,7 +194,31 @@ export async function loadConfig(cwd?: string): Promise<InfinitiConfig> {
     ...(avatarGen ? { avatarGen } : {}),
     ...(snap ? { snap } : {}),
     ...(seedance ? { seedance } : {}),
+    ...(memory ? { memory } : {}),
   }
+}
+
+function parseMemoryConfig(raw: unknown): MemoryConfig | undefined {
+  const u = recordField(raw)
+  if (!u) return undefined
+  const out: MemoryConfig = {}
+  const backend = enumField(u.backend, ['local', 'agentmem'] as const)
+  if (backend) out.backend = backend
+
+  const am = recordField(u.agentmem)
+  if (am) {
+    const agentmem: Partial<AgentMemConfig> = {}
+    const baseUrl = stringField({ value: am.baseUrl })
+    const apiKey = stringField({ value: am.apiKey })
+    if (baseUrl) agentmem.baseUrl = baseUrl.replace(/\/+$/, '')
+    if (apiKey) agentmem.apiKey = apiKey
+    const topK = numberField({ value: am.topK, min: 1, max: 50, integer: true })
+    const timeoutMs = numberField({ value: am.timeoutMs, min: 1000, integer: true })
+    if (topK !== undefined) agentmem.topK = topK
+    if (timeoutMs !== undefined) agentmem.timeoutMs = timeoutMs
+    if (agentmem.baseUrl && agentmem.apiKey) out.agentmem = agentmem as AgentMemConfig
+  }
+  return Object.keys(out).length ? out : undefined
 }
 
 function parseStringArray(raw: unknown): string[] | undefined {
@@ -605,6 +632,7 @@ export async function saveConfig(input: SaveConfigInput): Promise<void> {
     ...(existing?.asr ? { asr: existing.asr } : {}),
     ...(existing?.image ? { image: existing.image } : {}),
     ...(existing?.seedance ? { seedance: existing.seedance } : {}),
+    ...(existing?.memory ? { memory: existing.memory } : {}),
   }
   const target = GLOBAL_CONFIG_PATH
   await mkdir(dirname(target), { recursive: true })

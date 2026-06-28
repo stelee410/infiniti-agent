@@ -107,6 +107,44 @@ describe('loadConfig field parsing', () => {
     expect(cfg.seedance?.pollIntervalMs).toBeUndefined()
   })
 
+  it('parses agentmem memory config and strips trailing slash', async () => {
+    await writeConfig(baseConfig({
+      memory: {
+        backend: 'agentmem',
+        agentmem: {
+          baseUrl: 'https://agentmem.oyii.ai/',
+          apiKey: ' mem_abc ',
+          topK: 8,
+          timeoutMs: 5000,
+        },
+      },
+    }))
+
+    const cfg = await loadConfig(cwd)
+    expect(cfg.memory).toMatchObject({
+      backend: 'agentmem',
+      agentmem: {
+        baseUrl: 'https://agentmem.oyii.ai',
+        apiKey: 'mem_abc',
+        topK: 8,
+        timeoutMs: 5000,
+      },
+    })
+  })
+
+  it('drops agentmem section when apiKey missing', async () => {
+    await writeConfig(baseConfig({
+      memory: {
+        backend: 'agentmem',
+        agentmem: { baseUrl: 'https://agentmem.oyii.ai' },
+      },
+    }))
+
+    const cfg = await loadConfig(cwd)
+    expect(cfg.memory?.backend).toBe('agentmem')
+    expect(cfg.memory?.agentmem).toBeUndefined()
+  })
+
   it('parses bounded live UI numbers and nested sprite expression paths', async () => {
     await writeConfig(baseConfig({
       liveUi: {

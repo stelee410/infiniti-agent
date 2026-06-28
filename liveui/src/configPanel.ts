@@ -28,6 +28,7 @@ const tabs = [
   ['asr', 'ASR'],
   ['image', 'Image'],
   ['seedance', 'Seedance'],
+  ['memory', 'Memory'],
 ] as const
 
 const llmProviders = ['anthropic', 'openai', 'gemini', 'minimax', 'openrouter']
@@ -164,7 +165,8 @@ export function initConfigPanel(opts: ConfigPanelOptions): {
     else if (active === 'tts') renderTts(content)
     else if (active === 'asr') renderAsr(content)
     else if (active === 'image') renderImage(content)
-    else renderSeedance(content)
+    else if (active === 'seedance') renderSeedance(content)
+    else renderMemory(content)
   }
 
   const renderLlm = (root: HTMLElement): void => {
@@ -536,6 +538,27 @@ export function initConfigPanel(opts: ConfigPanelOptions): {
       field('Reference Image URLs', input(lines(s.referenceImageUrls), (v) => { s.referenceImageUrls = splitLines(v) }), true),
       field('Reference Video URLs', input(lines(s.referenceVideoUrls), (v) => { s.referenceVideoUrls = splitLines(v) }), true),
       field('Reference Audio URLs', input(lines(s.referenceAudioUrls), (v) => { s.referenceAudioUrls = splitLines(v) }), true),
+    )
+    section.append(grid)
+    root.append(section)
+  }
+
+  const renderMemory = (root: HTMLElement): void => {
+    cfg.memory ??= {}
+    const m = cfg.memory as JsonObj
+    m.agentmem ??= {}
+    const a = m.agentmem as JsonObj
+    const section = el('section', { class: 'config-section config-section--active' })
+    section.append(el('p', { class: 'config-hint' }, [
+      'AgentMem 外部记忆：选 agentmem 后填服务 URL 与 Memory-Key（mem_ 前缀），记忆由服务端托管（替换本地记忆）。Memory-Key 从 AgentMem 控制台获取。',
+    ]))
+    const grid = el('div', { class: 'config-grid' })
+    grid.append(
+      field('记忆后端', select(text(m.backend || 'local'), [['local', '本地（默认）'], ['agentmem', 'AgentMem 外部记忆']], (v) => { m.backend = v })),
+      field('检索条数 top_k', input(num(a.topK, '6'), (v) => { a.topK = Number(v) }, 'number')),
+      field('服务 Base URL', input(text(a.baseUrl), (v) => { a.baseUrl = v }), true),
+      field('Memory-Key (mem_...)', input(text(a.apiKey), (v) => { a.apiKey = v }, 'password'), true),
+      field('超时 ms', input(num(a.timeoutMs, '8000'), (v) => { a.timeoutMs = Number(v) }, 'number')),
     )
     section.append(grid)
     root.append(section)

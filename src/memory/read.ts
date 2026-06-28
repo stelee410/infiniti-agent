@@ -29,6 +29,8 @@ export async function buildSystem(
   },
   query?: string,
 ): Promise<string> {
+  // structured 记忆 / 用户画像 / dream 始终在本地加载与注入（agentmem 模式下作为常驻层保留）；
+  // 仅「按 query 检索的情景/长期记忆」走 coordinator.retrieveRelevantMemory（agentmem 模式下=外部）。
   const [docs, memStore, profileStore, skills, retrievedMemory, dreamContext] = await Promise.all([
     loadAgentPromptDocs(cwd),
     memoryCoordinator?.loadMemoryStore() ?? loadMemoryStore(cwd),

@@ -16,6 +16,7 @@ import { estimateRequestTokens } from './llm/estimateTokens.js'
 import { resolvedCompactionSettings } from './llm/compactionSettings.js'
 import { buildSystemWithMemory } from './prompt/systemBuilder.js'
 import { SubconsciousAgent } from './subconscious/agent.js'
+import { createExternalMemoryBackend } from './memory/external/agentmem.js'
 import { BUILTIN_TOOLS } from './tools/definitions.js'
 import { isRecoverableUpstreamError } from './llm/recoverableError.js'
 
@@ -50,7 +51,8 @@ export async function runCliPrompt(
 
   let exitCode = 0
   const cwd = process.cwd()
-  const subconscious = new SubconsciousAgent(config, cwd)
+  const externalMemory = createExternalMemoryBackend(config)
+  const subconscious = new SubconsciousAgent(config, cwd, undefined, externalMemory)
   let messages: PersistedMessage[] = []
 
   try {

@@ -70,6 +70,7 @@ import {
   stripLiveUiTagsFromMessages,
 } from '../liveui/emotionParse.js'
 import { SubconsciousAgent } from '../subconscious/agent.js'
+import { createExternalMemoryBackend } from '../memory/external/agentmem.js'
 import {
   finalizeQueuedMediaCommand,
   parseQueuedMediaCommand,
@@ -396,7 +397,7 @@ export function ChatApp({
   }, [liveUi])
 
   useEffect(() => {
-    const agent = new SubconsciousAgent(config, cwd, liveUi)
+    const agent = new SubconsciousAgent(config, cwd, liveUi, createExternalMemoryBackend(config))
     subconsciousRef.current = agent
     void agent.start().then(() => {
       if (debugOverlayEnabledRef.current) void agent.setDebugOverlayEnabled(true)

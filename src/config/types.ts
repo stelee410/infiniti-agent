@@ -170,6 +170,32 @@ export type SeedanceVideoConfig = {
   timeoutMs?: number
 }
 
+/**
+ * 外部记忆后端（AgentMem V7）。
+ * 配置后 agent 的记忆整体托管给外部服务（Replace 语义）：检索/写入全部走外部，
+ * 本地 documentMemory FTS 与潜意识提炼链路短路。
+ * 数据面只需一把 Memory-Key（`mem_` 前缀），无需 agent_code / user_id。
+ */
+export type AgentMemConfig = {
+  /** 服务根 URL，无尾斜杠，如 https://agentmem.oyii.ai */
+  baseUrl: string
+  /** Memory-Key（mem_ 前缀）；一把 Key 对应一个终端用户的记忆中枢。 */
+  apiKey: string
+  /** 检索条数，对应 /v1/memory/query 的 top_k；默认 6。 */
+  topK?: number
+  /** 单次请求超时（毫秒），超时即降级；默认 8000。 */
+  timeoutMs?: number
+}
+
+export type MemoryConfig = {
+  /**
+   * 'local'（默认）：沿用本地 documentMemory + 潜意识记忆。
+   * 'agentmem'：Replace 模式，检索/写入全部走外部，本地提炼链路短路。
+   */
+  backend?: 'local' | 'agentmem'
+  agentmem?: AgentMemConfig
+}
+
 export type LiveUiConfig = {
   /** WebSocket 端口；`infiniti-agent live` 未传 `--port` 时使用 */
   port?: number
@@ -280,6 +306,17 @@ export type InfinitiConfig = {
   /** Legacy field kept for reading old config files; new config writes image.snapProfile. */
   snap?: SnapImageConfig
   seedance?: SeedanceVideoConfig
+  /** 外部记忆后端（AgentMem）；未配置或 backend!='agentmem' 时使用本地记忆。 */
+  memory?: MemoryConfig
+}
+
+/** 是否已启用 AgentMem 外部记忆（backend=agentmem 且 baseUrl/apiKey 齐全）。 */
+export function isAgentMemEnabled(config: InfinitiConfig): boolean {
+  return (
+    config.memory?.backend === 'agentmem' &&
+    !!config.memory.agentmem?.baseUrl &&
+    !!config.memory.agentmem?.apiKey
+  )
 }
 
 /**
