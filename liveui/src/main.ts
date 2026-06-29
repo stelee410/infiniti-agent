@@ -108,6 +108,8 @@ declare global {
       voiceMic?: Partial<LiveUiVoiceMicWire>
       /** `infiniti-agent live --zoom <n>` 注入：人物显示缩放（0.4 ~ 1.5），1 = 不缩放 */
       figureZoom?: number
+      /** 桌宠/精灵窗口（透明悬浮、可穿透、可极简）。默认 false = 普通应用窗口。 */
+      spriteWindow?: boolean
       setIgnoreMouseEvents?: (ignore: boolean, opts?: { forward?: boolean }) => void
       /** Electron：首帧后按人物包围盒收紧窗口高度 */
       compactWindowHeight?: (height: number) => void
@@ -477,6 +479,9 @@ async function bootstrap(): Promise<void> {
   const debugEmotionEl = document.getElementById('liveui-debug-emotion')
   const debugRelationshipEl = document.getElementById('liveui-debug-relationship')
   const userLineInput = document.getElementById('liveui-user-line') as HTMLTextAreaElement | null
+  // 默认普通应用窗口；桌宠/精灵（透明悬浮、可穿透、可极简）保留在 env 开关后。
+  const spriteWindow = window.infinitiLiveUi?.spriteWindow === true
+  document.body.classList.toggle('liveui-sprite', spriteWindow)
   const inboxRoot = document.getElementById('liveui-inbox')
   const h5AppletRoot = document.getElementById('liveui-h5-runtime')
   const inboxToggle = document.getElementById('liveui-inbox-toggle') as HTMLButtonElement | null
@@ -751,10 +756,11 @@ async function bootstrap(): Promise<void> {
 
   const cancelDynamicWindowFit = (): void => layoutCoordinator?.cancelDynamicFit()
 
-  const scheduleDynamicWindowFit = (attempt = 0): void =>
-    Date.now() >= suppressDynamicFitUntil
-      ? layoutCoordinator?.scheduleDynamicFit(attempt)
-      : undefined
+  const scheduleDynamicWindowFit = (attempt = 0): void => {
+    // 普通窗口：尺寸由用户/系统掌控，不做按人物包围盒的自动收紧（精灵专属）。
+    if (!spriteWindow) return
+    if (Date.now() >= suppressDynamicFitUntil) layoutCoordinator?.scheduleDynamicFit(attempt)
+  }
 
   /**
    * 在「当前 layout」下读人物可见 bounds，若头顶留白明显则把窗口高度减掉一截。
@@ -4092,7 +4098,8 @@ async function bootstrap(): Promise<void> {
   })
 
   // ── macOS 透明窗口：动态切换鼠标穿透 ──
-  const setIgnore = window.infinitiLiveUi?.setIgnoreMouseEvents
+  // 鼠标穿透只在精灵模式需要（透明窗口透明像素处穿透）。普通窗口始终可交互。
+  const setIgnore = spriteWindow ? window.infinitiLiveUi?.setIgnoreMouseEvents : undefined
   if (setIgnore) {
     let windowIgnoring = true
     forceWindowInteractive = () => {

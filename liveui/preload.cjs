@@ -6,6 +6,8 @@ const renderer = process.env.INFINITI_LIVEUI_RENDERER || ''
 const model3FileUrl = process.env.INFINITI_LIVEUI_MODEL3_FILE_URL || ''
 const spriteExpressionDirFileUrl = process.env.INFINITI_LIVEUI_SPRITE_EXPRESSION_DIR || ''
 const avatarFallbackFileUrl = process.env.INFINITI_LIVEUI_AVATAR_FALLBACK_FILE_URL || ''
+// 桌宠/精灵窗口（透明悬浮、可穿透、可极简）。默认关：Live 为普通应用窗口。
+const spriteWindow = process.env.INFINITI_LIVEUI_SPRITE_WINDOW === '1'
 
 /** config liveUi.figureZoom 或 `infiniti-agent live --zoom <n>` 注入；未传或非法则保持 1（不缩放） */
 let figureZoom = 1
@@ -47,6 +49,7 @@ contextBridge.exposeInMainWorld('infinitiLiveUi', {
   avatarFallbackFileUrl,
   voiceMic,
   figureZoom,
+  spriteWindow,
   /** 动态切换窗口透明区域的鼠标穿透 */
   setIgnoreMouseEvents: (ignore, opts) => {
     ipcRenderer.send('set-ignore-mouse-events', ignore, opts)

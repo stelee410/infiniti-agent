@@ -39,11 +39,16 @@ console.error(`[liveui] log file: ${liveUiLogFile}`)
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required')
 
 /**
- * 默认：无边框、透明、置顶（LiveUI 叠层）。
- * 需要系统标题栏 + 菜单便于调试时：
+ * Live 默认是「普通应用窗口」：有边框、不透明、不置顶、不穿透。
+ * 桌宠/精灵模式（无边框、透明、置顶、可穿透、可极简）保留在开关后：
+ *   INFINITI_LIVEUI_SPRITE_WINDOW=1
+ * 仅调试用（系统标题栏 + 菜单 + DevTools）：
  *   INFINITI_LIVEUI_DEBUG_WINDOW=1
  */
+const spriteWindow = process.env.INFINITI_LIVEUI_SPRITE_WINDOW === '1'
 const debugWindow = process.env.INFINITI_LIVEUI_DEBUG_WINDOW === '1'
+// 窗口外观：普通窗口（默认）vs 精灵叠层。debug 强制普通窗口外观。
+const chromeNormal = !spriteWindow || debugWindow
 
 function buildMenu() {
   const isMac = process.platform === 'darwin'
@@ -101,14 +106,14 @@ function createWindow() {
 
   const win = new BrowserWindow({
     title: 'Infiniti LiveUI',
-    width: debugWindow ? 520 : 420,
-    /** 非 debug 略低于 640；人物加载后渲染端还可再收紧一次 */
-    height: debugWindow ? 780 : 580,
-    frame: debugWindow,
-    transparent: !debugWindow,
-    backgroundColor: debugWindow ? '#1a1d24' : undefined,
-    alwaysOnTop: !debugWindow,
-    hasShadow: debugWindow,
+    width: chromeNormal ? 520 : 420,
+    /** 精灵模式略低于 640；人物加载后渲染端还可再收紧一次 */
+    height: chromeNormal ? 780 : 580,
+    frame: chromeNormal,
+    transparent: !chromeNormal,
+    backgroundColor: chromeNormal ? '#1a1d24' : undefined,
+    alwaysOnTop: !chromeNormal,
+    hasShadow: chromeNormal,
     resizable: true,
     show: true,
     webPreferences: {
@@ -119,7 +124,7 @@ function createWindow() {
     },
   })
 
-  if (!debugWindow) {
+  if (!chromeNormal) {
     win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
   }
 
@@ -143,7 +148,7 @@ function createWindow() {
    * 用 forward: true 让 mousemove 仍然到达渲染进程，
    * 渲染端检测鼠标是否在人物/控件区域，通过 IPC 动态切换。
    */
-  if (!debugWindow) {
+  if (!chromeNormal) {
     win.setIgnoreMouseEvents(true, { forward: true })
   }
 
@@ -172,12 +177,12 @@ function createWindow() {
       if (open) {
         if (!preConfigBounds) preConfigBounds = win.getBounds()
         win.setIgnoreMouseEvents(false)
-        win.setSize(debugWindow ? 760 : 860, debugWindow ? 780 : 720)
+        win.setSize(chromeNormal ? 760 : 860, chromeNormal ? 780 : 720)
         win.center()
       } else if (preConfigBounds) {
         win.setBounds(preConfigBounds)
         preConfigBounds = null
-        if (!debugWindow) win.setIgnoreMouseEvents(true, { forward: true })
+        if (!chromeNormal) win.setIgnoreMouseEvents(true, { forward: true })
       }
     } catch { /* window may be destroyed */ }
   })
@@ -192,7 +197,7 @@ function createWindow() {
       } else if (preInboxBounds) {
         win.setBounds(preInboxBounds)
         preInboxBounds = null
-        if (!debugWindow) win.setIgnoreMouseEvents(true, { forward: true })
+        if (!chromeNormal) win.setIgnoreMouseEvents(true, { forward: true })
       }
     } catch { /* window may be destroyed */ }
   })
@@ -207,7 +212,7 @@ function createWindow() {
       } else if (preCameraBounds) {
         win.setBounds(preCameraBounds)
         preCameraBounds = null
-        if (!debugWindow) win.setIgnoreMouseEvents(true, { forward: true })
+        if (!chromeNormal) win.setIgnoreMouseEvents(true, { forward: true })
       }
     } catch { /* window may be destroyed */ }
   })
@@ -222,7 +227,7 @@ function createWindow() {
       } else if (preH5AppletBounds) {
         win.setBounds(preH5AppletBounds)
         preH5AppletBounds = null
-        if (!debugWindow) win.setIgnoreMouseEvents(true, { forward: true })
+        if (!chromeNormal) win.setIgnoreMouseEvents(true, { forward: true })
       }
     } catch { /* window may be destroyed */ }
   })
@@ -247,7 +252,7 @@ function createWindow() {
       } else if (preMinimalBounds) {
         win.setBounds(preMinimalBounds)
         preMinimalBounds = null
-        if (!debugWindow) win.setIgnoreMouseEvents(true, { forward: true })
+        if (!chromeNormal) win.setIgnoreMouseEvents(true, { forward: true })
       }
     } catch { /* window may be destroyed */ }
   })

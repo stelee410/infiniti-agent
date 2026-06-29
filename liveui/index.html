@@ -1156,6 +1156,14 @@
         background: #0e7490;
         border-color: rgba(165, 243, 252, 0.72);
       }
+      /* 普通窗口（默认，非精灵）：去掉桌宠专属的极简/拖拽按钮，控件下移避开标题栏。 */
+      body:not(.liveui-sprite) #liveui-btn-minimal,
+      body:not(.liveui-sprite) .liveui-window-tool--drag {
+        display: none;
+      }
+      body:not(.liveui-sprite) #liveui-window-tools {
+        top: 8px;
+      }
       #liveui-chat-panel {
         position: fixed;
         top: 14px;
