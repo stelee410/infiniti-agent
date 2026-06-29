@@ -72,6 +72,19 @@ export type LiveUiActivityMessage = {
 }
 
 /**
+ * 工具需要用户确认（server → client）：GUI 就地弹出「允许 / 拒绝」按钮，
+ * 一键放行复用现有对话式审批（点允许即发送确认词）。
+ */
+export type LiveUiApprovalRequestMessage = {
+  type: 'APPROVAL_REQUEST'
+  data: {
+    id: string
+    tool: string
+    summary?: string
+  }
+}
+
+/**
  * TTS 音频块（server → client）。
  * - mp3 / wav：audioBase64 交给 decodeAudioData。
  * - pcm_s16le：little-endian int16 交织多声道原始块；需 sampleRate + channels。
@@ -374,6 +387,7 @@ export type LiveUiMessage =
   | LiveUiAssistantStreamMessage
   | LiveUiStatusPillMessage
   | LiveUiActivityMessage
+  | LiveUiApprovalRequestMessage
   | LiveUiAudioChunkMessage
   | LiveUiAudioResetMessage
   | LiveUiAssistantVoiceMessage
@@ -443,6 +457,14 @@ export function isLiveUiMessage(x: unknown): x is LiveUiMessage {
     const dd = d as { id?: unknown; tool?: unknown; status?: unknown; summary?: unknown }
     if (typeof dd.id !== 'string' || typeof dd.tool !== 'string') return false
     if (dd.status !== 'start' && dd.status !== 'done' && dd.status !== 'error') return false
+    if (dd.summary !== undefined && typeof dd.summary !== 'string') return false
+    return true
+  }
+  if (o.type === 'APPROVAL_REQUEST') {
+    const d = (x as { data?: unknown }).data
+    if (!d || typeof d !== 'object') return false
+    const dd = d as { id?: unknown; tool?: unknown; summary?: unknown }
+    if (typeof dd.id !== 'string' || typeof dd.tool !== 'string') return false
     if (dd.summary !== undefined && typeof dd.summary !== 'string') return false
     return true
   }

@@ -72,7 +72,9 @@ Live 模式工具审批**已经能用、不会卡死**，是**对话式**而非�
 - **v0 ✅ 已实现**：对话历史抽屉（A，纯客户端 `chatPanel.ts`）+ 活动卡片（B，新增 `ACTIVITY` 事件，dispatch 收口埋点）。普通用户可"看着她、看她干活、不开终端"。
   - A：`liveui/src/chatPanel.ts`、`index.html`（`#liveui-btn-chat` / `#liveui-chat-panel`）、`main.ts`（回显 USER_INPUT、ASSISTANT_STREAM 流式写入）
   - B：`src/liveui/protocol.ts`（`LiveUiActivityMessage`）、`src/liveui/wsSession.ts`（`sendActivity`）、`src/llm/runLoop.ts`（dispatch 埋点）、`src/liveui/activitySummary.ts`（文案）、`chatPanel.addActivity`
-- **v0.5**：审批"允许/拒绝"按钮糖（往输入注入确认词，复用 C 现有对话式审批）。
+- **v0.5 ✅ 已实现**：自适应披露，解决"精灵模式：复杂不够用、简单又冗余"。
+  - 自适应活动条 `liveui/src/activityStrip.ts`：无操作全隐藏（纯精灵）；有工具跑时形象旁浮一行、完成后自愈消失（轻任务不冗余）；点活动行一键展开抽屉（重任务够用）；精灵/极简模式下同样工作。
+  - 就地审批：`gate.decision==='ask'` 时下发 `APPROVAL_REQUEST`（`src/llm/runLoop.ts` + `wsSession.sendApprovalRequest` + `protocol.ts`），活动条弹「允许/拒绝」，点允许=发送确认词，复用现有对话式审批。
 - **后续**：把 `STATUS_PILL` 升级为结构化任务列表；文件改动 diff 视图；按需扩展。
 
 ## 6. 风险与边界

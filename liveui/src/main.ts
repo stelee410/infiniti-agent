@@ -36,6 +36,7 @@ import {
 } from '../../src/liveui/spriteExpressionManifestCore.ts'
 import { initConfigPanel } from './configPanel.ts'
 import { initChatPanel } from './chatPanel.ts'
+import { initActivityStrip, type ActivityStripHandle } from './activityStrip.ts'
 import {
   createLiveInboxController,
   filePathToUrl,
@@ -181,6 +182,11 @@ type ActivityMsg = {
   data: { id: string; tool: string; status: 'start' | 'done' | 'error'; summary?: string }
 }
 
+type ApprovalRequestMsg = {
+  type: 'APPROVAL_REQUEST'
+  data: { id: string; tool: string; summary?: string }
+}
+
 type AudioChunkMsg = {
   type: 'AUDIO_CHUNK'
   data: {
@@ -306,6 +312,7 @@ type Msg =
   | AssistantStreamMsg
   | StatusPillMsg
   | ActivityMsg
+  | ApprovalRequestMsg
   | AudioChunkMsg
   | AudioResetMsg
   | TtsStatusMsg
@@ -1590,9 +1597,28 @@ async function bootstrap(): Promise<void> {
 
   // 对话历史抽屉（陪伴优先 GUI v0·A）：纯 DOM 抽屉，不改窗口尺寸；
   // 展开时让窗口立即可交互，免去先移动鼠标才能点击/滚动。
+  let activityStrip: ActivityStripHandle | undefined
   const chatPanel = initChatPanel({
     onOpenChange: (open) => {
       if (open) forceWindowInteractive()
+      activityStrip?.setDrawerOpen(open)
+    },
+  })
+
+  // 自适应活动条（GUI v0.5）：按需披露——轻任务一行自愈，重任务点开抽屉，
+  // 需确认时就地弹「允许/拒绝」（一键放行复用对话式审批）。精灵/极简模式下同样工作。
+  activityStrip = initActivityStrip({
+    onExpand: () => {
+      forceWindowInteractive()
+      chatPanel.toggle(true)
+    },
+    onApprove: () => {
+      forceWindowInteractive()
+      void sendUserCommand('可以')
+    },
+    onDeny: () => {
+      forceWindowInteractive()
+      void sendUserCommand('不用了，先不要执行')
     },
   })
 
@@ -2734,6 +2760,9 @@ async function bootstrap(): Promise<void> {
       }
     } else if (msg.type === 'ACTIVITY') {
       chatPanel.addActivity(msg.data)
+      activityStrip?.onActivity(msg.data)
+    } else if (msg.type === 'APPROVAL_REQUEST') {
+      activityStrip?.onApproval(msg.data)
     }
   })
 
@@ -4080,6 +4109,7 @@ async function bootstrap(): Promise<void> {
           dom.closest('#liveui-slash-menu') ||
           dom.closest('#speech-bubble') ||
           dom.closest('#liveui-chat-panel') ||
+          dom.closest('#liveui-activity-strip') ||
           dom.closest('#liveui-config-panel') ||
           dom.closest('#liveui-photo-preview') ||
           dom.closest('#liveui-inbox') ||

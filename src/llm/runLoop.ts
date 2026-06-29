@@ -238,6 +238,12 @@ export async function runToolLoop(opts: RunLoopOptions): Promise<{
           })
         }
         if (gate.decision === 'ask') {
+          // GUI：就地弹出审批按钮（一键放行复用对话式审批，点允许=发送确认词）。
+          opts.liveUi?.sendApprovalRequest({
+            id: `apr_${Date.now()}_${++activitySeq}`,
+            tool: name,
+            summary: summarizeToolActivity(name, argsJson),
+          })
           return JSON.stringify({
             status: 'blocked',
             reason: gate.reason,

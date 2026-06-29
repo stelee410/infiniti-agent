@@ -826,6 +826,11 @@ export class LiveUiSession {
     this.broadcast({ type: 'ACTIVITY', data } as LiveUiMessage)
   }
 
+  /** 工具需用户确认（GUI v0.5）：就地弹「允许/拒绝」，一键放行复用对话式审批。 */
+  sendApprovalRequest(data: { id: string; tool: string; summary?: string }): void {
+    this.broadcast({ type: 'APPROVAL_REQUEST', data } as LiveUiMessage)
+  }
+
   /** 通知渲染端清空音频队列（新一轮 assistant 回答开始时调用）。 */
   resetAudio(): void {
     this.ttsGeneration++
