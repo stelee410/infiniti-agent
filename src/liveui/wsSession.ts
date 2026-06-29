@@ -20,6 +20,7 @@ import type {
   LiveUiH5AppletLibraryItem,
   LiveUiAssistantVoiceMessage,
   LiveUiRecordingControlMessage,
+  LiveUiTuiView,
 } from './protocol.js'
 import { parseSpeakCommandLine } from './speakCommandLine.js'
 import { StreamMouthEstimator } from './streamMouth.js'
@@ -157,6 +158,8 @@ export class LiveUiSession {
   private pendingFileAttachments: LiveUiFileAttachment[] = []
   private lastStatusPill: { label: string; variant: LiveUiStatusVariant } = { label: '就绪', variant: 'ready' }
   private lastAppletLibrary: LiveUiH5AppletLibraryItem[] = []
+  /** TUI 视图模型的合并快照，供新连接的窗口连接时回灌当前对话/状态。 */
+  private lastTuiView: LiveUiTuiView = {}
 
   private readonly mediaRoots: string[]
   private readonly assistantVoicePossible: number
@@ -464,6 +467,9 @@ export class LiveUiSession {
         ws.send(JSON.stringify({ type: 'ASR_STATUS', data: { available: this.asrEngine != null } }))
         this.sendCallAvailabilityTo(ws)
         ws.send(JSON.stringify({ type: 'STATUS_PILL', data: this.lastStatusPill }))
+        if (Object.keys(this.lastTuiView).length > 0) {
+          ws.send(JSON.stringify({ type: 'TUI_VIEW', data: this.lastTuiView }))
+        }
         ws.send(JSON.stringify({ type: 'H5_APPLET_LIBRARY', data: { items: this.lastAppletLibrary } }))
         for (const applet of this.applets.list()) {
           if (applet.status !== 'destroyed') ws.send(JSON.stringify(this.appletCreateMessage(applet)))
@@ -829,6 +835,12 @@ export class LiveUiSession {
   /** 工具需用户确认（GUI v0.5）：就地弹「允许/拒绝」，一键放行复用对话式审批。 */
   sendApprovalRequest(data: { id: string; tool: string; summary?: string }): void {
     this.broadcast({ type: 'APPROVAL_REQUEST', data } as LiveUiMessage)
+  }
+
+  /** TUI 视图模型镜像：把终端正在渲染的对话/瞬态状态增量同步给窗口（窗口作主界面）。 */
+  sendTuiView(patch: LiveUiTuiView): void {
+    this.lastTuiView = { ...this.lastTuiView, ...patch }
+    this.broadcast({ type: 'TUI_VIEW', data: patch } as LiveUiMessage)
   }
 
   /** 通知渲染端清空音频队列（新一轮 assistant 回答开始时调用）。 */

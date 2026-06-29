@@ -85,6 +85,31 @@ export type LiveUiApprovalRequestMessage = {
 }
 
 /**
+ * TUI 视图模型镜像（server → client）：把终端 TUI 正在渲染的对话与瞬态状态
+ * 同步给窗口，使窗口成为主界面、与 TUI 全量对齐。data 为增量（合并语义）。
+ */
+export type LiveUiTuiViewMsg =
+  | { role: 'user'; content: string; attachments?: number }
+  | { role: 'assistant'; content: string; tools?: string[] }
+  | { role: 'tool'; name: string; content: string }
+
+export type LiveUiTuiView = {
+  messages?: LiveUiTuiViewMsg[]
+  stream?: string
+  thinking?: string
+  error?: string | null
+  notice?: string | null
+  statusLine?: string | null
+  busy?: boolean
+  sessionReady?: boolean
+}
+
+export type LiveUiTuiViewMessage = {
+  type: 'TUI_VIEW'
+  data: LiveUiTuiView
+}
+
+/**
  * TTS 音频块（server → client）。
  * - mp3 / wav：audioBase64 交给 decodeAudioData。
  * - pcm_s16le：little-endian int16 交织多声道原始块；需 sampleRate + channels。
@@ -388,6 +413,7 @@ export type LiveUiMessage =
   | LiveUiStatusPillMessage
   | LiveUiActivityMessage
   | LiveUiApprovalRequestMessage
+  | LiveUiTuiViewMessage
   | LiveUiAudioChunkMessage
   | LiveUiAudioResetMessage
   | LiveUiAssistantVoiceMessage
@@ -467,6 +493,10 @@ export function isLiveUiMessage(x: unknown): x is LiveUiMessage {
     if (typeof dd.id !== 'string' || typeof dd.tool !== 'string') return false
     if (dd.summary !== undefined && typeof dd.summary !== 'string') return false
     return true
+  }
+  if (o.type === 'TUI_VIEW') {
+    const d = (x as { data?: unknown }).data
+    return !!d && typeof d === 'object'
   }
   if (o.type === 'AUDIO_CHUNK') {
     const d = (x as { data?: unknown }).data

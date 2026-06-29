@@ -106,9 +106,9 @@ function createWindow() {
 
   const win = new BrowserWindow({
     title: 'Infiniti LiveUI',
-    width: chromeNormal ? 520 : 420,
+    width: chromeNormal ? 980 : 420,
     /** 精灵模式略低于 640；人物加载后渲染端还可再收紧一次 */
-    height: chromeNormal ? 780 : 580,
+    height: chromeNormal ? 720 : 580,
     frame: chromeNormal,
     transparent: !chromeNormal,
     backgroundColor: chromeNormal ? '#1a1d24' : undefined,

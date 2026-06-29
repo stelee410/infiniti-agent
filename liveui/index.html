@@ -1164,6 +1164,108 @@
       body:not(.liveui-sprite) #liveui-window-tools {
         top: 8px;
       }
+      /* ── 窗口作主界面：对话主区 + 左侧形象栏 ── */
+      #liveui-conversation {
+        display: none;
+      }
+      body.liveui-window-main #liveui-conversation {
+        position: fixed;
+        top: 10px;
+        right: 10px;
+        bottom: 92px;
+        left: 332px;
+        z-index: 60;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+        border-radius: 14px;
+        border: 1px solid rgba(148, 163, 184, 0.32);
+        background: rgba(15, 18, 24, 0.96);
+        box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
+        overflow: hidden;
+      }
+      #liveui-conversation-list {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow-y: auto;
+        padding: 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        scrollbar-width: thin;
+      }
+      .liveui-conv-msg {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        max-width: 88%;
+      }
+      .liveui-conv-msg--user {
+        align-self: flex-end;
+        align-items: flex-end;
+      }
+      .liveui-conv-role {
+        font-size: 11px;
+        color: rgba(148, 163, 184, 0.85);
+        display: flex;
+        gap: 8px;
+        align-items: baseline;
+      }
+      .liveui-conv-hint {
+        color: rgba(148, 163, 184, 0.6);
+        font-size: 10px;
+      }
+      .liveui-conv-body {
+        font-size: 13.5px;
+        line-height: 1.6;
+        word-break: break-word;
+        padding: 9px 12px;
+        border-radius: 12px;
+        background: rgba(51, 65, 85, 0.6);
+        color: rgba(241, 245, 249, 0.96);
+      }
+      .liveui-conv-msg--user .liveui-conv-body {
+        background: #1d4ed8;
+        color: #fff;
+      }
+      .liveui-conv-msg--tool .liveui-conv-body {
+        background: rgba(30, 41, 59, 0.5);
+        color: rgba(203, 213, 225, 0.9);
+        font-size: 12px;
+        white-space: pre-wrap;
+      }
+      .liveui-conv-msg--thinking .liveui-conv-body {
+        background: rgba(120, 113, 30, 0.18);
+        color: rgba(234, 215, 140, 0.9);
+        font-style: italic;
+      }
+      .liveui-conv-msg--stream .liveui-conv-body {
+        background: rgba(76, 29, 149, 0.35);
+        color: rgba(233, 219, 255, 0.96);
+      }
+      .liveui-conv-msg--notice .liveui-conv-body {
+        background: rgba(30, 41, 59, 0.5);
+        color: rgba(148, 163, 184, 0.95);
+      }
+      .liveui-conv-msg--error {
+        max-width: 100%;
+      }
+      .liveui-conv-msg--error .liveui-conv-body {
+        background: rgba(127, 29, 29, 0.4);
+        color: rgba(254, 202, 202, 0.96);
+        border: 1px solid rgba(248, 113, 113, 0.4);
+      }
+      .liveui-conv-body :first-child { margin-top: 0; }
+      .liveui-conv-body :last-child { margin-bottom: 0; }
+      .liveui-conv-status {
+        align-self: flex-start;
+        font-size: 12px;
+        color: rgba(250, 204, 21, 0.85);
+        padding: 2px 4px;
+      }
+      /* 对话主界面下，形象旁的字幕气泡与对话抽屉按钮多余，隐藏。 */
+      body.liveui-window-main #speech-bubble { display: none !important; }
+      body.liveui-window-main #liveui-btn-chat { display: none; }
       #liveui-chat-panel {
         position: fixed;
         top: 14px;
@@ -1995,6 +2097,9 @@
       </button>
       <div id="liveui-activity-strip-approvals"></div>
     </div>
+    <section id="liveui-conversation" aria-label="对话">
+      <div id="liveui-conversation-list" role="log" aria-live="polite"></div>
+    </section>
     <div id="speech-bubble" aria-hidden="true">
       <div id="speech-bubble-text" class="liveui-md-root"></div>
     </div>

@@ -26,6 +26,20 @@ INFINITI_LIVEUI_SPRITE_WINDOW=1   # 启用桌宠/精灵叠层
 
 实现：`liveui/electron-main.cjs`（`spriteWindow`/`chromeNormal` 决定窗口外观与穿透）、`liveui/preload.cjs`（透出 `spriteWindow`）、`liveui/src/main.ts`（`spriteWindow` 门控点击穿透与动态压窗，并打 `body.liveui-sprite`）；普通窗口下隐藏极简/拖拽按钮、控件下移避开标题栏。内核不变。
 
+### 0.2 窗口作主界面：内容主区 + 形象左栏（全量对齐 TUI）
+
+普通窗口下，**主界面是对话内容而非形象**：形象收进左侧一栏，TUI 里的对话/工具/思考/错误等内容镜像到右侧对话主区。
+
+架构关键：**TUI（Ink `ChatApp`）始终是数据源**，窗口是它的镜像。做法是把 ChatApp 的视图模型增量镜像给窗口，窗口照渲染（不在服务端重渲 markdown、不维护双份逻辑）：
+
+- 协议：`TUI_VIEW` 事件（`LiveUiTuiView`：messages + stream/thinking/error/notice/statusLine/busy/sessionReady）。`src/liveui/protocol.ts`
+- 服务端：`wsSession.sendTuiView()`（合并缓存，连接时回灌当前快照）。
+- TUI 端：`ChatApp.tsx` 两个 effect——messages 变动整份发送、瞬态状态各自镜像。
+- 窗口端：`liveui/src/tuiView.ts` 合并视图模型并渲染成对话主区（`#liveui-conversation`），含用户/助手/工具/思考/流式/错误/提示/状态。
+- 版面：`body.liveui-window-main` 下对话占主区；形象（live2d/sprite 按左栏宽度缩放居中、real2d 舞台收进左栏）退居左侧 `LEFT_COL_W` 栏；隐藏字幕气泡与对话抽屉按钮。普通窗口默认尺寸放大到 980×720。
+
+> 注：内容镜像（数据面）已单测覆盖；版面/形象左栏位置需实跑视觉微调（尤其 real2d）。
+
 ## 1. 普通用户真正缺的 3 样
 
 | 缺口 | 现状 | 后果 |

@@ -37,6 +37,7 @@ import {
 import { initConfigPanel } from './configPanel.ts'
 import { initChatPanel } from './chatPanel.ts'
 import { initActivityStrip, type ActivityStripHandle } from './activityStrip.ts'
+import { initTuiView } from './tuiView.ts'
 import {
   createLiveInboxController,
   filePathToUrl,
@@ -189,6 +190,11 @@ type ApprovalRequestMsg = {
   data: { id: string; tool: string; summary?: string }
 }
 
+type TuiViewMsg = {
+  type: 'TUI_VIEW'
+  data: import('../../src/liveui/protocol.ts').LiveUiTuiView
+}
+
 type AudioChunkMsg = {
   type: 'AUDIO_CHUNK'
   data: {
@@ -315,6 +321,7 @@ type Msg =
   | StatusPillMsg
   | ActivityMsg
   | ApprovalRequestMsg
+  | TuiViewMsg
   | AudioChunkMsg
   | AudioResetMsg
   | TtsStatusMsg
@@ -482,6 +489,9 @@ async function bootstrap(): Promise<void> {
   // 默认普通应用窗口；桌宠/精灵（透明悬浮、可穿透、可极简）保留在 env 开关后。
   const spriteWindow = window.infinitiLiveUi?.spriteWindow === true
   document.body.classList.toggle('liveui-sprite', spriteWindow)
+  // 普通窗口 = 对话主界面：对话占主区，形象收进左侧一栏（宽度）。
+  document.body.classList.toggle('liveui-window-main', !spriteWindow)
+  const LEFT_COL_W = 320
   const inboxRoot = document.getElementById('liveui-inbox')
   const h5AppletRoot = document.getElementById('liveui-h5-runtime')
   const inboxToggle = document.getElementById('liveui-inbox-toggle') as HTMLButtonElement | null
@@ -592,13 +602,14 @@ async function bootstrap(): Promise<void> {
     })) return
     const stage = document.getElementById('liveui-real2d-stage') as HTMLElement | null
     if (!stage) return
-    const nextWidth = window.innerWidth
+    // 对话主界面：real2d 舞台收进左侧一栏；精灵模式仍铺满窗口。
+    const nextWidth = spriteWindow ? window.innerWidth : LEFT_COL_W
     const nextHeight = real2dRuntimeStageHeight()
     stage.style.left = '0'
-    stage.style.right = '0'
+    stage.style.right = spriteWindow ? '0' : 'auto'
     stage.style.top = '0'
     stage.style.bottom = 'auto'
-    stage.style.width = '100vw'
+    stage.style.width = spriteWindow ? '100vw' : `${LEFT_COL_W}px`
     stage.style.height = `${nextHeight}px`
     const changed = nextWidth !== real2dLayoutWidth || nextHeight !== real2dLayoutHeight
     real2dLayoutWidth = nextWidth
@@ -632,10 +643,12 @@ async function bootstrap(): Promise<void> {
       figureZoom: window.infinitiLiveUi?.figureZoom,
     })
 
+    // 对话主界面：人物按左栏宽度缩放与居中；精灵模式用整窗宽度。
+    const FW = spriteWindow ? W : LEFT_COL_W
     if (liveModel) {
-      const s = computeFigureScale(plan, W, liveModelNaturalW, liveModelNaturalH)
+      const s = computeFigureScale(plan, FW, liveModelNaturalW, liveModelNaturalH)
       liveModel.scale.set(s, s)
-      liveModel.position.set(W / 2, H / 2)
+      liveModel.position.set(FW / 2, H / 2)
       const b = liveModel.getBounds()
       liveModel.position.y += plan.targetFootY - b.bottom
       liveModel.position.y += plan.footNudgeMax
@@ -644,9 +657,9 @@ async function bootstrap(): Promise<void> {
         liveModel.position.y -= b2.bottom - plan.soleCeiling
       }
     } else if (expressionSprite) {
-      const s = computeFigureScale(plan, W, spriteNaturalW, spriteNaturalH)
+      const s = computeFigureScale(plan, FW, spriteNaturalW, spriteNaturalH)
       expressionSprite.scale.set(s, s)
-      expressionSprite.position.set(W / 2, H / 2)
+      expressionSprite.position.set(FW / 2, H / 2)
       const b = expressionSprite.getBounds()
       expressionSprite.position.y += plan.targetFootY - b.bottom
       expressionSprite.position.y += plan.footNudgeMax
@@ -660,7 +673,7 @@ async function bootstrap(): Promise<void> {
       if (fy + FACE_RADIUS > plan.soleCeiling) {
         fy = plan.soleCeiling - FACE_RADIUS
       }
-      face.position.set(W / 2, fy)
+      face.position.set(FW / 2, fy)
       mouth.position.set(face.x, face.y + 38)
     }
   }
@@ -1626,6 +1639,11 @@ async function bootstrap(): Promise<void> {
       forceWindowInteractive()
       void sendUserCommand('不用了，先不要执行')
     },
+  })
+
+  // 对话主区（窗口作主界面·全量对齐 TUI）：渲染服务端镜像的视图模型。
+  const tuiView = initTuiView({
+    strip: (s) => stripLiveUiKnownEmotionTagsEverywhere(s, streamManifestForStrip),
   })
 
   const INPUT_HISTORY_STORAGE_KEY = 'infiniti-liveui-input-history-v1'
@@ -2769,6 +2787,8 @@ async function bootstrap(): Promise<void> {
       activityStrip?.onActivity(msg.data)
     } else if (msg.type === 'APPROVAL_REQUEST') {
       activityStrip?.onApproval(msg.data)
+    } else if (msg.type === 'TUI_VIEW') {
+      tuiView.apply(msg.data)
     }
   })
 
@@ -4117,6 +4137,7 @@ async function bootstrap(): Promise<void> {
           dom.closest('#speech-bubble') ||
           dom.closest('#liveui-chat-panel') ||
           dom.closest('#liveui-activity-strip') ||
+          dom.closest('#liveui-conversation') ||
           dom.closest('#liveui-config-panel') ||
           dom.closest('#liveui-photo-preview') ||
           dom.closest('#liveui-inbox') ||

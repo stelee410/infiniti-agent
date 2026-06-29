@@ -39,7 +39,7 @@ import {
 } from './slashCompletions.js'
 import { parseSpeakCommandLine } from '../liveui/speakCommandLine.js'
 import type { LiveUiAppletEvent, LiveUiInteractionKind, LiveUiSession } from '../liveui/wsSession.js'
-import type { LiveUiFileAttachment, LiveUiStatusVariant, LiveUiVisionAttachment } from '../liveui/protocol.js'
+import type { LiveUiFileAttachment, LiveUiStatusVariant, LiveUiVisionAttachment, LiveUiTuiViewMsg } from '../liveui/protocol.js'
 import { listCachedH5Applets, readCachedH5Applet } from '../liveui/h5AppletCache.js'
 import { H5AppletValidator, normalizePermissions } from '../liveui/appletRuntime.js'
 import { enqueueSnapPhotoJob } from '../snap/asyncSnap.js'
@@ -395,6 +395,31 @@ export function ChatApp({
     }
     return liveUi.onConnectionChange(setLiveUiConnected)
   }, [liveUi])
+
+  // 窗口作主界面：把 TUI 的对话历史镜像给窗口（全量对齐）。messages 变动较少，整份发送。
+  useEffect(() => {
+    if (!liveUi) return
+    const mapped = messages.map((m): LiveUiTuiViewMsg => {
+      if (m.role === 'user') {
+        return { role: 'user', content: m.content, ...(m.attachments?.length ? { attachments: m.attachments.length } : {}) }
+      }
+      if (m.role === 'assistant') {
+        return {
+          role: 'assistant',
+          content: m.content ?? '',
+          ...(m.toolCalls?.length ? { tools: m.toolCalls.map((t) => t.name) } : {}),
+        }
+      }
+      return { role: 'tool', name: m.name, content: m.content.slice(0, 2000) }
+    })
+    liveUi.sendTuiView({ messages: mapped, sessionReady })
+  }, [liveUi, messages, sessionReady])
+
+  // 窗口作主界面：镜像瞬态状态（流式、思考、错误、提示、状态行、忙碌）。
+  useEffect(() => {
+    if (!liveUi) return
+    liveUi.sendTuiView({ stream: streamText, thinking: thinkingSnap, error, notice, statusLine, busy })
+  }, [liveUi, streamText, thinkingSnap, error, notice, statusLine, busy])
 
   useEffect(() => {
     const agent = new SubconsciousAgent(config, cwd, liveUi, createExternalMemoryBackend(config))
