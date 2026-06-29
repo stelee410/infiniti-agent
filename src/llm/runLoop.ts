@@ -19,6 +19,7 @@ import {
   formatToolConfirmDetail,
 } from './formatToolConfirm.js'
 import { evaluateToolSafety } from './toolGateAgent.js'
+import { summarizeToolActivity } from '../liveui/activitySummary.js'
 import { agentDebug } from '../utils/agentDebug.js'
 import {
   appendAssistantToolCalls,
@@ -212,6 +213,8 @@ export async function runToolLoop(opts: RunLoopOptions): Promise<{
 
   const builtin = new Set<string>(BUILTIN_TOOLS.map((t) => t.name))
 
+  let activitySeq = 0
+
   const dispatch = async (name: string, argsJson: string): Promise<string> => {
     agentDebug('dispatch tool', name)
 
@@ -246,19 +249,29 @@ export async function runToolLoop(opts: RunLoopOptions): Promise<{
       }
     }
 
-    if (builtin.has(name)) {
-      return runBuiltinTool(name as BuiltinToolName, argsJson, {
-        sessionCwd: opts.cwd,
-        config: opts.config,
-        snapVision: latestUserVision(opts.messages),
-        seedanceImages: latestSeedanceReferenceImages(opts.messages),
-        avatarGenImages: latestAvatarGenReferenceImages(opts.messages),
-        editHistory: opts.editHistory,
-        liveUi: opts.liveUi,
-        memoryCoordinator: opts.memoryCoordinator,
-      })
+    // 工具实际执行（已过安全门）：向 GUI 推送活动卡片 start → done/error。
+    const activityId = `act_${Date.now()}_${++activitySeq}`
+    const summary = summarizeToolActivity(name, argsJson)
+    opts.liveUi?.sendActivity({ id: activityId, tool: name, status: 'start', summary })
+    try {
+      const out = builtin.has(name)
+        ? await runBuiltinTool(name as BuiltinToolName, argsJson, {
+            sessionCwd: opts.cwd,
+            config: opts.config,
+            snapVision: latestUserVision(opts.messages),
+            seedanceImages: latestSeedanceReferenceImages(opts.messages),
+            avatarGenImages: latestAvatarGenReferenceImages(opts.messages),
+            editHistory: opts.editHistory,
+            liveUi: opts.liveUi,
+            memoryCoordinator: opts.memoryCoordinator,
+          })
+        : await opts.mcp.call(name, argsJson)
+      opts.liveUi?.sendActivity({ id: activityId, tool: name, status: 'done', summary })
+      return out
+    } catch (e) {
+      opts.liveUi?.sendActivity({ id: activityId, tool: name, status: 'error', summary })
+      throw e
     }
-    return opts.mcp.call(name, argsJson)
   }
 
   switch (llm.provider) {

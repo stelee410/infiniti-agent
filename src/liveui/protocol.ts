@@ -55,6 +55,22 @@ export type LiveUiStatusPillMessage = {
   }
 }
 
+export type LiveUiActivityStatus = 'start' | 'done' | 'error'
+
+/**
+ * 工具活动（server → client）：让「桌面伴侣 GUI」把 agent 正在做的事可视化。
+ * 同一次调用以 id 关联，start → done/error 更新同一张活动卡片。
+ */
+export type LiveUiActivityMessage = {
+  type: 'ACTIVITY'
+  data: {
+    id: string
+    tool: string
+    status: LiveUiActivityStatus
+    summary?: string
+  }
+}
+
 /**
  * TTS 音频块（server → client）。
  * - mp3 / wav：audioBase64 交给 decodeAudioData。
@@ -357,6 +373,7 @@ export type LiveUiMessage =
   | LiveUiDebugStateMessage
   | LiveUiAssistantStreamMessage
   | LiveUiStatusPillMessage
+  | LiveUiActivityMessage
   | LiveUiAudioChunkMessage
   | LiveUiAudioResetMessage
   | LiveUiAssistantVoiceMessage
@@ -418,6 +435,15 @@ export function isLiveUiMessage(x: unknown): x is LiveUiMessage {
     if (typeof dd.label !== 'string') return false
     const v = dd.variant
     if (v !== 'ready' && v !== 'busy' && v !== 'warn' && v !== 'loading') return false
+    return true
+  }
+  if (o.type === 'ACTIVITY') {
+    const d = (x as { data?: unknown }).data
+    if (!d || typeof d !== 'object') return false
+    const dd = d as { id?: unknown; tool?: unknown; status?: unknown; summary?: unknown }
+    if (typeof dd.id !== 'string' || typeof dd.tool !== 'string') return false
+    if (dd.status !== 'start' && dd.status !== 'done' && dd.status !== 'error') return false
+    if (dd.summary !== undefined && typeof dd.summary !== 'string') return false
     return true
   }
   if (o.type === 'AUDIO_CHUNK') {

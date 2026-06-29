@@ -176,6 +176,11 @@ type StatusPillMsg = {
   data: { label: string; variant: LiveUiStatusVariant }
 }
 
+type ActivityMsg = {
+  type: 'ACTIVITY'
+  data: { id: string; tool: string; status: 'start' | 'done' | 'error'; summary?: string }
+}
+
 type AudioChunkMsg = {
   type: 'AUDIO_CHUNK'
   data: {
@@ -300,6 +305,7 @@ type Msg =
   | DebugStateMsg
   | AssistantStreamMsg
   | StatusPillMsg
+  | ActivityMsg
   | AudioChunkMsg
   | AudioResetMsg
   | TtsStatusMsg
@@ -2726,6 +2732,8 @@ async function bootstrap(): Promise<void> {
         bubbleIsStreaming = false
         if (!minimalBubbleWaiting) scheduleBubbleDismiss()
       }
+    } else if (msg.type === 'ACTIVITY') {
+      chatPanel.addActivity(msg.data)
     }
   })
 

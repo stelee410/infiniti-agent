@@ -821,6 +821,11 @@ export class LiveUiSession {
     this.broadcast({ type: 'STATUS_PILL', data: { label, variant } })
   }
 
+  /** 工具活动可视化（桌面伴侣 GUI v0·B）：同一 id 由 start → done/error 更新同张卡片。 */
+  sendActivity(data: { id: string; tool: string; status: 'start' | 'done' | 'error'; summary?: string }): void {
+    this.broadcast({ type: 'ACTIVITY', data } as LiveUiMessage)
+  }
+
   /** 通知渲染端清空音频队列（新一轮 assistant 回答开始时调用）。 */
   resetAudio(): void {
     this.ttsGeneration++

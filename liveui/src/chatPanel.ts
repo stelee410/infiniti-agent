@@ -16,6 +16,8 @@ export type ChatPanelHandle = {
   updateAssistantStream(displayText: string): void
   /** 当前助手回复结束（对应 done / 转为就绪）。 */
   endAssistantStream(): void
+  /** 工具活动卡片：同一 id 由 start → done/error 更新同张卡片。 */
+  addActivity(data: { id: string; tool: string; status: 'start' | 'done' | 'error'; summary?: string }): void
   /** 展开/折叠抽屉；force 指定目标状态。 */
   toggle(force?: boolean): void
   isOpen(): boolean
@@ -34,6 +36,7 @@ export function initChatPanel(opts?: {
   let open = false
   let streamingEl: HTMLDivElement | null = null
   let stickToBottom = true
+  const activityEls = new Map<string, HTMLDivElement>()
 
   const isNearBottom = (): boolean => {
     if (!list) return true
@@ -82,6 +85,37 @@ export function initChatPanel(opts?: {
     streamingEl = null
   }
 
+  const ACTIVITY_ICON: Record<string, string> = { start: '○', done: '✓', error: '✕' }
+
+  const addActivity = (data: {
+    id: string
+    tool: string
+    status: 'start' | 'done' | 'error'
+    summary?: string
+  }): void => {
+    const text = (data.summary || data.tool || '').trim()
+    if (!text) return
+    const atBottom = isNearBottom()
+    let el = activityEls.get(data.id)
+    if (!el) {
+      el = document.createElement('div')
+      el.className = 'liveui-chat-activity'
+      const icon = document.createElement('span')
+      icon.className = 'liveui-chat-activity-icon'
+      const body = document.createElement('span')
+      body.className = 'liveui-chat-activity-text'
+      el.append(icon, body)
+      list?.appendChild(el)
+      activityEls.set(data.id, el)
+    }
+    el.dataset.status = data.status
+    const iconEl = el.querySelector('.liveui-chat-activity-icon')
+    const textEl = el.querySelector('.liveui-chat-activity-text')
+    if (iconEl) iconEl.textContent = ACTIVITY_ICON[data.status] ?? '○'
+    if (textEl) textEl.textContent = text
+    if (atBottom) scrollToBottom()
+  }
+
   const toggle = (force?: boolean): void => {
     open = typeof force === 'boolean' ? force : !open
     document.body.classList.toggle('liveui-chat-open', open)
@@ -102,6 +136,7 @@ export function initChatPanel(opts?: {
     beginAssistantStream,
     updateAssistantStream,
     endAssistantStream,
+    addActivity,
     toggle,
     isOpen: () => open,
   }

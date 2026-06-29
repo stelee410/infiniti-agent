@@ -69,7 +69,9 @@ Live 模式工具审批**已经能用、不会卡死**，是**对话式**而非�
 
 ## 5. 里程碑
 
-- **v0**：对话历史抽屉（A，纯复用）+ 活动卡片（B，新增 `ACTIVITY`）。完成后普通用户可"看着她、看她干活、不开终端"。
+- **v0 ✅ 已实现**：对话历史抽屉（A，纯客户端 `chatPanel.ts`）+ 活动卡片（B，新增 `ACTIVITY` 事件，dispatch 收口埋点）。普通用户可"看着她、看她干活、不开终端"。
+  - A：`liveui/src/chatPanel.ts`、`index.html`（`#liveui-btn-chat` / `#liveui-chat-panel`）、`main.ts`（回显 USER_INPUT、ASSISTANT_STREAM 流式写入）
+  - B：`src/liveui/protocol.ts`（`LiveUiActivityMessage`）、`src/liveui/wsSession.ts`（`sendActivity`）、`src/llm/runLoop.ts`（dispatch 埋点）、`src/liveui/activitySummary.ts`（文案）、`chatPanel.addActivity`
 - **v0.5**：审批"允许/拒绝"按钮糖（往输入注入确认词，复用 C 现有对话式审批）。
 - **后续**：把 `STATUS_PILL` 升级为结构化任务列表；文件改动 diff 视图；按需扩展。
 

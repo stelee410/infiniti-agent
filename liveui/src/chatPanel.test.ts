@@ -63,6 +63,27 @@ describe('initChatPanel', () => {
     expect(bubbles).toHaveLength(2)
   })
 
+  it('activity card: same id updates in place from start to done', () => {
+    const panel = initChatPanel()
+    panel.addActivity({ id: 'a1', tool: 'bash', status: 'start', summary: '运行命令 · ls' })
+    let cards = list().querySelectorAll('.liveui-chat-activity')
+    expect(cards).toHaveLength(1)
+    expect((cards[0] as HTMLElement).dataset.status).toBe('start')
+    panel.addActivity({ id: 'a1', tool: 'bash', status: 'done', summary: '运行命令 · ls' })
+    cards = list().querySelectorAll('.liveui-chat-activity')
+    expect(cards).toHaveLength(1)
+    expect((cards[0] as HTMLElement).dataset.status).toBe('done')
+    expect(cards[0]!.querySelector('.liveui-chat-activity-text')!.textContent).toBe('运行命令 · ls')
+  })
+
+  it('activity card: different ids create separate cards; empty summary+tool skipped', () => {
+    const panel = initChatPanel()
+    panel.addActivity({ id: 'a1', tool: 'bash', status: 'start', summary: 'x' })
+    panel.addActivity({ id: 'a2', tool: 'read_file', status: 'start', summary: 'y' })
+    panel.addActivity({ id: 'a3', tool: '', status: 'start' })
+    expect(list().querySelectorAll('.liveui-chat-activity')).toHaveLength(2)
+  })
+
   it('toggle reflects open state on body/button/panel and onOpenChange fires', () => {
     const seen: boolean[] = []
     const panel = initChatPanel({ onOpenChange: (o) => seen.push(o) })
