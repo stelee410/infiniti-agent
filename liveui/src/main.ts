@@ -35,6 +35,7 @@ import {
   type SpriteExpressionManifestV1,
 } from '../../src/liveui/spriteExpressionManifestCore.ts'
 import { initConfigPanel } from './configPanel.ts'
+import { initChatPanel } from './chatPanel.ts'
 import {
   createLiveInboxController,
   filePathToUrl,
@@ -1581,6 +1582,14 @@ async function bootstrap(): Promise<void> {
     },
   })
 
+  // 对话历史抽屉（陪伴优先 GUI v0·A）：纯 DOM 抽屉，不改窗口尺寸；
+  // 展开时让窗口立即可交互，免去先移动鼠标才能点击/滚动。
+  const chatPanel = initChatPanel({
+    onOpenChange: (open) => {
+      if (open) forceWindowInteractive()
+    },
+  })
+
   const INPUT_HISTORY_STORAGE_KEY = 'infiniti-liveui-input-history-v1'
   const INPUT_HISTORY_MAX = 100
   const SLASH_MENU_MAX_ROWS = 10
@@ -2060,6 +2069,8 @@ async function bootstrap(): Promise<void> {
       ...(shouldSendAttachments ? { attachments: attachedFiles } : {}),
     }
     if (!sendSocketMessage(socket, 'USER_INPUT', payload)) return
+    // 斜杠命令是控制指令，不计入对话历史；普通消息回显到抽屉。
+    if (!trimmedStart.startsWith('/')) chatPanel.addUserMessage(line)
     if ((attachedPhotoVision || attachedFiles.length) && !trimmedStart.startsWith('/')) {
       clearConfirmedPhotoUi(false)
       attachedFiles = []
@@ -2685,16 +2696,20 @@ async function bootstrap(): Promise<void> {
       if (msg.data?.reset) {
         assistantStreamState = createStreamLiveUiState()
         resetSpeechBubble()
+        chatPanel.beginAssistantStream()
       }
       const { displayText, newActions } = processAssistantStreamChunk(assistantStreamState, fullRaw)
       for (const a of newActions) {
         if (a.expression) applyLive2dExpression(a.expression)
       }
-      setBubbleFromDisplayText(stripLiveUiKnownEmotionTagsEverywhere(displayText, streamManifestForStrip))
+      const strippedDisplay = stripLiveUiKnownEmotionTagsEverywhere(displayText, streamManifestForStrip)
+      setBubbleFromDisplayText(strippedDisplay)
+      chatPanel.updateAssistantStream(strippedDisplay)
       if (msg.data?.done && bubbleTarget.trim()) {
         bubbleIsStreaming = false
         if (!minimalBubbleWaiting) scheduleBubbleDismiss()
       }
+      if (msg.data?.done) chatPanel.endAssistantStream()
       touchConvActivity()
     } else if (msg.type === 'STATUS_PILL' && statusPill) {
       const label = typeof msg.data?.label === 'string' ? msg.data.label : '就绪'
@@ -4056,6 +4071,7 @@ async function bootstrap(): Promise<void> {
         (dom.closest('#liveui-control-bar') ||
           dom.closest('#liveui-slash-menu') ||
           dom.closest('#speech-bubble') ||
+          dom.closest('#liveui-chat-panel') ||
           dom.closest('#liveui-config-panel') ||
           dom.closest('#liveui-photo-preview') ||
           dom.closest('#liveui-inbox') ||
